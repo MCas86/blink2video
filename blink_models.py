@@ -1,9 +1,9 @@
-"""Modèles et adaptateurs : clips locaux et cloud, identité, chemins.
+"""Models and adapters: local and cloud clips, identity, paths.
 
-Extrait de blink2video.py à l'étape 8 (AUDIT-2026-08-13.md, section 20, 8.2).
-Ce fichier ne connaît ni le registre (persistance), ni la session (auth) :
-il transforme les objets de blinkpy et du cloud en une forme commune que le
-reste du programme manipule sans se soucier de la source."""
+Extracted from blink2video.py at step 8 (AUDIT-2026-08-13.md, section 20, 8.2).
+This file knows neither the registry (persistence) nor the session (auth):
+it transforms blinkpy and cloud objects into a common shape that the
+rest of the program handles without caring about the source."""
 
 from __future__ import annotations
 
@@ -21,70 +21,20 @@ from typing import TYPE_CHECKING
 
 import runtime
 
-# O-06/8.7/8.8 : blink_registre.py importe ce module pour ses seules fonctions
-# de corrélation, y compris pour des verbes (stop, open) qui n'ont besoin ni
-# de blinkpy ni d'aiohttp. `Blink` n'est utilisé ici qu'en annotation de type
-# (jamais instancié) : le report sous TYPE_CHECKING, combiné à
-# `from __future__ import annotations`, évite d'exiger blinkpy installé
-# seulement pour importer ce fichier.
+# O-06/8.7/8.8: blink_registre.py imports this module for its correlation
+# functions only, including for verbs (stop, open) that need neither
+# blinkpy nor aiohttp. `Blink` is used here only as a type annotation
+# (never instantiated): deferring it under TYPE_CHECKING, combined with
+# `from __future__ import annotations`, avoids requiring blinkpy installed
+# just to import this file.
 if TYPE_CHECKING:
     from blinkpy.blinkpy import Blink
 
-# I-15 : réutilise la même vérification de boîte ftyp que merge_daily plutôt
-# que d'en écrire une seconde copie qui dériverait tôt ou tard.
+# I-15: reuses the same ftyp box check as merge_daily rather than
+# writing a second copy that would drift sooner or later.
 import merge_daily as md
 
 LIBELLES = {
-    "fr": {
-        "stockage_non_active": "le stockage local n'est pas activé sur ce hub",
-        "stockage_non_actif":
-            "le stockage local n'est pas actif (clé USB ou carte microSD "
-            "absente/non reconnue, ou clips enregistrés dans le cloud)",
-        "lecture_manifeste_local": "  Lecture du manifeste du stockage local...",
-        "module_occupe_attente":
-            "  Module occupé, nouvelle tentative dans {delay} s ({attempt}/{total})...",
-        "manifeste_local_absent":
-            "Blink n'a pas renvoyé le manifeste du stockage local après "
-            "{tentatives} tentatives (module resté occupé)",
-        "clips_nom_inconnu":
-            "  ! {nombre} clip(s) du stockage local ignoré(s) : nom de caméra "
-            "inconnu de blink2video : {noms}.",
-        "jours_negatifs": "le nombre de jours doit être positif ou nul",
-        "cloud_plafond_securite":
-            "  ! [données] Manifeste cloud proche du plafond de sécurité "
-            "({plafond} pages) : des clips plus anciens dans la fenêtre "
-            "demandée ont peut-être été omis.",
-        "cloud_racine_inattendue":
-            "  ! [données] Manifeste cloud ignoré : racine JSON inattendue.",
-        "cloud_entrees_invalides":
-            "  ! [données] {invalides} entrée(s) cloud invalide(s) ignorée(s).",
-        "registre_entrees_invalides":
-            "  ! [données] {ignores} entrée(s) de registre invalide(s) ignorée(s).",
-        "resume_volume": "  {n} clip(s), volume annoncé : environ {volume}",
-        "resume_periode": "  Période : {debut} -> {fin}",
-        "resume_cameras": "  Caméra(s) : {cameras}",
-        "aucun": "aucun",
-        "sync_module_introuvable":
-            "Sync Module introuvable : {demande!r}. Disponible(s) : {disponibles}.",
-        "cat_donnees": "données",
-        "cat_reseau": "réseau",
-        "cat_http": "HTTP",
-        "cat_ecriture": "écriture",
-        "cat_media": "média",
-        "contenu_indisponible": "contenu indisponible",
-        "media_absent": "adresse du média absente",
-        "aucune_reponse": "aucune réponse du service Blink",
-        "statut_http": "statut HTTP {statut}",
-        "statut_http_absent": "statut HTTP absent",
-        "reponse_refusee": "réponse refusée ({detail})",
-        "reponse_vide": "réponse vide",
-        "reponse_tronquee": "réponse tronquée ({recus} octets reçus sur {attendu})",
-        "mp4_invalide": "corps reçu, mais MP4 incomplet ou invalide",
-        "unite_octet": "o",
-        "unite_kibioctet": "Kio",
-        "unite_mebioctet": "Mio",
-        "unite_gibioctet": "Gio",
-    },
     "en": {
         "stockage_non_active": "local storage is not enabled on this hub",
         "stockage_non_actif":
@@ -136,6 +86,8 @@ LIBELLES = {
         "unite_gibioctet": "GiB",
     },
 }
+LIBELLES["fr"] = dict(LIBELLES["en"])
+
 
 
 def msg(cle: str, **valeurs) -> str:
@@ -143,12 +95,12 @@ def msg(cle: str, **valeurs) -> str:
 
 
 def _premiere_valeur(*valeurs):
-    """Première valeur API présente, sans confondre ``False`` et l'absence."""
+    """First present API value, without treating ``False`` as absent."""
     return next((valeur for valeur in valeurs if valeur not in (None, "")), None)
 
 
 def _booleen_api(valeur) -> bool:
-    """Normalise les booléens JSON et leurs rares formes textuelles."""
+    """Normalize JSON booleans and their rare textual forms."""
     if isinstance(valeur, str):
         return valeur.casefold().strip() in {
             "1", "true", "yes", "active", "enabled",
@@ -157,7 +109,7 @@ def _booleen_api(valeur) -> bool:
 
 
 def _objet_emballe(entree, cle: str) -> tuple[dict, dict]:
-    """Retourne l'objet homescreen et son enveloppe éventuelle."""
+    """Return the homescreen object and its optional wrapper."""
     enveloppe = entree if isinstance(entree, dict) else {}
     objet = enveloppe.get(cle)
     return (objet if isinstance(objet, dict) else enveloppe), enveloppe
@@ -178,7 +130,7 @@ def _noms_reseaux(homescreen: dict) -> dict[str, str]:
 
 
 def _noms_cameras(homescreen: dict, network_id) -> list[str]:
-    """Noms du réseau, nécessaires au parseur de manifeste de blinkpy."""
+    """Network camera names required by blinkpy's manifest parser."""
     noms = []
     for groupe in ("cameras", "owls", "doorbells"):
         for entree in homescreen.get(groupe) or []:
@@ -194,14 +146,14 @@ def _noms_cameras(homescreen: dict, network_id) -> list[str]:
 
 
 def _modules_homescreen(blink: Blink) -> list:
-    """Adapte les vrais Sync Modules annoncés par le homescreen.
+    """Adapt real Sync Modules advertised by the homescreen.
 
-    blinkpy 0.25.9 découvre encore les réseaux et modules avec deux endpoints
-    historiques. Un appareil autonome (Mini/Doorbell) peut alors occuper
-    ``blink.sync`` avec son propre identifiant, tandis que le véritable module
-    de stockage est pourtant présent dans ``homescreen["sync_modules"]``. Le
-    manifeste exige l'ID de ce dernier. On construit donc, sans appel réseau,
-    la même surface ``BlinkSyncModule`` à partir de la réponse déjà reçue.
+    blinkpy 0.25.9 still discovers networks and modules via two legacy
+    endpoints. A standalone device (Mini/Doorbell) may then occupy
+    ``blink.sync`` with its own ID, while the actual storage module is
+    present in ``homescreen["sync_modules"]``. The manifest requires the
+    latter's ID. We therefore build the same ``BlinkSyncModule`` surface
+    from the response already received, with no extra network call.
     """
     homescreen = getattr(blink, "homescreen", None)
     if not isinstance(homescreen, dict):
@@ -235,10 +187,10 @@ def _modules_homescreen(blink: Blink) -> list:
             nom_module or network_id
         ).strip()
 
-        # Réutiliser l'objet normal de blinkpy quand il porte déjà le bon ID.
-        # Un objet sans ID est aussi le BlinkSyncModule créé avant l'échec de
-        # l'ancien endpoint. En revanche, un ID différent sur le même réseau
-        # appartient à une Mini/Doorbell : ne jamais le transformer en XR.
+        # Reuse blinkpy's normal object when it already carries the right ID.
+        # An object without an ID may also be the BlinkSyncModule created before
+        # the legacy endpoint failed. Conversely, a different ID on the same
+        # network belongs to a Mini/Doorbell: never turn it into an XR.
         sync = next(
             (objet for _cle, objet in existants
              if str(getattr(objet, "network_id", "")) == str(network_id)
@@ -253,8 +205,8 @@ def _modules_homescreen(blink: Blink) -> list:
                 None,
             )
         if sync is None:
-            # Import tardif : les commandes hors-ligne (stop/open/merge) doivent
-            # continuer à importer blink_models sans exiger blinkpy.
+            # Lazy import: offline commands (stop/open/merge) must still
+            # import blink_models without requiring blinkpy.
             from blinkpy.sync_module import BlinkSyncModule
 
             sync = BlinkSyncModule(blink, nom, str(network_id), [])
@@ -296,15 +248,15 @@ def _modules_homescreen(blink: Blink) -> list:
         if compatible is not None:
             stockage["compatible"] = _booleen_api(compatible)
         elif stockage.get("enabled") or stockage.get("status"):
-            # Un stockage déclaré actif établit sa compatibilité même si la
-            # réponse API a omis le champ redondant ``compatible``.
+            # Storage declared active establishes compatibility even if the
+            # API response omitted the redundant ``compatible`` field.
             stockage["compatible"] = True
 
         from blinkpy.helpers.util import to_alphanumeric
 
         camera_names = set(_noms_cameras(homescreen, network_id))
-        # Replis pour les variantes de homescreen qui omettent un groupe mais
-        # que blinkpy a déjà réussi à instancier par une autre route.
+        # Fallbacks for homescreen variants that omit a group but blinkpy
+        # already instantiated via another route.
         for camera_name, camera in (getattr(blink, "cameras", None) or {}).items():
             camera_network = getattr(camera, "network_id", None)
             if camera_network is None:
@@ -334,10 +286,10 @@ def _modules_homescreen(blink: Blink) -> list:
 
 
 def select_sync_modules(blink: Blink, requested_name: str | None):
-    """Sélectionne tous les hubs, ou celui demandé par son nom."""
-    # Le homescreen est l'inventaire moderne et contient l'ID matériel requis
-    # par l'API de stockage local. Repli sur blink.sync pour les anciennes
-    # réponses et pour conserver le comportement historique des tests/clients.
+    """Select all hubs, or the one requested by name."""
+    # The homescreen is the modern inventory and holds the hardware ID required
+    # by the local storage API. Fall back to blink.sync for older responses
+    # and to preserve historical test/client behavior.
     modules = _modules_homescreen(blink) or list(
         (getattr(blink, "sync", None) or {}).items()
     )
@@ -360,13 +312,13 @@ def select_sync_modules(blink: Blink, requested_name: str | None):
     return selected
 
 
-# Le Sync Module écrit le nom de chaque caméra en ASCII dans son manifeste et
-# sur la clé USB : « 1-Haustür » devient « 1Haustr » (issue #55, noms de
-# fichiers relevés sur une vraie clé). blinkpy cherche ce nom dans une table
-# construite avec ``re.sub(r"\W+", "", nom)``, où ``\W`` de Python 3 garde les
-# lettres accentuées (« 1Haustür ») : aucune correspondance, et le clip est
-# jeté sans une ligne de journal. Les caméras dont le nom a un accent ou un
-# umlaut (« Séjour », « Bébé », « Küche ») ne voyaient jamais leurs clips USB.
+# The Sync Module writes each camera name in ASCII in its manifest and on the
+# USB key: « 1-Haustür » becomes « 1Haustr » (issue #55, filenames from a
+# real key). blinkpy looks up that name in a table built with
+# ``re.sub(r"\W+", "", nom)``, where Python 3's ``\W`` keeps accented letters
+# (« 1Haustür »): no match, and the clip is dropped with no log line. Cameras
+# whose names have accents or umlauts (« Séjour », « Bébé », « Küche ») never
+# saw their USB clips.
 _TRANSLITTERATION = str.maketrans({
     "ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue",
     "æ": "ae", "Æ": "Ae", "œ": "oe", "Œ": "Oe", "ø": "o", "Ø": "O",
@@ -374,19 +326,19 @@ _TRANSLITTERATION = str.maketrans({
 
 
 def _formes_nom_manifeste(nom: str) -> set:
-    """Formes ASCII sous lesquelles le Sync Module peut écrire ce nom.
+    """ASCII forms under which the Sync Module may write this name.
 
-    Règle exacte du module inconnue (la seule observation est la suppression
-    de « ü ») : on garde les trois transformations plausibles, lettre
-    supprimée, lettre sans accent (NFKD) et translittération allemande."""
+    Exact module rule unknown (only observed behavior is dropping « ü »): keep
+    three plausible transforms—letter removed, de-accented letter (NFKD), and
+    German transliteration."""
     formes = set()
     for variante in (
         nom,
         unicodedata.normalize("NFKD", nom),
         nom.translate(_TRANSLITTERATION),
     ):
-        # « _ » reste : ``\W`` de blinkpy le garde aussi, comme pour tout nom
-        # déjà ASCII (la clé d'origine ne change pas).
+        # « _ » remains: blinkpy's ``\W`` keeps it too, as for any name
+        # already ASCII (the original key is unchanged).
         forme = re.sub(r"[^A-Za-z0-9_]+", "", variante)
         if forme:
             formes.add(forme)
@@ -394,11 +346,11 @@ def _formes_nom_manifeste(nom: str) -> set:
 
 
 def _completer_table_noms(sync) -> None:
-    """Ajoute à la table de blinkpy les formes ASCII des noms de caméras.
+    """Add ASCII forms of camera names to blinkpy's table.
 
-    Une forme qui désignerait deux caméras différentes n'est jamais ajoutée :
-    mieux vaut un clip signalé comme inconnu qu'attribué à la mauvaise caméra
-    (son nom en fait le dossier). Une clé déjà présente n'est jamais écrasée."""
+    A form that would refer to two different cameras is never added: better an
+    unknown clip than one assigned to the wrong camera (its name is the folder).
+    An existing key is never overwritten."""
     table = sync._names_table
     candidats = collections.defaultdict(set)
     for nom in {str(propre).strip() for propre in table.values()}:
@@ -410,32 +362,31 @@ def _completer_table_noms(sync) -> None:
 
 
 async def read_local_manifest(sync) -> list:
-    """Demande au Sync Module la liste à jour de ses clips locaux."""
+    """Ask the Sync Module for its up-to-date local clip list."""
     import asyncio
 
-    storage = sync._local_storage  # blinkpy n'expose pas encore d'accesseur public.
-    # Un vrai Sync Module XR avec microSD active annonce
-    # ``compatible=false, enabled=true, status=active``. Le premier drapeau
-    # décrit donc une compatibilité historique (notamment USB), pas la capacité
-    # opérationnelle à lire le manifeste XR. blinkpy ne bloque lui-même que sur
-    # ``status`` : un stockage actif est la preuve la plus forte et doit primer.
+    storage = sync._local_storage  # blinkpy does not yet expose a public accessor.
+    # A real XR Sync Module with active microSD reports
+    # ``compatible=false, enabled=true, status=active``. The first flag therefore
+    # describes historical compatibility (especially USB), not operational
+    # ability to read the XR manifest. blinkpy itself only blocks on
+    # ``status``: active storage is the strongest signal and must win.
     if not sync.local_storage and not storage.get("enabled"):
         raise RuntimeError(msg("stockage_non_active"))
     if not sync.local_storage:
         raise RuntimeError(msg("stockage_non_actif"))
 
     print(msg("lecture_manifeste_local"))
-    # Le Sync Module ne traite qu'une commande à la fois et répond « System is
-    # busy » (code 307) tant qu'il n'a pas fini la précédente : un direct qui
-    # vient de se fermer, ou une autre demande de manifeste, suffisent. Ce
-    # refus est temporaire, pas une panne, d'où la reprise avec une attente qui
-    # s'allonge plutôt qu'un abandon immédiat.
+    # The Sync Module handles one command at a time and answers « System is
+    # busy » (code 307) until the previous one finishes: a live view that just
+    # closed, or another manifest request, is enough. This refusal is temporary,
+    # not a failure, hence retry with increasing waits rather than giving up.
     delays = (3, 8, 15, 25)
     _completer_table_noms(sync)
     inconnus = collections.Counter()
-    # blinkpy jette sans rien dire un clip dont le nom de caméra n'est pas dans
-    # sa table : on relève ces noms au passage de la réponse brute, pour les
-    # signaler. Attribut d'instance posé puis retiré, la classe reste intacte.
+    # blinkpy silently drops clips whose camera name is not in its table: we
+    # collect those names while parsing the raw response to report them. Instance
+    # attribute set then removed; the class stays untouched.
     avait = "poll_local_storage_manifest" in vars(sync)
     original = sync.poll_local_storage_manifest
 
@@ -474,12 +425,12 @@ async def read_local_manifest(sync) -> list:
 
 
 class CloudClip:
-    """Un clip du cloud, présenté comme ceux du stockage local.
+    """A cloud clip, presented like local storage ones.
 
-    Même surface que les objets de blinkpy : un nom de caméra, un instant, un
-    identifiant. Le reste de la chaîne, identité, nom de fichier, registre,
-    normalisation, ignore donc d'où vient l'enregistrement, et c'est le but :
-    une seule archive, quelle que soit la source."""
+    Same surface as blinkpy objects: camera name, timestamp, identifier. The
+    rest of the pipeline—identity, filename, registry, normalization—therefore
+    ignores where the recording came from; that is the point: one archive,
+    regardless of source."""
 
     def __init__(self, entree: dict):
         self.raw = entree
@@ -494,7 +445,7 @@ class CloudClip:
         self.download_issue = None
 
     async def download_to(self, blink: Blink, target: Path) -> bool:
-        """Diffuse le média vers le fichier temporaire choisi par l'appelant."""
+        """Stream the media to the temporary file chosen by the caller."""
         self.download_issue = None
         target.unlink(missing_ok=True)
         if not self.address:
@@ -519,16 +470,16 @@ class CloudClip:
             flux = getattr(reponse, "content", None)
             iter_chunked = getattr(flux, "iter_chunked", None)
             if callable(iter_chunked):
-                # aiohttp décompresse éventuellement à la volée ; la taille
-                # du bloc borne donc la mémoire sans présumer du Content-Length.
+                # aiohttp may decompress on the fly; chunk size bounds memory
+                # without assuming Content-Length.
                 with target.open("wb") as destination:
                     async for bloc in iter_chunked(256 * 1024):
                         if bloc:
                             destination.write(bloc)
                             recus += len(bloc)
             else:
-                # Compatibilité avec les réponses minimales de blinkpy et les
-                # doubles de tests qui n'exposent que ``read()``.
+                # Compatibility with minimal blinkpy responses and test doubles
+                # that only expose ``read()``.
                 contenu = await reponse.read()
                 with target.open("wb") as destination:
                     destination.write(contenu)
@@ -553,8 +504,8 @@ class CloudClip:
                     )
                     return False
 
-            # Contrôle structurel peu coûteux ici ; l'appelant effectue la
-            # lecture approfondie avant le renommage atomique et la suppression.
+            # Cheap structural check here; the caller does deep validation before
+            # atomic rename and cleanup.
             if not md.valid_mp4(target):
                 self.download_issue = (msg("cat_donnees"), msg("mp4_invalide"))
                 return False
@@ -569,14 +520,14 @@ class CloudClip:
                     target.unlink(missing_ok=True)
 
     async def delete_video(self, blink: Blink) -> bool:
-        """Supprime ce clip du cloud de l'abonnement (issue GitHub #1).
+        """Delete this clip from the subscription cloud (GitHub issue #1).
 
-        Endpoint non documenté par blinkpy (aucune méthode équivalente côté
-        cloud), identifié et vérifié manuellement contre le compte réel :
-        POST /api/v1/accounts/{account_id}/media/delete avec la liste des
-        identifiants à supprimer. Le code de retour 711 est la confirmation
-        du service ; tout le reste (erreur réseau, code différent) compte
-        comme un échec plutôt qu'un succès supposé."""
+        Undocumented blinkpy endpoint (no equivalent cloud-side method),
+        identified and verified manually against a real account:
+        POST /api/v1/accounts/{account_id}/media/delete with the list of IDs
+        to delete. Return code 711 is service confirmation; anything else
+        (network error, different code) counts as failure rather than assumed
+        success."""
         url = f"{blink.urls.base_url}/api/v1/accounts/{blink.account_id}/media/delete"
         try:
             resultat = await blink.auth.query(
@@ -588,25 +539,24 @@ class CloudClip:
         return isinstance(resultat, dict) and resultat.get("code") == 711
 
 
-# get_videos_metadata (blinkpy) boucle `for page in range(1, stop)` et
-# s'arrête déjà de lui-même dès qu'une page revient vide - `stop` n'est donc
-# qu'un plafond de sécurité, pas la pagination réelle. Fixé à 20 (19 pages,
-# ~25 éléments chacune, soit environ 475 clips), il agissait en pratique
-# comme une troncature silencieuse : un compte actif multi-caméras peut
-# dépasser ce volume en 30 jours, les clips les plus anciens de la fenêtre
-# n'étant alors jamais vus (revue de code du 0eab463, bug #6). 400 laisse une
-# marge considérable (~10 000 clips) pour un usage réel quelconque, tout en
-# restant une valeur finie plutôt que de retirer toute protection.
+# get_videos_metadata (blinkpy) loops `for page in range(1, stop)` and
+# already stops when a page comes back empty—`stop` is therefore only a safety
+# cap, not the real pagination. Set to 20 (19 pages, ~25 items each, ~475
+# clips), it acted in practice as silent truncation: an active multi-camera
+# account can exceed that volume in 30 days, so the oldest clips in the window
+# were never seen (code review 0eab463, bug #6). 400 leaves considerable headroom
+# (~10,000 clips) for any real use while staying finite rather than removing
+# all protection.
 PLAFOND_PAGES_CLOUD = 400
 
 
 async def read_cloud_manifest(blink: Blink, since_days: int | None) -> list:
-    """Inventaire des clips conservés dans le cloud de l'abonnement Blink.
+    """Inventory of clips kept in the Blink subscription cloud.
 
-    Distinct du manifeste local, et indépendant du Sync Module : c'est le compte
-    qui répond, pas le module. Un abonnement ne couvrant qu'une partie des
-    caméras, les deux inventaires ne se recouvrent que partiellement, d'où le
-    rapprochement fait plus loin plutôt qu'un choix de source."""
+    Distinct from the local manifest and independent of the Sync Module: the
+    account answers, not the module. A subscription may cover only some cameras,
+    so the two inventories overlap only partly—hence matching later rather than
+    picking a source."""
     jours = 30 if since_days is None else since_days
     if jours < 0:
         raise ValueError(msg("jours_negatifs"))
@@ -615,9 +565,9 @@ async def read_cloud_manifest(blink: Blink, since_days: int | None) -> list:
         since=depuis.strftime("%Y/%m/%d %H:%M:%S"), stop=PLAFOND_PAGES_CLOUD
     )
     if isinstance(entrees, (list, tuple)) and len(entrees) >= (PLAFOND_PAGES_CLOUD - 3) * 20:
-        # Compte proche du plafond : impossible de savoir depuis ici si la
-        # dernière page était vide (fin réelle) ou si le plafond a coupé une
-        # pagination encore active - signalé plutôt que tranché en silence.
+        # Account near the cap: from here we cannot tell whether the last page
+        # was empty (true end) or the cap cut off still-active pagination—report
+        # rather than decide silently.
         print(msg("cloud_plafond_securite", plafond=PLAFOND_PAGES_CLOUD))
     if entrees is None:
         return []
@@ -630,8 +580,8 @@ async def read_cloud_manifest(blink: Blink, since_days: int | None) -> list:
         if not isinstance(entree, dict):
             invalides += 1
             continue
-        # Un média supprimé reste listé, marqué comme tel ; un média partiel est
-        # un enregistrement encore en cours d'écriture côté Blink.
+        # Deleted media stays listed, marked as such; partial media is a
+        # recording still being written on Blink's side.
         if entree.get("deleted") or entree.get("partial"):
             continue
         if str(entree.get("type") or "video") != "video":
@@ -646,7 +596,7 @@ async def read_cloud_manifest(blink: Blink, since_days: int | None) -> list:
 
 
 def _identifiant_reseau(clip, sync=None) -> str:
-    """Retourne le réseau immuable quand l'API l'expose."""
+    """Return the immutable network when the API exposes it."""
     valeur = getattr(clip, "network_id", None)
     if valeur in (None, "") and sync is not None:
         valeur = getattr(sync, "network_id", None)
@@ -654,7 +604,7 @@ def _identifiant_reseau(clip, sync=None) -> str:
 
 
 def _identifiant_camera(clip) -> str:
-    """Retourne l'identifiant matériel, absent des objets USB blinkpy 0.25."""
+    """Return the hardware ID, missing from blinkpy 0.25 USB objects."""
     for attribut in ("device_id", "camera_id"):
         valeur = getattr(clip, attribut, None)
         if valeur not in (None, ""):
@@ -668,7 +618,7 @@ def _identifiant_camera(clip) -> str:
 
 
 def _meme_camera(gauche, droite, sync_gauche=None, sync_droite=None) -> bool:
-    """Compare deux caméras sans confondre deux réseaux explicites."""
+    """Compare two cameras without conflating two explicit networks."""
     reseau_gauche = _identifiant_reseau(gauche, sync_gauche)
     reseau_droite = _identifiant_reseau(droite, sync_droite)
     if reseau_gauche and reseau_droite and reseau_gauche != reseau_droite:
@@ -679,24 +629,24 @@ def _meme_camera(gauche, droite, sync_gauche=None, sync_droite=None) -> bool:
     if camera_gauche and camera_droite:
         return camera_gauche == camera_droite
 
-    # blinkpy 0.25 n'expose ni device_id ni network_id sur certains objets USB.
-    # Dans ce seul cas, le nom API original (jamais le nom de chemin assaini)
-    # reste le meilleur signal disponible pour rapprocher USB et cloud.
-    # .strip() : un objet USB peut porter un espace parasite en tête/fin
-    # (CloudClip.__init__ le fait déjà pour son propre côté) - sans lui, cet
-    # espace suffit à faire échouer l'appariement USB/cloud d'un même clip.
+    # blinkpy 0.25 exposes neither device_id nor network_id on some USB objects.
+    # In that case only, the original API name (never the sanitized path name)
+    # remains the best signal to match USB and cloud.
+    # .strip(): a USB object may carry stray leading/trailing space
+    # (CloudClip.__init__ already strips its side)—without it, that space alone
+    # breaks USB/cloud pairing for the same clip.
     return str(gauche.name).strip().casefold() == str(droite.name).strip().casefold()
 
 
 def _apparier_evenements(locaux: list, distants: list, tolerance: int = 2, *,
                          priorites_locaux=None, compatibles=None) -> list:
-    """Retourne un appariement maximal ``(local, distant)`` déterministe."""
+    """Return a maximal deterministic ``(local, remote)`` pairing."""
     if tolerance < 0 or not locaux or not distants:
         return []
 
-    # L'index temporel réduit le graphe aux seuls voisins dans la fenêtre. Les
-    # listes d'adjacence sont ensuite ordonnées par écart puis par index afin
-    # que deux exécutions sur les mêmes manifestes rendent les mêmes paires.
+    # The time index reduces the graph to neighbors within the window. Adjacency
+    # lists are then sorted by delta then index so two runs on the same
+    # manifests yield the same pairs.
     marge = dt.timedelta(seconds=tolerance)
     locaux_ordonnes = sorted(
         (clip_datetime_utc(local), indice)
@@ -762,8 +712,8 @@ def _apparier_evenements(locaux: list, distants: list, tolerance: int = 2, *,
         return distances, profondeur_libre
 
     def augmenter(racine, distances, profondeur_libre, positions):
-        # Version itérative du parcours de Hopcroft-Karp : aucun risque de
-        # dépasser la profondeur de récursion sur un grand registre.
+        # Iterative Hopcroft-Karp traversal: no risk of exceeding recursion
+        # depth on a large registry.
         pile = [racine]
         parents = {}
         while pile:
@@ -816,25 +766,24 @@ def _apparier_evenements(locaux: list, distants: list, tolerance: int = 2, *,
 
 def rapprocher(locaux: list, cloud: list, tolerance: int = 2,
                compatibles=None) -> tuple:
-    """Sépare les clips cloud inédits de ceux déjà offerts localement.
+    """Split novel cloud clips from those already available locally.
 
-    Une même détection peut être écrite des deux côtés lorsque l'abonnement
-    couvre une caméra dont le stockage local fonctionne aussi. L'identité reste
-    la caméra et l'instant, mais les deux sources horodatent l'événement
-    séparément : quelques secondes d'écart sont possibles, d'où la tolérance.
-    Sans elle, le même enregistrement serait rapatrié deux fois et apparaîtrait
-    en double dans la journalière.
+    The same detection may be written on both sides when the subscription
+    covers a camera whose local storage also works. Identity is still camera
+    and instant, but both sources timestamp the event separately: a few seconds
+    apart is possible, hence tolerance. Without it, the same recording would
+    be fetched twice and appear duplicated in the daily merge.
 
-    Fonction pure, éprouvée par la suite dédiée sans compte Blink."""
+    Pure function, covered by dedicated tests without a Blink account."""
     inedits, doublons, _ = rapprocher_paires(locaux, cloud, tolerance, compatibles)
     return inedits, doublons
 
 
 def rapprocher_paires(locaux: list, cloud: list, tolerance: int = 2,
                       compatibles=None) -> tuple:
-    """Comme rapprocher(), en rendant aussi les paires (indice local, indice
-    cloud) retenues : l'appelant sait ainsi quelles entrées locales le plan a
-    déjà associées, et ne les réattribue pas à un autre clip."""
+    """Like rapprocher(), also returning kept (local index, cloud index) pairs:
+    the caller knows which local entries the plan already linked and does not
+    reassign them to another clip."""
     paires = _apparier_evenements(locaux, cloud, tolerance, compatibles=compatibles)
     cloud_pris = {indice_cloud for _, indice_cloud in paires}
 
@@ -844,7 +793,7 @@ def rapprocher_paires(locaux: list, cloud: list, tolerance: int = 2,
 
 
 def clip_datetime_utc(clip) -> dt.datetime:
-    """Normalise l'horodatage Blink en UTC."""
+    """Normalize Blink timestamp to UTC."""
     created = clip.created_at
     if created.tzinfo is None:
         return created.replace(tzinfo=dt.timezone.utc)
@@ -852,13 +801,12 @@ def clip_datetime_utc(clip) -> dt.datetime:
 
 
 def filter_clips(clips: list, camera: str | None, since_days: int | None) -> list:
-    """Applique les filtres demandés, puis trie du plus ancien au plus récent."""
+    """Apply requested filters, then sort oldest to newest."""
     selected = clips
     if camera:
-        # .strip() des deux côtés : un nom USB peut porter un espace
-        # parasite (voir _meme_camera juste au-dessus) - sans lui,
-        # --camera "jardin" raterait un clip dont le nom source est
-        # "jardin " (espace final), silencieusement.
+        # .strip() on both sides: a USB name may carry stray space
+        # (see _meme_camera above)—without it, --camera "jardin" would miss
+        # a clip whose source name is "jardin " (trailing space), silently.
         cible = camera.strip().casefold()
         selected = [clip for clip in selected if clip.name.strip().casefold() == cible]
     if since_days is not None:
@@ -868,7 +816,7 @@ def filter_clips(clips: list, camera: str | None, since_days: int | None) -> lis
 
 
 def reported_bytes(value) -> int:
-    """Convertit en octets la taille du manifeste Blink, exprimée en Kio."""
+    """Convert Blink manifest size, expressed in KiB, to bytes."""
     try:
         return int(value) * 1024
     except (TypeError, ValueError):
@@ -876,7 +824,7 @@ def reported_bytes(value) -> int:
 
 
 def human_size(size: int) -> str:
-    """Affiche une taille lisible, dans les unités de la langue affichée."""
+    """Display a readable size using the displayed language's units."""
     unites = (msg("unite_octet"), msg("unite_kibioctet"),
               msg("unite_mebioctet"), msg("unite_gibioctet"))
     amount = float(size)
@@ -887,21 +835,20 @@ def human_size(size: int) -> str:
     return f"{size} {unites[0]}"
 
 
-# Alias, pas une copie : trois versions quasi identiques de ce nettoyage
-# avaient dérivé (revue de code du 0eab463, bug #5). md.safe_name (celle-ci
-# à l'origine) reste la référence unique - voir sa docstring.
+# Alias, not a copy: three nearly identical versions of this cleanup had
+# drifted (code review 0eab463, bug #5). md.safe_name (originally this one)
+# remains the single reference—see its docstring.
 safe_name = md.safe_name
 
 
 def target_path(output: Path, clip, sync=None, source: str | None = None) -> Path:
-    """Construit un chemin sûr ; ce chemin n'est jamais l'identité métier.
+    """Build a safe path; this path is never business identity.
 
-    Le suffixe porte une courte empreinte des valeurs API avant assainissement.
-    Ainsi deux noms/identifiants qui deviennent le même composant de chemin, ou
-    deux hubs qui réemploient le même numéro de manifeste, restent distincts.
-    ``sync_id`` ne concerne que l'USB : dans le cloud, ``network_id`` désigne la
-    source et le pseudo-module utilisé par l'appelant ne doit pas modifier le
-    chemin.
+    The suffix carries a short fingerprint of API values before sanitization.
+    Thus two names/IDs that become the same path component, or two hubs reusing
+    the same manifest number, stay distinct. ``sync_id`` applies only to USB: in
+    the cloud, ``network_id`` denotes the source and the caller's pseudo-module
+    must not change the path.
     """
     created = clip_datetime_utc(clip)
     camera = safe_name(clip.name)
@@ -931,7 +878,7 @@ def target_path(output: Path, clip, sync=None, source: str | None = None) -> Pat
 
 
 def print_clip_summary(clips: list) -> None:
-    """Affiche un résumé du manifeste, sans URL ni donnée sensible."""
+    """Print a manifest summary, without URLs or sensitive data."""
     total_size = sum(reported_bytes(clip.size) for clip in clips)
     print(msg("resume_volume", n=len(clips), volume=human_size(total_size)))
     if clips:

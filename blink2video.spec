@@ -23,6 +23,7 @@ APP_ICON = SRC / "assets" / "blink2video.png"
 # assets/ pour que le chemin lu au démarrage (runtime.resource_dir() /
 # "assets" / ...) soit le même, figé ou depuis les sources.
 FAVICON = SRC / "assets" / "blink2video.ico"
+CAS_ICON = SRC / "assets" / "cas-cams-icon.png"
 # Marqueur absent des bundles officiels. L'édition Windows 7 s'en sert pour
 # s'identifier et pour refuser une mise à jour vers le runtime Python 3.12.
 WIN7_MARKER = SRC / "assets" / "windows7-build.txt"
@@ -105,6 +106,7 @@ analysis = Analysis(
            + [(str(SERVE_STYLE), "."), (str(SERVE_APP_JS), ".")]
            + ([(str(APP_ICON), ".")] if APP_ICON.exists() else [])
            + ([(str(FAVICON), "assets")] if FAVICON.exists() else [])
+           + ([(str(CAS_ICON), "assets")] if CAS_ICON.exists() else [])
            + ([(str(WIN7_MARKER), ".")]
               if os.environ.get("BLINK_BUILD_TARGET") == "windows7" else [])),
     # Les verbes sont résolus par importlib au moment de l'appel : l'analyse
@@ -113,7 +115,8 @@ analysis = Analysis(
     # moment de l'appel, donc invisibles à l'analyse statique. Les énumérer ici
     # à la main créerait une liste parallèle de plus, et c'est exactement ce
     # qui a fait échouer la CI après le renommage de « review » en « serve ».
-    hiddenimports=_modules(RUNTIME),
+    # access_control is imported by serve.py for Cloudflare / camera allowlists.
+    hiddenimports=_modules(RUNTIME) + ["access_control"],
     hookspath=[],
     runtime_hooks=[],
     # imageio_ffmpeg est écarté : son seul intérêt est de fournir un binaire,

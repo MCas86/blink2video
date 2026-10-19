@@ -1,14 +1,9 @@
-"""Issue GitHub #6 (2026-09-13) : les messages imprimés par les commandes
-(download, login, merge...) restaient tout en français, contrairement à la
-page web qui suit déjà la langue choisie. `runtime.traduire()` leur donne le
-même mécanisme bilingue que LIBELLES dans tray.py, indexé par
-`runtime.lire_langue()` (le fichier `blink_langue.txt` laissé par le dernier
-chargement de la page). blink_auth.py, blink_cli.py (en entier), blink_models.py,
-blink_engine.py, merge_daily.py, maj.py et autostart.py sont les modules
-convertis jusqu'ici ; tous sauf blink_auth.py et autostart.py (aucune
-collision avec `_`, alias `_()` gardé) nomment leur alias local `msg()`
-plutôt que `_()` puisqu'ils utilisent déjà `_` comme variable jetable
-ailleurs (`for _, p in lances`, etc.)."""
+"""Issue GitHub #6 (2026-09-13): command messages (download, login, merge...)
+stayed in French unlike the web page. `runtime.traduire()` gives them the
+same bilingual mechanism as LIBELLES in tray.py, indexed by
+`runtime.lire_langue()`. This fork is English-only for catalogs: "fr" mirrors
+"en", so both language codes yield English strings.
+"""
 
 from __future__ import annotations
 
@@ -51,10 +46,10 @@ class TestTraduireLibelles(unittest.TestCase):
     def _regler_langue(self, code: str) -> None:
         (Path(self._dossier.name) / runtime.LANGUE).write_text(code, encoding="utf-8")
 
-    def test_defaut_francais_sans_fichier_langue(self):
-        self.assertEqual(runtime.lire_langue(), "fr")
+    def test_defaut_anglais_sans_fichier_langue(self):
+        self.assertEqual(runtime.lire_langue(), "en")
         self.assertEqual(blink_auth._("session_invalide"),
-                         "La session enregistrée n'est plus valide.")
+                         "The saved session is no longer valid.")
 
     def test_bascule_en_anglais(self):
         self._regler_langue("en")
@@ -66,8 +61,9 @@ class TestTraduireLibelles(unittest.TestCase):
         self.assertEqual(blink_auth._("code_refuse", remaining=2),
                          "Code rejected. 2 attempt(s) left.")
         self._regler_langue("fr")
+        # English-only fork: fr catalog mirrors en
         self.assertEqual(blink_auth._("code_refuse", remaining=2),
-                         "Code refusé. 2 tentative(s) restante(s).")
+                         "Code rejected. 2 attempt(s) left.")
 
     def test_toutes_les_cles_existent_dans_les_deux_langues(self):
         self.assertEqual(set(blink_auth.LIBELLES["fr"]), set(blink_auth.LIBELLES["en"]))
@@ -83,7 +79,7 @@ class TestTraduireLibelles(unittest.TestCase):
         self._regler_langue("fr")
         self.assertEqual(
             blink_cli.msg("sync_module_ligne", nom="Garage", sync_id=1, network_id=2),
-            "- Garage (ID 1, réseau 2)")
+            "- Garage (ID 1, network 2)")
 
     def test_blink_cli_pluriel_arrete_verbe(self):
         self._regler_langue("en")
@@ -93,14 +89,14 @@ class TestTraduireLibelles(unittest.TestCase):
                          "Stopped: download (normal exit)")
         self._regler_langue("fr")
         self.assertEqual(blink_cli.msg("arrete_verbe_normal", verbe="download"),
-                         "Arrêté : download (fin normale)")
+                         "Stopped: download (normal exit)")
 
     def test_blink_models_toutes_les_cles_existent_dans_les_deux_langues(self):
         self.assertEqual(set(blink_models.LIBELLES["fr"]), set(blink_models.LIBELLES["en"]))
 
     def test_blink_models_human_size_suit_la_langue(self):
         self._regler_langue("fr")
-        self.assertEqual(blink_models.human_size(1024), "1.0 Kio")
+        self.assertEqual(blink_models.human_size(1024), "1.0 KiB")
         self._regler_langue("en")
         self.assertEqual(blink_models.human_size(1024), "1.0 KiB")
 
@@ -108,7 +104,7 @@ class TestTraduireLibelles(unittest.TestCase):
         self._regler_langue("en")
         self.assertEqual(blink_models.msg("cat_reseau"), "network")
         self._regler_langue("fr")
-        self.assertEqual(blink_models.msg("cat_reseau"), "réseau")
+        self.assertEqual(blink_models.msg("cat_reseau"), "network")
 
     def test_blink_engine_toutes_les_cles_existent_dans_les_deux_langues(self):
         self.assertEqual(set(blink_engine.LIBELLES["fr"]), set(blink_engine.LIBELLES["en"]))
@@ -117,7 +113,7 @@ class TestTraduireLibelles(unittest.TestCase):
         self._regler_langue("en")
         self.assertEqual(blink_engine.msg("nouveaux_clips", n=3), "\nNew clips: 3")
         self._regler_langue("fr")
-        self.assertEqual(blink_engine.msg("nouveaux_clips", n=3), "\nNouveaux clips : 3")
+        self.assertEqual(blink_engine.msg("nouveaux_clips", n=3), "\nNew clips: 3")
 
     def test_blink_engine_notification_singulier_pluriel(self):
         self._regler_langue("en")
@@ -136,23 +132,21 @@ class TestTraduireLibelles(unittest.TestCase):
             merge_daily.msg("jour_deja_a_jour", nom="Garage_2026-09-01.mp4", clips=5),
             "Already up to date: Garage_2026-09-01.mp4 (5 clip(s))")
         self._regler_langue("fr")
-        self.assertEqual(merge_daily.msg("mp4_invalide"), "FFmpeg n'a pas produit un MP4 valide")
+        self.assertEqual(merge_daily.msg("mp4_invalide"), "FFmpeg did not produce a valid MP4")
 
     def test_merge_daily_labels_periode(self):
         self._regler_langue("en")
         self.assertEqual(merge_daily.msg("label_hebdomadaires"), "Weekly")
         self.assertEqual(merge_daily.msg("label_mensuelles"), "Monthly")
         self._regler_langue("fr")
-        self.assertEqual(merge_daily.msg("label_hebdomadaires"), "Hebdomadaires")
-        self.assertEqual(merge_daily.msg("label_mensuelles"), "Mensuelles")
+        self.assertEqual(merge_daily.msg("label_hebdomadaires"), "Weekly")
+        self.assertEqual(merge_daily.msg("label_mensuelles"), "Monthly")
 
     def test_maj_toutes_les_cles_existent_dans_les_deux_langues(self):
         self.assertEqual(set(maj.LIBELLES["fr"]), set(maj.LIBELLES["en"]))
 
     def test_maj_msg_bascule_et_formate(self):
         self._regler_langue("en")
-        # Les refus d'archive viennent du commun (clé, valeurs) et redeviennent,
-        # par maj._en_langue_courante, l'OSError au texte de la langue de la page.
         with tempfile.TemporaryDirectory() as dossier:
             archive = Path(dossier) / "mauvaise.zip"
             with zipfile.ZipFile(archive, "w") as sortie:
@@ -161,17 +155,11 @@ class TestTraduireLibelles(unittest.TestCase):
                 maj._extraire(archive, Path(dossier) / "contenu")
             self.assertEqual(str(erreur.exception),
                              "Dangerous path in the archive: '../../etc/passwd'")
-            self._regler_langue("fr")
-            with self.assertRaises(OSError) as erreur:
-                maj._extraire(archive, Path(dossier) / "contenu2")
-            self.assertEqual(str(erreur.exception),
-                             "Chemin dangereux dans l'archive : '../../etc/passwd'")
-            self._regler_langue("en")
         self.assertEqual(maj.msg("deja_a_jour", version="0.12.20"),
                          "blink2video 0.12.20 is up to date.")
         self._regler_langue("fr")
         self.assertEqual(maj.msg("deja_a_jour", version="0.12.20"),
-                         "blink2video 0.12.20 est à jour.")
+                         "blink2video 0.12.20 is up to date.")
 
     def test_autostart_toutes_les_cles_existent_dans_les_deux_langues(self):
         self.assertEqual(set(autostart.LIBELLES["fr"]), set(autostart.LIBELLES["en"]))
@@ -184,7 +172,7 @@ class TestTraduireLibelles(unittest.TestCase):
                          "Startup shortcuts: 2")
         self._regler_langue("fr")
         self.assertEqual(autostart._("demarrage_deja_absent", cible="foo.lnk"),
-                         "Démarrage automatique déjà absent : foo.lnk")
+                         "Autostart already absent: foo.lnk")
 
     def test_smoketest_toutes_les_cles_existent_dans_les_deux_langues(self):
         self.assertEqual(set(smoketest.LIBELLES["fr"]), set(smoketest.LIBELLES["en"]))
@@ -194,22 +182,19 @@ class TestTraduireLibelles(unittest.TestCase):
         self.assertEqual(smoketest._("clips_compte_detail", n=5, m=1), "5 clip(s), 1 excluded")
         self.assertEqual(smoketest._("marque_echec"), "FAIL ")
         self._regler_langue("fr")
-        self.assertEqual(smoketest._("clips_compte_detail", n=5, m=1), "5 clip(s) dont 1 écarté(s)")
-        self.assertEqual(smoketest._("marque_echec"), "ECHEC")
+        self.assertEqual(smoketest._("clips_compte_detail", n=5, m=1), "5 clip(s), 1 excluded")
+        self.assertEqual(smoketest._("marque_echec"), "FAIL ")
 
     def test_watch_toutes_les_cles_existent_dans_les_deux_langues(self):
         self.assertEqual(set(watch.MESSAGES["fr"]), set(watch.MESSAGES["en"]))
 
     def test_watch_msg_deja_existant_continue_de_fonctionner(self):
-        # _msg() deleguait deja lui-meme a MESSAGES[lire_langue()] avant ce
-        # chantier ; verifie que le refactor vers runtime.traduire() ne casse
-        # pas les cles deja en place (notifications d'alerte reelles).
         self._regler_langue("en")
         self.assertEqual(watch._msg("camera_hors_ligne", nom="Garage"),
                          'Camera "Garage" offline.')
         self._regler_langue("fr")
         self.assertEqual(watch._msg("camera_hors_ligne", nom="Garage"),
-                         "Caméra « Garage » hors ligne.")
+                         'Camera "Garage" offline.')
 
     def test_watch_nouvelles_cles_bascule_et_formate(self):
         self._regler_langue("en")
@@ -217,7 +202,8 @@ class TestTraduireLibelles(unittest.TestCase):
                          "ALERT    Garage hors ligne.")
         self.assertEqual(watch._msg("aucune"), "none")
         self._regler_langue("fr")
-        self.assertEqual(watch._msg("cameras_en_sourdine"), "Caméras en sourdine :")
+        self.assertEqual(watch._msg("cameras_en_sourdine"),
+                         watch.MESSAGES["en"]["cameras_en_sourdine"])
 
     def test_serve_toutes_les_cles_existent_dans_les_deux_langues(self):
         self.assertEqual(set(serve.LIBELLES["fr"]), set(serve.LIBELLES["en"]))
@@ -231,7 +217,7 @@ class TestTraduireLibelles(unittest.TestCase):
             "Could not listen on port 8765: port deja utilise")
         self._regler_langue("fr")
         self.assertEqual(serve.msg("erreur_generique", erreur="ffmpeg introuvable"),
-                         "Erreur : ffmpeg introuvable")
+                         "Error: ffmpeg introuvable")
 
     def test_maj_restauration_incomplete_garde_le_message_traduit(self):
         self._regler_langue("en")
@@ -239,16 +225,11 @@ class TestTraduireLibelles(unittest.TestCase):
             raise maj.RestaurationIncomplete(
                 maj.msg("maj_precedente_non_finalisee", marqueur="MARQUEUR"))
         except maj.RestaurationIncomplete as erreur:
-            # Issue #95 : le message dit aussi quel fichier supprimer (le marqueur, nomme).
             self.assertTrue(str(erreur).startswith(
                 "Previous update not finalized: backups and preparation kept."))
             self.assertIn("delete the file MARQUEUR", str(erreur))
 
     def test_issue_95_une_mise_a_jour_interrompue_est_reprise_sans_rien_supprimer(self):
-        # « I did a manual install of the latest version but now every time I try to update I
-        # get "Previous update not finalized". What do I need to delete? » : plus rien. Le
-        # nettoyage ne purge pas la sauvegarde tant que la permutation interrompue n'est pas
-        # reprise, et la permutation suivante la reprend sans toucher a la sauvegarde.
         self._regler_langue("en")
         with tempfile.TemporaryDirectory() as dossier:
             racine = Path(dossier)
@@ -260,18 +241,15 @@ class TestTraduireLibelles(unittest.TestCase):
             (installe / maj.MARQUEUR_PERMUTATION).write_text("{}", encoding="utf-8")
             (installe / "blink2video.exe.ancien").write_bytes(b"ancienne version")
             (installe / "blink2video.exe").write_bytes(b"a moitie")
-            maj._nettoyer(installe)                                   # aucun refus
+            maj._nettoyer(installe)
             self.assertEqual((installe / "blink2video.exe.ancien").read_bytes(), b"ancienne version")
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertTrue(maj._permuter(neuf, installe))
             self.assertEqual((installe / "blink2video.exe").read_bytes(), b"neuf")
             self.assertFalse((installe / maj.MARQUEUR_PERMUTATION).exists())
-            maj._nettoyer(installe)                                   # menage de la suivante
+            maj._nettoyer(installe)
             self.assertFalse((installe / "blink2video.exe.ancien").exists())
             self.assertFalse((installe / "blink2video.exe.reprise").exists())
-
-    # Issue #16 : les messages propres à runtime.py (bootstrap, --loop) étaient
-    # restés hors traduction.
 
     def test_runtime_toutes_les_cles_existent_dans_les_deux_langues(self):
         self.assertEqual(set(runtime._LIBELLES_RUNTIME["fr"]),
@@ -283,8 +261,6 @@ class TestTraduireLibelles(unittest.TestCase):
                          "Repeating every 5 min. Ctrl+C to stop.")
 
     def test_aide_principale_liste_les_verbes_dans_la_langue_de_la_page(self):
-        # parse_args() lisait toujours Verbe.fr : l'aide principale restait en
-        # français même en anglais, alors que Verbe.en existait déjà.
         self._regler_langue("en")
         sortie = io.StringIO()
         with mock.patch.object(sys, "argv", ["blink2video", "--help"]), \

@@ -1,4 +1,4 @@
-"""Construit le bundle autonome dans un environnement isolé jetable.
+"""Builds the standalone bundle in a disposable isolated environment.
 
 Pourquoi un environnement dédié à la construction, distinct de celui
 d'exécution : PyInstaller embarque ce qu'il trouve. Construire depuis
@@ -99,16 +99,16 @@ def verifier_interpreteur_win7() -> None:
         erreurs.append("la construction doit tourner sous Windows")
     if sys.version_info[:3] != WIN7_PYTHON:
         erreurs.append(
-            "CPython 3.8.10 exact est requis "
-            f"(reçu {sys.version_info.major}.{sys.version_info.minor}."
+            "exact CPython 3.8.10 is required "
+            f"(got {sys.version_info.major}.{sys.version_info.minor}."
             f"{sys.version_info.micro})"
         )
     if struct.calcsize("P") != 8:
-        erreurs.append("un interpréteur x86-64 est requis")
+        erreurs.append("an x86-64 interpreter is required")
     if sys.implementation.name != "cpython":
-        erreurs.append("l'interpréteur doit être CPython")
+        erreurs.append("the interpreter must be CPython")
     if erreurs:
-        raise SystemExit("Build Windows 7 refusé : " + "; ".join(erreurs) + ".")
+        raise SystemExit("Windows 7 build refused: " + "; ".join(erreurs) + ".")
 
 
 def verifier_python_win7(python: Path) -> None:
@@ -131,15 +131,15 @@ def verifier_python_win7(python: Path) -> None:
         )
     except OSError as erreur:
         raise SystemExit(
-            f"Build Windows 7 refusé : environnement illisible ({erreur}). "
-            "Relancer avec --propre."
+            f"Windows 7 build refused: environment unreadable ({erreur}). "
+            "Rerun with --propre."
         ) from erreur
     obtenu = (resultat.stdout or "").strip()
     if resultat.returncode != 0 or obtenu != attendu:
-        detail = obtenu or (resultat.stderr or "").strip() or "identité inconnue"
+        detail = obtenu or (resultat.stderr or "").strip() or "unknown identity"
         raise SystemExit(
-            f"Build Windows 7 refusé : l'environnement utilise {detail}, "
-            f"attendu {attendu}. Relancer avec --propre."
+            f"Windows 7 build refused: environment uses {detail}, "
+            f"expected {attendu}. Rerun with --propre."
         )
 
 
@@ -185,11 +185,11 @@ def ffmpeg_utilisable(python: Path, travail: Path) -> tuple[str, str | None]:
 
     if sys.platform != "linux":
         raise SystemExit(
-            "Aucun ffmpeg capable d'incruster du texte n'a été trouvé, et aucune "
-            "solution de secours n'est prévue pour cette plateforme."
+            "No ffmpeg capable of burning text was found, and no fallback "
+            "is available for this platform."
         )
 
-    print("\n=== ffmpeg fourni sans drawtext, récupération d'une compilation complète")
+    print("\n=== ffmpeg provided without drawtext, fetching a full build")
     import tarfile
     import urllib.request
 
@@ -205,10 +205,10 @@ def ffmpeg_utilisable(python: Path, travail: Path) -> tuple[str, str | None]:
             obtenue = empreinte_sha256(archive)
             archive.unlink()
             raise SystemExit(
-                "L'archive FFmpeg téléchargée n'a pas l'empreinte attendue "
-                f"(attendue {FFMPEG_SECOURS_SHA256}, obtenue {obtenue}) : "
-                f"{FFMPEG_SECOURS}. Construction arrêtée plutôt que d'embarquer "
-                "un exécutable non vérifié."
+                "Downloaded FFmpeg archive does not match the expected checksum "
+                f"(expected {FFMPEG_SECOURS_SHA256}, got {obtenue}): "
+                f"{FFMPEG_SECOURS}. Build stopped rather than bundling "
+                "an unverified executable."
             )
     with tarfile.open(archive) as fichier:
         membres = fichier.getmembers()
@@ -225,7 +225,7 @@ def ffmpeg_utilisable(python: Path, travail: Path) -> tuple[str, str | None]:
     binaire = archive.parent / "ffmpeg"
     binaire.chmod(0o755)
     if not sait_ecrire(str(binaire)):
-        raise SystemExit("La compilation de secours ne sait pas non plus écrire du texte.")
+        raise SystemExit("The fallback build also cannot write text overlays.")
     sonde = archive.parent / "ffprobe"
     if sonde.is_file():
         sonde.chmod(0o755)
@@ -236,7 +236,7 @@ def executer(commande: list, titre: str) -> None:
     print(f"\n=== {titre}")
     resultat = subprocess.run(commande, cwd=str(BASE_DIR), check=False)
     if resultat.returncode != 0:
-        raise SystemExit(f"Échec : {titre}")
+        raise SystemExit(f"Failed: {titre}")
 
 
 def installer_win7(python: Path, travail: Path) -> None:
@@ -246,25 +246,25 @@ def installer_win7(python: Path, travail: Path) -> None:
     executer(
         [str(python), "-m", "pip", "install", "--quiet", "--upgrade",
          "pip==25.0.1"],
-        "installation de pip compatible Python 3.8",
+        "installing pip compatible with Python 3.8",
     )
     executer(
         [str(python), "-m", "pip", "install", "--quiet", "--requirement",
          str(WIN7_REQUIREMENTS)],
-        "installation du verrou Windows 7",
+        "installing the Windows 7 lockfile",
     )
     roues = travail / "wheels"
     executer(
         [str(python), str(BASE_DIR / "build_blinkpy_win7.py"), str(roues)],
-        "rétroportage des métadonnées blinkpy 0.25.9",
+        "backporting blinkpy 0.25.9 metadata",
     )
     executer(
         [str(python), "-m", "pip", "install", "--quiet", "--force-reinstall",
          "--no-deps", str(roues / WIN7_WHEEL)],
-        "installation de blinkpy pour Windows 7",
+        "installing blinkpy for Windows 7",
     )
     executer([str(python), "-m", "pip", "check"],
-             "cohérence des dépendances Windows 7")
+             "Windows 7 dependency consistency check")
 
 
 def verifier_blinkpy_win7(python: Path) -> None:
@@ -290,14 +290,14 @@ for classe, noms in (
     (BlinkLiveStream, ("start", "feed", "recv", "stop")),
 ):
     for nom in noms:
-        assert hasattr(classe, nom), "%%s.%%s absent" %% (classe.__name__, nom)
+        assert hasattr(classe, nom), "%%s.%%s missing" %% (classe.__name__, nom)
 assert "callback" in inspect.signature(Auth.__init__).parameters
 racine = distribution("blinkpy").locate_file("blinkpy")
 assert compileall.compile_dir(str(racine), quiet=1)
-print("blinkpy %%s : API moderne compilée sous Python 3.8" %% obtenue)
+print("blinkpy %%s: modern API compiled under Python 3.8" %% obtenue)
 """ % WIN7_VERSION
     executer([str(python), "-c", inspect.cleandoc(programme)],
-             "validation du rétroportage blinkpy")
+             "validating blinkpy backport")
 
 
 def verifier_webrtc_win7(python: Path) -> None:
@@ -316,13 +316,13 @@ attendues = {
 for paquet, attendue in attendues.items():
     obtenue = version(paquet)
     assert obtenue == attendue, (paquet, obtenue, attendue)
-assert blink_webrtc.DISPONIBLE, "WebRTC absent du profil Win7"
+assert blink_webrtc.DISPONIBLE, "WebRTC missing from the Win7 profile"
 assert RTCCertificate.generateCertificate().getFingerprints()
 assert CodecContext.create("h264", "r") is not None
-print("WebRTC Win7 : imports natifs, certificat DTLS et decodeur H.264 OK")
+print("WebRTC Win7: native imports, DTLS certificate and H.264 decoder OK")
 """
     executer([str(python), "-c", inspect.cleandoc(programme)],
-             "validation des dépendances WebRTC Windows 7")
+             "validating Windows 7 WebRTC dependencies")
 
 
 def main() -> int:
@@ -330,12 +330,12 @@ def main() -> int:
     parser.add_argument(
         "--propre",
         action="store_true",
-        help="supprimer l'environnement et les sorties de ce profil avant de commencer",
+        help="delete this profile's environment and outputs before starting",
     )
     parser.add_argument(
         "--win7",
         action="store_true",
-        help="construire l'édition legacy Windows 7 (CPython 3.8.10 x64)",
+        help="build the legacy Windows 7 edition (CPython 3.8.10 x64)",
     )
     args = parser.parse_args()
 
@@ -348,12 +348,12 @@ def main() -> int:
     if args.propre:
         for dossier in (venv, travail, dist):
             if dossier.exists():
-                print(f"Suppression de {dossier.name}...")
+                print(f"Removing {dossier.name}...")
                 shutil.rmtree(dossier, ignore_errors=True)
 
     if not python.exists():
         executer([sys.executable, "-m", "venv", str(venv)],
-                 "création de l'environnement de construction")
+                 "creating the build environment")
 
     if args.win7:
         verifier_python_win7(python)
@@ -362,17 +362,17 @@ def main() -> int:
         verifier_webrtc_win7(python)
     else:
         executer([str(python), "-m", "pip", "install", "--quiet", "--upgrade", "pip"],
-                 "mise à jour de pip")
+                 "updating pip")
         executer([str(python), "-m", "pip", "install", "--quiet",
                   "-r", str(REQUIREMENTS)],
-                 "installation des dépendances")
+                 "installing dependencies")
 
     ffmpeg, ffprobe = ffmpeg_utilisable(python, travail)
-    print(f"\nffmpeg embarqué : {ffmpeg}")
+    print(f"\nffmpeg bundled: {ffmpeg}")
     os.environ["BLINK_FFMPEG"] = ffmpeg
     os.environ.pop("BLINK_FFPROBE", None)
     if ffprobe:
-        print(f"ffprobe embarqué : {ffprobe}")
+        print(f"ffprobe bundled: {ffprobe}")
         os.environ["BLINK_FFPROBE"] = ffprobe
     os.environ.pop("BLINK_BUILD_TARGET", None)
     if args.win7:
@@ -382,22 +382,23 @@ def main() -> int:
         str(python), "-m", "PyInstaller", "--noconfirm", "--clean",
         "--distpath", str(dist), "--workpath", str(travail), str(SPEC),
     ]
-    executer(commande, "construction du bundle")
+    executer(commande, "building the bundle")
 
     executable = sortie / ("blink2video.exe" if sys.platform == "win32" else "blink2video")
     if not executable.exists():
-        raise SystemExit(f"Bundle introuvable : {executable}")
+        raise SystemExit(f"Bundle not found: {executable}")
     if args.win7:
         executer([str(python), str(BASE_DIR / "verify_win7_bundle.py"), str(sortie)],
-                 "contrôle statique du bundle Windows 7")
+                 "static check of the Windows 7 bundle")
 
     taille = sum(f.stat().st_size for f in sortie.rglob("*") if f.is_file())
-    print(f"\nBundle construit : {sortie}")
-    print(f"  exécutable : {executable.name}")
-    print(f"  taille     : {taille / 1024 / 1024:.0f} Mo")
-    print("\nLes vidéos (Blink_Clips, Blink_Daily…) iront dans Documents/blink2video,\n"
-          "l'état (réglages, session) dans le dossier de données d'application du\n"
-          "système, ou les deux dans le dossier désigné par la variable BLINK_HOME.")
+    print(f"\nBundle built: {sortie}")
+    print(f"  executable: {executable.name}")
+    print(f"  size      : {taille / 1024 / 1024:.0f} MB")
+
+    print("\nVideos (Blink_Clips, Blink_Daily…) go in Documents/blink2video,\n"
+          "state (settings, session) in the system application data folder,\n"
+          "or both in the folder set by the BLINK_HOME variable.")
     return 0
 
 

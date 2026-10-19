@@ -1,118 +1,111 @@
-# Édition legacy Windows 7
+# Legacy Windows 7 edition
 
-Le bundle Windows normal embarque Python 3.12, qui ne fonctionne pas sous
-Windows 7 et provoque notamment l'erreur
-`api-ms-win-core-path-l1-1-0.dll manquant`. L'édition legacy utilise le
-dernier runtime officiel adapté à Windows 7 : **CPython 3.8.10 x64**.
+The regular Windows bundle embeds Python 3.12, which cannot run on Windows 7
+and may report that `api-ms-win-core-path-l1-1-0.dll` is missing. This separate
+edition uses the last official compatible runtime, **CPython 3.8.10 x64**.
 
-Elle embarque le code actuel de `blinkpy 0.25.9`. Seules les métadonnées de sa
-roue sont rétroportées vers Python 3.8, avec les dernières dépendances encore
-installables sur cette version. Le code reçu de PyPI est vérifié par son
-SHA-256 avant modification.
+It contains the current `blinkpy 0.25.9` code. Only the wheel metadata is
+backported to Python 3.8, with the latest dependencies still available for that
+runtime. The original PyPI wheel is checked against its SHA-256 before it is
+modified.
 
-Le direct propose **WebRTC et MSE**, au choix dans les réglages. Le profil
-legacy embarque une pile WebRTC figée pour Python 3.8 et les DLL Windows 7 :
-`aiortc 1.9.0`, `PyAV 12.3.0`, `cryptography 42.0.8`, `pyOpenSSL 24.1.0` et
-`pylibsrtp 0.10.0`. Ces versions ne remplacent pas celles du bundle moderne.
-MSE reste disponible ; aucune modification du TLS du relais Blink n'est
-nécessaire pour ce portage.
+Live view offers **WebRTC and MSE**, selectable in settings. The legacy
+profile packages a stack pinned for Python 3.8 and Windows 7 DLLs:
+`aiortc 1.9.0`, `PyAV 12.3.0`, `cryptography 42.0.8`, `pyOpenSSL 24.1.0`,
+and `pylibsrtp 0.10.0`. These versions do not replace the modern bundle's
+dependencies. MSE remains available; this port does not change the Blink
+live relay's TLS behavior.
 
-Le magasin de certificats Mozilla de `certifi` complète celui de Windows 7 :
-les connexions Blink restent strictement vérifiées même si les autorités
-racines récentes ne sont plus distribuées à cette ancienne installation.
+The Mozilla CA store supplied by `certifi` supplements the Windows 7 store, so
+Blink connections remain strictly verified even when that legacy installation
+no longer receives newer root authorities.
 
-## Construire l'artefact
+## Build the artifact
 
-Le workflow `build-win7.yml` tourne automatiquement à chaque poussée sur
-`main`, aux côtés des contrôles des éditions normales. Il peut aussi être
-lancé à la main dans GitHub via **Actions → Build Windows 7 (legacy)
-→ Run workflow** ; l'artefact téléchargeable s'appelle alors
+The `build-win7.yml` workflow runs automatically on every push to `main`,
+alongside the regular edition checks. It can also be triggered by hand on
+GitHub via **Actions → Build Windows 7 (legacy) → Run workflow**; the
+downloadable artifact is then named
 `blink2video-windows7-x86_64-legacy`.
 
-La même recette est réutilisée (`workflow_call`) par `release.yml` : à chaque
-étiquette de release stable `vX.Y.Z`, le zip
-`blink2video-windows7-x86_64-legacy.zip` est publié comme asset
-supplémentaire de la [dernière release](https://github.com/nico579/blink2video/releases/latest),
-au même tag que les trois éditions normales, plutôt que sur un tag ou une
-numérotation `experimental.N` séparés. Chaque build est vérifié
-automatiquement avant publication (démarrage, ffmpeg, TLS Blink, suite de
-tests complète), mais contrairement aux trois autres archives, aucun
-`.sha256` n'est publié à côté. Un échec de ce job n'empêche jamais la
-publication des trois éditions stables : c'est une édition best-effort, hors
-support Microsoft.
+The same recipe is reused (`workflow_call`) by `release.yml`: on every stable
+release tag `vX.Y.Z`, the `blink2video-windows7-x86_64-legacy.zip`
+archive is published as an extra asset on the
+[latest release](https://github.com/nico579/blink2video/releases/latest),
+under the same tag as the three regular editions, rather than on a separate
+tag or `experimental.N` numbering. Each build is automatically verified
+before publishing (startup, ffmpeg, Blink TLS, the full test suite), but
+unlike the other three archives, no `.sha256` is published alongside it. A
+failure in this job never blocks publishing the three stable editions: this
+is a best-effort edition, outside Microsoft support.
 
-Le build exige également que WebRTC soit réellement importable et exécute
-dans le bundle un échange H.264 High local : MPEG-TS, ICE/DTLS/SRTP, trois
-images décodées et fermeture des connexions. Les imports PE normaux et
-différés sont contrôlés contre une liste d'API post-Win7 connues. Ce contrôle
-statique ne remplace pas l'exécution sur Windows 7.
+The build also requires working native WebRTC imports and runs a local
+H.264 High exchange inside the bundle: MPEG-TS, ICE/DTLS/SRTP, three decoded
+frames, and connection cleanup. Normal and delay-loaded PE imports are
+checked against a narrow list of known post-Win7 APIs. This static check
+does not replace execution on Windows 7.
 
-La validation manuelle sur une vraie VM Windows 7 SP1 (section suivante)
-reste recommandée avant de faire confiance à un build pour un usage réel :
-les vérifications automatiques ci-dessus ne la remplacent pas.
+Manual validation on a real Windows 7 SP1 VM (next section) is still
+recommended before trusting a build for real use: the automated checks above
+do not replace it.
 
-En local, la construction exige Windows x64 et l'interpréteur **CPython 3.8.10
-officiel de python.org** :
+A local build requires 64-bit Windows and the official python.org **CPython
+3.8.10** interpreter:
 
 ```powershell
 python build.py --win7 --propre
 ```
 
-Les environnements et sorties restent séparés du build normal dans
-`build_venv_win7`, `build-win7` et `dist-win7`. Les deux éditions partagent les
-mêmes sources applicatives dans `main` ; seule cette enveloppe de construction
-legacy est distincte.
+The legacy venv and outputs are isolated in `build_venv_win7`, `build-win7`
+and `dist-win7`. Both editions share the same application sources in `main`;
+only this legacy build envelope is separate.
 
-## Préparer la VM
+## Prepare the VM
 
-1. Installer Windows 7 SP1 64 bits, 2 CPU, 4 Go de RAM, réseau NAT, puis créer
-   un snapshot propre.
-2. Installer les mises à jour Microsoft nécessaires, au minimum KB2533623. Si
-   une erreur UCRT apparaît, installer aussi KB2999226 et le redistribuable
-   Visual C++ 2015-2019 x64 officiel, puis redémarrer.
-3. Ne pas installer Python dans la VM : le test doit prouver que le bundle est
-   réellement autonome.
-4. Copier puis extraire l'archive dans `C:\blink7` (ne pas l'exécuter depuis le
-   ZIP ni depuis un dossier partagé VirtualBox).
-5. Ne jamais télécharger une DLL isolée depuis un site tiers.
+1. Install 64-bit Windows 7 SP1 with 2 CPUs, 4 GB RAM and NAT networking, then
+   take a clean snapshot.
+2. Install the required Microsoft updates, at least KB2533623. If an UCRT error
+   remains, install KB2999226 and the official Visual C++ 2015-2019 x64
+   redistributable, then reboot.
+3. Do not install Python in the VM: the test must prove that the bundle is
+   self-contained.
+4. Copy and extract the archive into `C:\blink7`. Do not run it from inside the
+   ZIP or from a VirtualBox shared folder.
+5. Never download individual DLL files from third-party sites.
 
-## Quel navigateur utiliser pour WebRTC ?
+## Which browser should I use for WebRTC?
 
-Choix conseillé : **Supermium 144 R5 x64**. **Thorium Legacy 122 SSE3 x64**
-est une autre option validée. Installer depuis les publications officielles
-ci-dessous, ouvrir l'adresse locale affichée par blink2video, puis sélectionner
-**WebRTC dans les réglages du direct**. Aucun pack de codecs supplémentaire
-n'est nécessaire pour ces deux navigateurs.
+Recommended: **Supermium 144 R5 x64**. **Thorium Legacy 122 SSE3 x64** is
+another tested option. Download from the official releases linked below,
+open the local address displayed by blink2video, and select **WebRTC in live
+view settings**. Neither browser requires an additional codec pack.
 
-| Navigateur testé | WebRTC natif H.264 High sous Win7 | MSE | Conseil |
+| Tested browser | Native H.264 High WebRTC on Win7 | MSE | Recommendation |
 | --- | --- | --- | --- |
-| [Supermium 144.0.7559.256 R5 x64](https://github.com/win32ss/supermium/releases/tag/v144-r5) | Validé sur Salon, Terrasse1 et jardin ; contrôle sur mire le 7 septembre | Validé sur Salon et sur mire | Premier choix pour WebRTC |
-| [Thorium Legacy 122.0.6261.171 SSE3 x64](https://github.com/Alex313031/thorium-legacy/releases/tag/M122.0.6261.171) | Validé le 7 septembre sur les trois caméras, 720p et 1080p | Validé sur Salon et sur mire | Alternative fonctionnelle, moteur ancien |
-| Firefox ESR 115.39.0 x64 + OpenH264 2.6 | Échec : l'offre ne contient que H.264 Baseline | Conserver ce mode déjà fonctionnel sur cette VM | Utiliser MSE |
-| [r3dfox 153.0.3 portable x64](https://github.com/Eclipse-Community/r3dfox/releases/tag/v153.0.3) | API `RTCPeerConnection` absente, même avec `media.peerconnection.enabled=true` dans un profil de test | Essai automatique bloqué par la politique de lecture ; non validé | Non recommandé pour WebRTC sur cette configuration |
+| [Supermium 144.0.7559.256 R5 x64](https://github.com/win32ss/supermium/releases/tag/v144-r5) | Passed on Salon, Terrasse1 and jardin; synthetic check repeated September 7 | Passed on Salon and synthetic source | First choice for WebRTC |
+| [Thorium Legacy 122.0.6261.171 SSE3 x64](https://github.com/Alex313031/thorium-legacy/releases/tag/M122.0.6261.171) | Passed September 7 on all three cameras, 720p and 1080p | Passed on Salon and synthetic source | Working alternative, old engine |
+| Firefox ESR 115.39.0 x64 + OpenH264 2.6 | Failed: only H.264 Baseline advertised | Keep this previously working mode on this VM | Use MSE |
+| [r3dfox 153.0.3 portable x64](https://github.com/Eclipse-Community/r3dfox/releases/tag/v153.0.3) | No `RTCPeerConnection` API, even with `media.peerconnection.enabled=true` in a test profile | Automated playback blocked by browser policy; not validated | Not recommended for WebRTC on this configuration |
 
-Essais dans VirtualBox, Windows 7 SP1 x64, 1 CPU et 2 Go de RAM, navigateurs
-visibles et profils isolés. Les essais Chromium désactivent l'accélération GPU :
-ils prouvent le décodage sans GPU, pas la compatibilité de tous les pilotes.
-Sur Thorium, la lecture a avancé pendant six secondes sur chaque caméra,
-avec 86, 77 et 167 images présentées respectivement. Le module était libre
-après chaque arrêt. Ces validations fonctionnelles ne constituent pas un
-benchmark comparatif ; le réveil de Terrasse1 a notamment allongé son démarrage.
+Tests used VirtualBox, Windows 7 SP1 x64, one CPU, 2 GB RAM, visible browsers
+and isolated profiles. Chromium tests disabled GPU acceleration: this proves
+software decoding, not compatibility with every graphics driver. In Thorium,
+playback advanced for six seconds on each camera, presenting 86, 77 and 167
+frames respectively. The module was free after every stop. These are functional
+checks, not comparative benchmarks; Terrasse1's wake-up notably delayed startup.
 
-**Pas de mode WebRTC réencodé ni de conversion automatique vers Baseline.**
-En cas d'incompatibilité, sélectionner explicitement **MSE** dans les réglages.
-Une vidéo qui fonctionne en MSE ne garantit pas les mêmes profils en WebRTC :
-les deux chemins de décodage du navigateur sont distincts. Si aucune image
-n'apparaît, arrêter le direct avant de changer de mode ou de navigateur.
+**There is no re-encoded WebRTC mode or automatic Baseline conversion.**
+Select **MSE** explicitly in settings when WebRTC is incompatible. Working
+MSE playback does not guarantee the same WebRTC profiles: the browser uses
+different decoding paths. Stop a failed live view before changing modes or browsers.
 
-Ne pas désactiver le pare-feu ni la sécurité TLS pour résoudre un problème de
-codec. Ne pas considérer ces essais comme une garantie de sécurité pour la
-navigation Internet : Windows 7 reste hors support, et Thorium testé repose
-sur un ancien moteur Chromium.
+Do not disable the firewall or TLS security to resolve codec problems. These
+checks are not a security endorsement for general Internet browsing: Windows 7
+is unsupported, and the tested Thorium uses an old Chromium engine.
 
-## Essai progressif
+## Test progressively
 
-Depuis `cmd.exe`, dans `C:\blink7\blink2video` :
+Run these commands from `C:\blink7\blink2video` in `cmd.exe`:
 
 ```bat
 blink2video.exe --version
@@ -126,60 +119,58 @@ blink2video.exe merge
 blink2video.exe serve
 ```
 
-`--version` doit contenir `Windows 7 legacy`. Vérifier ensuite le 2FA, le
-téléchargement USB Gen2 et cloud, le direct, puis `start`, `stop` et
-`autostart`. IE11 n'est pas une cible.
+`--version` must include `Windows 7 legacy`. Then check 2FA, Gen2 USB
+and cloud downloads, live view, and finally `start`, `stop` and `autostart`.
+IE11 is not a target.
 
-Pour le direct WebRTC sous Windows 7, le navigateur testé est
-[Supermium 144.0.7559.256 R5](https://github.com/win32ss/supermium/releases/tag/v144-r5),
-édition x64. Le 6 septembre 2026, dans une VM VirtualBox Windows 7 SP1,
-les caméras Salon, Terrasse1 et jardin ont produit des images décodées et
-une lecture qui avance en WebRTC, sans réencodage. Le contrôle MSE sur Salon
-a également réussi, avec libération du module après chaque arrêt. Un second
-essai en fenêtre normale a confirmé la présentation continue des images
-WebRTC sur les trois caméras, avec `requestVideoFrameCallback` et progression
-du temps de lecture.
+The browser tested for WebRTC live view on Windows 7 is the x64 edition of
+[Supermium 144.0.7559.256 R5](https://github.com/win32ss/supermium/releases/tag/v144-r5).
+On September 6, 2026, in a VirtualBox Windows 7 SP1 VM, cameras Salon,
+Terrasse1, and jardin produced decoded frames and advancing playback over
+WebRTC, without re-encoding. The MSE check on Salon also passed, with the
+module released after every stop. A second test in a normal browser window
+confirmed continuous WebRTC frame presentation on all three cameras using
+`requestVideoFrameCallback` and advancing playback time.
 
-Le serveur conserve le flux H.264 High émis par Blink. Quand le navigateur
-ne propose pas directement High mais annonce un décodeur **High 4:4:4
-Predictive**, la négociation peut sélectionner ce décodeur : cela ne
-transforme pas la vidéo en 4:4:4 et n'installe aucun codec. Le serveur conserve
-également les identifiants de charge utile RTP négociés dans la plage 35-63
-(41 dans cet essai), au lieu de les remplacer par 112. La plage 64-95 reste
-exclue pour éviter les conflits avec RTCP, conformément à la
+The server preserves Blink's H.264 High stream. When the browser does not
+offer High directly but advertises a **High 4:4:4 Predictive** decoder,
+negotiation can select that decoder: this neither converts the video to
+4:4:4 nor installs a codec. The server also preserves negotiated RTP
+payload type identifiers in the 35-63 range (41 in this test), instead of
+replacing them with 112. The 64-95 range remains excluded to avoid RTCP
+conflicts, as required by
 [RFC 5761, section 4](https://www.rfc-editor.org/rfc/rfc5761.html#section-4).
 
-Cette validation concerne ce navigateur et ces caméras, pas tous les niveaux
-H.264 : notamment, les sources 1080p annoncent `640028` (High, niveau 4.0),
-alors que l'offre de Supermium contient `f4001f` (High 4:4:4 Predictive,
-niveau 3.1). Leur décodage a été constaté ici ; une offre limitée au niveau
-3.1 ne garantit pas à elle seule la réception d'un flux de niveau 4.0 sur
-un autre navigateur ou matériel.
+This validation applies to this browser and these cameras, not all H.264
+levels: in particular, the 1080p sources advertise `640028` (High, level 4.0),
+whereas Supermium's offer contains `f4001f` (High 4:4:4 Predictive, level 3.1).
+Decoding was observed here; an offer limited to level 3.1 does not by itself
+guarantee reception of a level 4.0 stream on another browser or hardware.
 
-Sur cette même VM, Firefox ESR 115 avec OpenH264 2.6 ne propose que Baseline
-en WebRTC : **conserver MSE avec Firefox**, même si le diagnostic natif High
-réussit. Une extension ou un pack de codecs système ne remplace pas les
-profils annoncés par sa pile WebRTC. Sans aucun H.264 dans l'offre,
-l'interface refuse le démarrage avant de réveiller la caméra et indique
-de vérifier OpenH264 ou de sélectionner MSE. MSE reste accessible dans les
-réglages, y compris avec Supermium.
+On the same VM, Firefox ESR 115 with OpenH264 2.6 offers Baseline only over
+WebRTC: **keep MSE with Firefox**, even though the native High diagnostic
+passes. A browser extension or system codec pack does not replace the
+profiles advertised by its WebRTC stack. If the offer contains no H.264 at
+all, the UI rejects startup before waking the camera and suggests checking
+OpenH264 or selecting MSE. MSE remains available in settings, including
+with Supermium.
 
-Le diagnostic `--webrtc` ne contacte aucune caméra, ne lit aucun jeton Blink
-et n'envoie aucune notification. Le JSON reste consultable même si le bundle
-n'a pas de console : il doit contenir `ok: true`, `frames_decoded: 3` et
-`closed: true`. Tester ensuite une caméra réelle dans le navigateur, puis
-sélectionner MSE dans les réglages pour vérifier les deux transports.
+The `--webrtc` diagnostic does not contact cameras, read Blink credentials,
+or send notifications. Its JSON report works even with a console-free bundle
+and must contain `ok: true`, `frames_decoded: 3`, and `closed: true`. Then
+test a real camera in the browser and select MSE in settings to verify both
+transports.
 
-La notification de bureau repose actuellement sur l'API de toast Windows 10 :
-son absence sous Windows 7 n'empêche ni les téléchargements ni les vidéos.
+Desktop notifications currently use the Windows 10 toast API. Their absence
+on Windows 7 does not affect downloads or video generation.
 
-## Limites de sécurité et de maintenance
+## Security and maintenance limits
 
-Windows 7, Python 3.8 et plusieurs dernières dépendances compatibles 3.8 sont
-hors maintenance. Cette édition est donc **legacy / best effort**, à ne pas
-exposer directement à Internet. La mise à jour automatique est désactivée :
-elle installerait sinon l'archive Windows standard fondée sur Python 3.12 et
-casserait immédiatement le démarrage sous Windows 7.
+Windows 7, Python 3.8 and several of the last Python-3.8-compatible libraries
+are no longer maintained. This edition is therefore **legacy / best effort**
+and must not be exposed directly to the Internet. Automatic updates are
+disabled because the regular archive would reinstall Python 3.12 and make the
+program unstartable on Windows 7.
 
-Après `login`, le dossier contient des jetons d'accès au compte Blink. Ne pas
-publier la VM ni ses fichiers, et revenir au snapshot propre après les essais.
+After `login`, the folder contains Blink account tokens. Do not publish the VM
+or its files; revert to the clean snapshot after testing.

@@ -144,7 +144,7 @@ class TestsPlanNormalisation(unittest.TestCase):
         resultat = self._executer({("Salon", "2026-09-08"): [self._clip("a.mp4")]})
 
         self.assertEqual(resultat.code, 0)
-        self.assertIn("Aucun groupe de clips à fusionner.", resultat.sortie)
+        self.assertIn("No clip group to merge.", resultat.sortie)
         resultat.camera_target.assert_called_once()
         resultat.render_key.assert_called_once()
         resultat.normalize_clip.assert_not_called()
@@ -186,7 +186,7 @@ class TestsPlanNormalisation(unittest.TestCase):
         resultat.normalize_clip.assert_called_once()
         self.assertIsNone(resultat.normalize_clip.call_args.args[-1])
         resultat.progress_printer.assert_not_called()
-        self.assertIn("0 clip(s) encodé(s), 1 réutilisé(s)", resultat.sortie)
+        self.assertIn("0 clip(s) encoded, 1 reused", resultat.sortie)
 
     def test_un_segment_invalide_est_reencode_meme_si_sa_cle_est_a_jour(self):
         resultat = self._executer(
@@ -196,7 +196,7 @@ class TestsPlanNormalisation(unittest.TestCase):
 
         resultat.valid_mp4.assert_called_once_with(self.args.normalized_output.resolve() / "a.mp4")
         resultat.progress_printer.assert_called_once_with("[1/1]")
-        self.assertIn("1 clip(s) encodé(s), 0 réutilisé(s)", resultat.sortie)
+        self.assertIn("1 clip(s) encoded, 0 reused", resultat.sortie)
 
     def test_le_total_ne_compte_que_les_identites_a_encoder(self):
         resultat = self._executer({
@@ -209,8 +209,8 @@ class TestsPlanNormalisation(unittest.TestCase):
         preparation = [appel for appel in resultat.travail.call_args_list
                        if appel.kwargs.get("cle") == "phase.prepare_clips"]
         self.assertEqual(preparation, [
-            mock.call("Préparation des clips", 0, 2, cle="phase.prepare_clips"),
-            mock.call("Préparation des clips", 1, 2, cle="phase.prepare_clips"),
+            mock.call("Preparing clips", 0, 2, cle="phase.prepare_clips"),
+            mock.call("Preparing clips", 1, 2, cle="phase.prepare_clips"),
         ])
 
     def test_le_nettoyage_conserve_les_segments_utilises_et_sources_indisponibles(self):
@@ -255,7 +255,7 @@ class TestsPlanNormalisation(unittest.TestCase):
             ("Salon", "2026-09-08"): [self._clip("a.mp4"), self._clip("a.mp4")],
         })
 
-        self.assertIn("Normalisation : 1 clip(s) à encoder", resultat.sortie)
+        self.assertIn("Normalizing: 1 clip(s) to encode", resultat.sortie)
         preparation = [appel for appel in resultat.travail.call_args_list
                        if appel.kwargs.get("cle") == "phase.prepare_clips"]
         self.assertTrue(preparation)

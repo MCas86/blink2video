@@ -1,6 +1,6 @@
-// Jeton anti-CSRF (voir Handler.jeton_valide côté serveur, 28.60) : posé sur
-// toute requête qui modifie quelque chose. Fait une fois ici, avant tout
-// autre script, pour qu'aucun fetch() plus bas n'ait à s'en soucier.
+// Anti-CSRF token (see Handler.jeton_valide on the server, 28.60): set on
+// every request that modifies something. Done once here, before any
+// other script, so no fetch() below has to worry about it.
 const BLINK_TOKEN = "__TOKEN__";
 const BLINK_PID = "__PID__";
 const _fetchNatif = window.fetch;
@@ -12,37 +12,36 @@ window.fetch = (entree, options) => {
   return _fetchNatif(entree, options);
 };
 
-// Le navigateur peut fermer sa connexion sans qu'aiortc le remarque tout de
-// suite. Signaler explicitement les sessions de CET onglet, y compris une
-// offre encore en cours : une page sans direct ne doit jamais couper celui
-// d'un autre onglet. pagehide couvre aussi les rechargements et le bfcache.
+// The browser may close its connection before aiortc notices.
+// Explicitly signal this tab's sessions, including an offer still in
+// progress: a page with no live view must never cut another tab's.
+// pagehide also covers reloads and bfcache.
 window.addEventListener("pagehide", () => {
   for (const name of nomsDirectsActifs()) stopWatch(name, true);
 });
 
-// Toute valeur reçue de Blink ou lue dans un nom de fichier est une donnée,
-// jamais du balisage. Les quelques vues rendues par gabarits HTML passent
-// toutes par cette fonction ; les actions utilisent des data-* et une
-// délégation d'événements, aucun nom n'est réinjecté dans du JavaScript.
+// Any value from Blink or a filename is data, never markup. The few
+// views built from HTML templates all go through this function; actions
+// use data-* and event delegation, so no name is reinjected into JS.
 const h = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
 })[char]);
 const avecJeton = (url) => `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(BLINK_TOKEN)}`;
 
-// Si le serveur a redémarré hors des trois transitions suivies plus bas
-// (réinstallation manuelle pendant que l'onglet restait ouvert, crash...),
-// le jeton posé par cette page est périmé : toute route protégée retombe
-// sur le send_error() par défaut de http.server, qui répond en HTML
-// (DOCTYPE), jamais en JSON. .json() y échoue avec un SyntaxError précis,
-// jamais levé par une vraie erreur JSON (send_json() reste toujours du
-// JSON valide, même à 500). La seule récupération sensée est un
-// rechargement complet, qui obtient une page et un jeton frais (signalé
-// par cutthin sur Reddit, 2026-08-31).
-// Exception : 502/503/504. Un mandataire (Caddy, nginx...) répond ainsi à la
-// place du serveur tant qu'il redémarre, avec un corps vide ou HTML : ce
-// n'est pas un jeton périmé, le serveur est simplement absent. Recharger
-// alors ramenait la page d'erreur du navigateur, sans script pour la
-// relancer (issue #35, Caddy) ; c'est sonderRelance() qui recharge au retour.
+// If the server restarted outside the three transitions tracked below
+// (manual reinstall while the tab stayed open, crash...), the token
+// set by this page is stale: any protected route falls back to
+// http.server's default send_error(), which replies with HTML
+// (DOCTYPE), never JSON. .json() then fails with a specific SyntaxError,
+// never raised by a real JSON error (send_json() always returns valid
+// JSON, even at 500). The only sensible recovery is a full reload,
+// which gets a fresh page and token (reported by cutthin on Reddit,
+// 2026-08-31).
+// Exception: 502/503/504. A proxy (Caddy, nginx...) answers in place of
+// the server while it restarts, with an empty or HTML body: that is not
+// a stale token, the server is simply gone. Reloading then brought the
+// browser's error page, with no script to recover (issue #35, Caddy);
+// sonderRelance() reloads when it comes back.
 async function lireJSON(reponse) {
   try {
     return await reponse.json();
@@ -59,218 +58,31 @@ let snapshots = [];
 const $ = (id) => document.getElementById(id);
 
 // ── i18n ─────────────────────────────────────────────────────────────────
-// Même pattern que gui/app.js de lidar2map : dico inline par locale + attribut
-// data-i18n sur les nœuds statiques, t()/tf() appelés directement dans le
-// texte généré en JS. Zéro dépendance. Le FR en dur dans le HTML reste le
-// repli si une clé manque : pas de page cassée. Détection : navigator.language
-// au premier chargement ; override manuel persisté en localStorage (page web
-// ordinaire servie par serve.py, pas de webview packagée à contourner ici).
+// Same pattern as lidar2map's gui/app.js: inline dict per locale + data-i18n
+// on static nodes, t()/tf() called directly in JS-generated text. Zero
+// deps. This fork is English-only: I18N.fr is overwritten from I18N.en
+// after both catalogs are defined. Detection / FR-EN buttons remain for
+// compatibility; both show English strings.
 const I18N = {
-  fr: {
-    "view.live": "Directs Vues", "view.direct": "Directs Enregistrements",
-    "view.clips": "Détections Enregistrements", "view.daily": "Détections Journalières",
-    "view.weekly": "Détections Hebdomadaires", "view.monthly": "Détections Mensuelles",
-    "view.pictures": "Photos",
-    "filter.allcameras": "toutes caméras",
-    "btn.refresh": "↻ Actualiser", "btn.reglages": "⚙ Réglages…", "btn.reglages.title": "Réglages",
-    "entete.pid": "PID serveur {pid}",
-    "update.installing": "Installer {version}",
-    "update.title": "Version {version} publiée. Le téléchargement, l'arrêt et la relance sont automatiques.",
-    "update.updating": "Mise à jour…",
-    "update.progress": "Mise à jour vers {version} : téléchargement, puis relance…",
-    "update.failed": "La mise à jour n'a pas pu être lancée : {erreur}",
-    "passages.updated": "actualisé {heure}",
-    "passages.new.one": " · {n} nouveau clip, cliquez sur Actualiser",
-    "passages.new.many": " · {n} nouveaux clips, cliquez sur Actualiser",
-    "auth.title": "Connexion Blink", "auth.title.2fa": "Vérification en deux étapes",
-    "auth.hint": "Le mot de passe sert uniquement à ouvrir la session ; seuls les jetons sont enregistrés, jamais le mot de passe.",
-    "auth.hint.2fa": "Blink vient d'envoyer un code. Saisissez-le pour terminer la connexion.",
-    "auth.email": "Adresse e-mail", "auth.password": "Mot de passe",
-    "auth.show": "Afficher", "auth.hide": "Masquer",
-    "auth.show.aria": "Afficher le mot de passe", "auth.hide.aria": "Masquer le mot de passe",
-    "auth.code": "Code reçu par SMS ou e-mail",
-    "auth.cancel": "Annuler", "auth.ok": "Se connecter", "auth.validate": "Valider",
-    "auth.connecting": "Connexion en cours…", "auth.failed": "Échec de la connexion.",
-    "reglages.title": "Réglages",
-    "reglages.tab.general": "Général", "reglages.tab.video": "Vidéo",
-    "reglages.tab.acces": "Accès et automatisation", "reglages.tab.alertes": "Alertes",
-    "reglages.initial.hint": "Vérifiez notamment le dossier des données et le fuseau horaire. Aucun clip ne sera téléchargé avant que vous ayez appliqué ces réglages.",
-    "reglages.autostart": "Démarrage automatique de la surveillance",
-    "reglages.autostart.title": "Démarre le serveur web et le traitement des clips en arrière-plan, à l'ouverture de session (au démarrage de la machine pour un service Linux avec lingering) ; n'ouvre pas cette page toute seule",
-    "reglages.auto": "Actualisation automatique de la page",
-    "reglages.auto.title": "Recharger la liste dès que des clips arrivent",
-    "reglages.showOut": "Voir les clips écartés",
-    "reglages.serveur": "Port du serveur",
-    "reglages.storageDir": "Dossier des vidéos",
-    "reglages.storageDir.placeholder": "C:/chemin/vers/le/dossier",
-    "reglages.storageDir.hint": "Clips, vidéos assemblées, directs et captures. Ne déplace pas ceux déjà enregistrés à l'ancien emplacement : à faire vous-même si vous changez ce chemin. Vide = emplacement par défaut, Documents/blink2video.",
-    "reglages.storageDir.browse": "Parcourir…",
-    "reglages.storageDir.browse.unavailable": "Sélecteur de dossier indisponible sur cette machine : saisissez le chemin directement.",
-    "reglages.accesDistant": "Accès distant par VPN maillé",
-    "reglages.accesDistant.hint": "Pour joindre cette instance directement depuis un VPN maillé (Tailscale, WireGuard), sans reverse proxy devant.",
-    "reglages.accesDistant.hint.text": "À utiliser avec la variable d'environnement BLINK_BIND réglée sur l'adresse d'écoute (voir le README, section « Reaching it remotely ») : ce réglage seul, sans elle, ne change rien à qui peut atteindre l'interface. Plusieurs valeurs possibles, séparées par des virgules : noms d'hôte, adresses IP ou sous-réseaux (192.168.1.0/24). Seuls les noms et adresses exacts autorisent aussi l'intégration de la page dans une iframe.",
-    "reglages.trustedHost": "Hôte de confiance",
-    "reglages.cadence": "Cadence de lecture des caméras",
-    "reglages.usb": "Stockage local (minutes)", "reglages.cloud": "Cloud (minutes)",
-    "reglages.video": "Vidéo", "reglages.timestamp": "Incruster la date et l'heure dans l'image",
-    "reglages.timestamp.style.hint": "Vide = taille automatique selon la hauteur de la vidéo. Couleur : nom (white, yellow…) ou hexadécimal, éventuellement avec une transparence (ex. white@0.8).",
-    "reglages.fontSize": "Taille de police", "reglages.fontColor": "Couleur",
-    "reglages.boxOpacity": "Opacité du bandeau",
-    "reglages.timezone": "Fuseau horaire",
-    "reglages.liveProtocol": "Protocole du direct",
-    "reglages.liveProtocol.webrtc": "WebRTC (rapide)",
-    "reglages.liveProtocol.mse": "MSE (compatible)",
-    "reglages.liveAutoStop": "Arrêt auto du direct (s)",
-    "reglages.liveAutoStop.hint": "Arrête le direct tout seul après ce délai, jusqu'à 420 s, même en direct continu. Vide ou 0 : pas d'arrêt automatique ; Blink ferme de lui-même chaque direct au bout d'environ 6 minutes, et la case « Direct continu » d'une caméra le relance.",
-    "reglages.archivage": "Création des vidéos temporelles par caméra",
-    "reglages.downloadAuto": "Télécharger les clips automatiquement",
-    "reglages.downloadAuto.hint": "Décochée, aucun clip n'est plus récupéré ni stocké : utile pour ne garder que le direct. Les cadences ci-dessous n'ont alors plus d'effet.",
-    "reglages.mergeJour": "Quotidienne",
-    "reglages.mergeSemaine": "Hebdomadaire", "reglages.mergeMois": "Mensuelle",
-    "reglages.archivage.hint": "Hebdomadaire et mensuelle sont assemblées à partir de la quotidienne : décocher « Quotidienne » désactive aussi les deux autres.",
-    "reglages.alertes": "Mise en sourdine des alertes",
-    "reglages.suppressionAuto": "Suppression automatique après téléchargement",
-    "reglages.webhook": "Photo par webhook",
-    "reglages.webhook.hint": "Déclenche une photo à distance (domotique, automatisation) sans ouvrir cette page.",
-    "reglages.webhook.hint.text": "Appelez cette URL en GET, en remplaçant NOM_CAMERA par le nom exact d'une caméra, pour déclencher une photo à distance. Le secret fait partie de l'URL : gardez-la privée.",
-    "reglages.webhook.url": "URL",
-    "reglages.webhook.regenerer": "Régénérer le secret",
-    "reglages.webhook.regenerer.confirm": "Régénérer invalidera l'URL actuelle : toute automatisation existante devra être mise à jour avec la nouvelle. Continuer ?",
-    "reglages.webhookNotif": "Notification par webhook",
-    "reglages.webhookNotif.hint": "Appelle cette URL en POST à chaque nouveau clip ou photo, une fois le fichier bien écrit sur disque.",
-    "reglages.webhookNotif.hint.text": "Envoie un POST JSON (caméra, chemin, type) à l'URL ci-dessous chaque fois qu'un clip ou une photo est prêt. Au mieux, sans nouvelle tentative : une notification manquée n'interrompt jamais le téléchargement.",
-    "reglages.webhookNotifUrl": "URL de notification",
-    "reglages.hint": "Les réglages ne prennent effet qu'au redémarrage : « Appliquer » enregistre et redémarre. Changer le port redirige cette page vers la nouvelle adresse.",
-    "reglages.apply": "Appliquer", "reglages.restarting": "Redémarrage…",
-    "reglages.restart": "Redémarrer",
-    "reglages.restart.hint": "Redémarre sans rien changer aux réglages, par exemple pour reprendre une mise à jour déjà en place.",
-    "reglages.checkUpdates": "Vérifier les mises à jour",
-    "reglages.checkUpdates.hint": "Demande tout de suite à GitHub si une version plus récente est publiée. Sans ce bouton, blink2video vérifie de lui-même toutes les heures.",
-    "reglages.checkUpdates.running": "Vérification…",
-    "reglages.checkUpdates.none": "blink2video {version} est à jour.",
-    "reglages.checkUpdates.found": "La version {version} est publiée : le bouton « Installer {version} » est en haut de la page.",
-    "reglages.checkUpdates.offline": "GitHub n'a pas répondu. Réessayez dans un moment.",
-    "reglages.restarting.settings": "Redémarrage avec les nouveaux réglages…",
-    "reglages.portchange": "Port changé : redirection vers {url} dès l'arrêt confirmé…",
-    "reglages.stop": "Arrêter la surveillance des caméras", "reglages.close": "Fermer",
-    "reglages.error.cadence": "Les cadences doivent valoir au moins 1 minute.",
-    "reglages.error.port": "Le port doit être compris entre 1 et 65535.",
-    "reglages.error.timezone": "Le fuseau horaire ne peut pas être vide.",
-    "stop.stopping": "Arrêt…",
-    "stop.stopped": "Arrêt demandé. Cette page va devenir indisponible.",
-    "stop.failed": "L'arrêt n'a pas abouti ; blink2video répond toujours.",
-    "reglages.restartFailed": "Le redémarrage n'a pas commencé. Vérifiez les journaux puis réessayez.",
-    "sourdine.loading": "Chargement…", "sourdine.unavailable": "Liste des caméras indisponible.",
-    "sourdine.none": "Aucune caméra connue pour l'instant.",
-    "suppressionAuto.loading": "Chargement…",
-    "suppressionAuto.unavailable": "Liste des caméras indisponible.",
-    "suppressionAuto.none": "Aucune caméra connue pour l'instant.",
-    "suppressionAuto.hint": "Une fois un clip téléchargé avec succès, il est supprimé de sa source (stockage local USB/microSD ou cloud de l'abonnement selon la caméra).",
-    "phase.inventory_clips": "Inventaire des clips à télécharger",
-    "phase.download_clips": "Téléchargement des clips",
-    "phase.prepare_clips": "Préparation des clips",
-    "phase.assemble_videos": "Assemblage des vidéos",
-    "phase.update_download": "Téléchargement de la mise à jour ({mo} Mo)",
-    "phase.update_install": "Installation de la mise à jour",
-    "phase.step_download": "Téléchargement", "phase.step_merge": "Fusion",
-    "phase.cloud_section": "Cloud de l'abonnement",
-    "phase.usb_section": "Stockage local : {hub}",
-    "live.querying": "Interrogation du système Blink…",
-    "live.count": "{n} caméra(s) · {m} avec détection active",
-    "system.armed": "Système armé", "system.disarmed": "Système désarmé",
-    "camera.offline": "HORS LIGNE", "camera.noeffect": "sans effet, système désarmé",
-    "camera.detection.on": "Détection active", "camera.detection.off": "Détection coupée",
-    "camera.wake": "Réveiller", "camera.waking": "Réveil…",
-    "camera.wake.title": "Réveille la caméra maintenant (prend une photo). Consomme un peu de batterie, jusqu'à 2 minutes.",
-    "camera.snapshot": "Photo", "camera.snapshotting": "Photo…",
-    "camera.snapshot.saved": "Photo enregistrée ✓",
-    "camera.snapshot.title": "Prend une photo maintenant et la garde dans Photos. Consomme un peu de batterie, jusqu'à 2 minutes.",
-    "camera.continuous": "Direct continu",
-    "camera.continuous.title": "Relance le direct chaque fois que Blink le ferme, au bout d'environ 6 minutes, jusqu'à ce que vous cliquiez sur Arrêter. Une pause d'une dizaine de secondes marque chaque relance.",
-    "camera.continuous.title.battery": "Relance le direct chaque fois que Blink le ferme, au bout d'environ 6 minutes, jusqu'à ce que vous cliquiez sur Arrêter. Une pause d'une dizaine de secondes marque chaque relance. Sur cette caméra à batterie, un direct sans fin la vide vite.",
-    "camera.battery": "batterie {v}", "camera.wifi": "Wi-Fi {v} dBm",
-    "camera.lfr": "liaison module {v}", "camera.measured.at": "relevé à {v}",
-    "camera.measured.on": "relevé du {d} à {h}", "camera.firmware": "micrologiciel {v}",
-    "camera.noclips": "aucun clip récupéré", "camera.clipssource": "clips : {v}",
-    "camera.none": "—",
-    "watch.live": "Voir en direct", "watch.retry": "Réessayer", "watch.stop": "Arrêter",
-    "watch.noh264": "Ce navigateur ne propose pas H.264 pour WebRTC. Vérifiez OpenH264 dans Firefox, ou choisissez MSE dans les réglages.",
-    "watch.waking": "Réveil de la caméra…", "watch.waking.seconds": "Réveil de la caméra… {s} s",
-    "watch.waking.slow": "Réveil de la caméra… {s} s (une caméra sur batterie est plus lente)",
-    "watch.reconnecting": "Reconnexion…",
-    "live.fullscreen.title": "Agrandir en plein écran",
-    "live.fullscreen.title.exit": "Quitter le plein écran",
-    "live.record.start": "Enregistrer", "live.record.stop": "Arrêter l'enregistrement",
-    "live.record.title": "Enregistre ce direct sur le disque (dossier Blink_Direct)",
-    "ronde.button": "▶ Ronde…", "ronde.button.title": "Les directs en plein écran, une caméra après l'autre",
-    "ronde.titre": "Ronde des directs",
-    "ronde.explication": "Plein écran, une caméra après l'autre : chacune reste à l'écran le temps choisi, compté à partir de sa première image.",
-    "ronde.cameras": "Caméras de la ronde", "ronde.secondes": "Secondes par caméra",
-    "ronde.plage": "Seulement de", "ronde.plage.a": "à",
-    "ronde.plage.aide": "Laissez les heures vides pour toute la journée.",
-    "ronde.batterie": "Chaque passage réveille la caméra : sur batterie, la ronde l'use vite. Tant qu'elle tourne, la relève du stockage local (clé USB) attend sa pause ou son arrêt.",
-    "ronde.demarrer": "Démarrer", "ronde.suivante": "Suivante ⏭", "ronde.arreter": "■ Arrêter",
-    "ronde.pause": "Ronde en pause jusqu'à {debut}.",
-    "ronde.aucune": "Aucune caméra en ligne dans la ronde.",
-    "watch.noimage": "Aucune image reçue. La caméra n'a pas répondu.",
-    "watch.interrupted": "Le direct s'est interrompu. Vous pouvez le relancer.",
-    "watch.refused": "Le flux a été refusé par le serveur.",
-    "watch.refused.code": "Le flux a été refusé par le serveur ({code}).",
-    "watch.refused.retry": "Flux refusé. Un direct précédent finit peut-être de se fermer : réessayez dans quelques secondes.",
-    "watch.codec.unsupported": "Codec non supporté par ce navigateur : {codec}",
-    "command.sending": "Envoi de la commande…",
-    "clips.none.filtered": "Aucun clip ne correspond à ce filtre.",
-    "clips.none.ever": "Aucun clip récupéré pour l'instant.<br>Le téléchargement tourne déjà en arrière-plan (clé USB toutes les 10 min, cloud toutes les minutes) : les clips apparaîtront ici sans rien faire. Vérifiez qu'une clé USB est branchée sur le module : sans elle, les enregistrements ne vont que dans le cloud de l'abonnement Blink, que cet outil ne lit pas.",
-    "direct.none.ever": "Aucun enregistrement du direct pour l'instant.<br>Ouvrez Direct, cliquez sur Enregistrer pendant qu'une caméra joue : il apparaîtra ici.",
-    "clips.window": "{m}/{total} clips",
-    "clips.previous": "Précédent", "clips.next": "Suivant",
-    "clips.first": "Première", "clips.last": "Dernière",
-    "clips.go.page": "Aller à la page", "clips.go": "Aller",
-    "clips.per.page": "Clips par page", "clips.all": "Tous",
-    "clips.page": "Page {page}/{pages} · {total} clips",
-    "filtre.showHidden": "Afficher les caméras masquées",
-    "reglages.tailleCartes": "Taille des vignettes",
-    "reglages.tailleCartes.petites": "Petites", "reglages.tailleCartes.moyennes": "Moyennes",
-    "reglages.tailleCartes.grandes": "Grandes", "reglages.tailleCartes.tres_grandes": "Très grandes",
-    "reglages.barrePagination": "Afficher la barre de pagination en haut de la liste",
-    "reglages.barrePagination.title": "Masquée, la barre du bas de la liste reste disponible pour changer de page. Propre à ce navigateur.",
-    "reglages.masquees": "Caméras masquées",
-    "reglages.masquees.hint": "Une caméra masquée disparaît des listes de cette page (clips, vidéos, photos, direct) mais continue d'enregistrer et de télécharger. Réglage propre à ce navigateur.",
-    "masquees.none": "Aucune caméra connue pour l'instant.",
-    "live.toutesMasquees": "Toutes les caméras de ce système sont masquées.",
-    "range.title": "Période",
-    "range.today": "Aujourd'hui (24 h)", "range.week": "Cette semaine (7 j)",
-    "range.month": "Ce mois-ci", "range.2months": "2 derniers mois",
-    "range.all": "Tout l'historique", "range.custom": "Période personnalisée",
-    "range.custom.depuis": "depuis {v}", "range.custom.jusqua": "jusqu'au {v}",
-    "range.custom.hint": "Ou une plage précise, à l'heure près :",
-    "filtre.button": "🔍 Filtre", "filtre.button.title": "Filtrer",
-    "filtre.title": "Filtre", "filtre.camera": "Caméra",
-    "filtre.groupBy": "Grouper par", "filtre.groupBy.camera": "Caméra",
-    "filtre.groupBy.day": "Jour",
-    "range.from": "Du", "range.to": "au", "range.apply": "Filtrer",
-    "videos.count": "{n} vidéo(s) · {duree} au total",
-    "videos.none": "Aucune vidéo assemblée. Lancez une actualisation.",
-    "videos.download": "Télécharger",
-    "pictures.count": "{n} photo(s)",
-    "pictures.none": "Aucune photo pour l'instant. Prenez-en une depuis Direct, ou via le webhook.",
-    "pictures.delete": "Supprimer",
-    "pictures.delete.title": "Supprimer cette photo du disque.",
-    "pictures.delete.confirm": "Supprimer cette photo ?",
-    "clip.resume": "Reprendre", "clip.discard": "Écarter",
-    "clip.discard.title": "Retirer ce clip des vidéos assemblées (quotidienne, hebdomadaire, mensuelle). La copie téléchargée reste sur le disque.",
-    "clip.resume.title": "Réinclure ce clip dans les prochains assemblages.",
-    "clip.deleteSource": "Supprimer",
-    "clip.deleteSource.pending": "Suppression…",
-    "clip.deleteSource.title": "Supprimer ce clip de sa source (stockage local ou cloud de l'abonnement). La copie déjà téléchargée ici n'est pas touchée. Peut prendre jusqu'à une minute pour le stockage local.",
-    "selection.apply": "✓ Appliquer ({n})",
-    "selection.confirm.suppression": "{n} clip(s) vont être supprimés de leur source (stockage local USB/microSD ou cloud de l'abonnement). Les copies déjà téléchargées ne sont pas touchées. Continuer ?",
-    "selection.partial": "{n} suppression(s) ont échoué ou n'ont rien trouvé à supprimer (déjà retiré ailleurs). Le reste de la sélection a été appliqué.",
-    "refresh.starting": "Démarrage…", "refresh.errors": "Terminé avec des erreurs",
-    "refresh.disconnected": "\\nConnexion interrompue.\\n",
-  },
+  fr: {},
   en: {
     "view.live": "Live Views", "view.direct": "Live Recordings",
+    "view.alllive": "All Live Views",
+    "view.rotation": "Live View Rotation",
+    "reglages.sharedAccess": "Shared camera access",
+    "reglages.sharedAccess.hint": "Friends authenticate with Cloudflare Access (their email). You keep the Blink login. Assign cameras below. Leave AUD empty for local-only admin on this machine.",
+    "reglages.cfAud": "Access application AUD",
+    "reglages.accessAdmins": "Admin emails (comma-separated)",
+    "reglages.accessAdd": "Add friend",
+    "reglages.accessSave": "Save access",
+    "reglages.accessSaved": "Access settings saved.",
+    "reglages.accessSaveFailed": "Could not save access settings.",
+    "reglages.accessRemove": "Remove",
+    "reglages.accessNoCams": "No cameras loaded yet. Open Live Views once, then reopen Settings.",
+    "reglages.accessGuestHint": "View-only: live, clips and pictures for the cameras you check.",
+    "access.denied": "Cloudflare Access login required.",
+    "access.pending": "Signed in via Cloudflare Access as {email}. No cameras assigned yet — ask the admin to grant cameras in Settings → Shared camera access.",
+    "access.whoami": "Signed in as {email}",
     "view.clips": "Detection Recordings", "view.daily": "Detection Daily",
     "view.weekly": "Detection Weekly", "view.monthly": "Detection Monthly",
     "view.pictures": "Pictures",
@@ -401,20 +213,11 @@ const I18N = {
     "watch.waking": "Waking the camera…", "watch.waking.seconds": "Waking the camera… {s} s",
     "watch.waking.slow": "Waking the camera… {s} s (a battery camera is slower)",
     "watch.reconnecting": "Reconnecting…",
+    "rotation.waiting": "Waiting for connection",
     "live.fullscreen.title": "Expand fullscreen",
     "live.fullscreen.title.exit": "Exit fullscreen",
     "live.record.start": "Record", "live.record.stop": "Stop recording",
     "live.record.title": "Records this live view to disk (Blink_Direct folder)",
-    "ronde.button": "▶ Rotation…", "ronde.button.title": "Live views in fullscreen, one camera after another",
-    "ronde.titre": "Rotating live view",
-    "ronde.explication": "Fullscreen, one camera after another: each one stays on screen for the chosen time, counted from its first image.",
-    "ronde.cameras": "Cameras in the rotation", "ronde.secondes": "Seconds per camera",
-    "ronde.plage": "Only from", "ronde.plage.a": "to",
-    "ronde.plage.aide": "Leave the hours empty for the whole day.",
-    "ronde.batterie": "Each turn wakes the camera: on battery, the rotation drains it quickly. While it runs, local storage (USB) downloads wait for a pause or the end.",
-    "ronde.demarrer": "Start", "ronde.suivante": "Next ⏭", "ronde.arreter": "■ Stop",
-    "ronde.pause": "Rotation paused until {debut}.",
-    "ronde.aucune": "No online camera in the rotation.",
     "watch.noimage": "No image received. The camera did not respond.",
     "watch.interrupted": "The live view was interrupted. You can restart it.",
     "watch.refused": "The stream was refused by the server.",
@@ -473,8 +276,10 @@ const I18N = {
     "refresh.disconnected": "\\nConnection lost.\\n",
   },
 };
-let _lang = "fr";
-function t(k) { return (I18N[_lang] && I18N[_lang][k]) || I18N.fr[k] || k; }
+// English-only UI for this fork: French catalog mirrors English.
+I18N.fr = Object.assign({}, I18N.en);
+let _lang = "en";
+function t(k) { return (I18N[_lang] && I18N[_lang][k]) || I18N.en[k] || k; }
 function tf(k, v) {
   let s = t(k);
   for (const p in (v || {})) s = s.split("{" + p + "}").join(v[p]);
@@ -500,63 +305,129 @@ function applyI18n() {
 function setLang(code, persist) {
   _lang = code === "en" ? "en" : "fr";
   applyI18n();
-  // Valeur dynamique (PID du process), donc rendue ici plutôt que par
-  // data-i18n, qui ne sait interpoler aucun paramètre dans sa traduction.
+  // Dynamic value (process PID), so rendered here rather than via
+  // data-i18n, which cannot interpolate any parameter in its translation.
   $("pidServeur").textContent = tf("entete.pid", { pid: BLINK_PID });
-  // Le bouton « afficher/masquer » le mot de passe suit son propre état
-  // (masqué ou non), qu'applyI18n ne connaît pas : ré-appliqué ici plutôt
-  // que par data-i18n, qui écraserait « Masquer » par « Afficher » si le
-  // mot de passe était déjà visible au moment du changement de langue.
+  // The show/hide password button tracks its own state (masked or not),
+  // which applyI18n does not know: re-applied here rather than via
+  // data-i18n, which would overwrite "Hide" with "Show" if the password
+  // was already visible when the language changed.
   const pass = $("pass");
   if (pass) {
     const masque = pass.type === "password";
     $("passToggle").textContent = t(masque ? "auth.show" : "auth.hide");
     $("passToggle").setAttribute("aria-label", t(masque ? "auth.show.aria" : "auth.hide.aria"));
   }
-  // Rendu par JS plutôt que par data-i18n : reconstruire pour que la langue
-  // s'applique immédiatement, sans attendre le prochain événement qui
-  // déclencherait normalement ce rendu. fill() gère un tableau vide sans
-  // problème (l'option « tout » reste posée), donc pas de garde ici.
+  // Rendered by JS rather than data-i18n: rebuild so the language applies
+  // immediately, without waiting for the next event that would normally
+  // trigger this render. fill() handles an empty array fine (the "all"
+  // option stays), so no guard here.
   if (typeof fill === "function") {
     fill($("camera"), camerasConnues(), t("filter.allcameras"));
   }
   if (typeof render === "function" && data.clips) render();
   if (typeof renderLive === "function" && system) renderLive();
-  // Un direct actif gèle la grille (voir renderLive()) : le bouton plein
-  // écran déjà posé survit donc au changement de langue sans se refaire,
-  // et doit être retraduit ici plutôt que de rester dans l'ancienne langue.
+  // An active live view freezes the grid (see renderLive()): the fullscreen
+  // button already placed therefore survives the language change without
+  // being rebuilt, and must be retranslated here rather than stay in the
+  // old language.
   if (typeof syncExpandButtons === "function") syncExpandButtons();
-  // #sourdineListe porte data-i18n="sourdine.loading" en repli HTML :
-  // applyI18n() vient d'écraser ses cases à cocher réelles par ce texte de
-  // chargement si le panneau est ouvert pendant la bascule de langue.
-  // Reconstruire immédiatement plutôt que de laisser la liste figée ainsi
-  // jusqu'à la prochaine ouverture du panneau.
+  // #sourdineListe carries data-i18n="sourdine.loading" as HTML fallback:
+  // applyI18n() just overwrote its real checkboxes with that loading text
+  // if the panel is open during the language switch. Rebuild immediately
+  // rather than leave the list frozen until the next panel open.
   if (typeof chargerSourdine === "function" && $("reglages")?.open) chargerSourdine();
   if (typeof chargerCamerasMasquees === "function" && $("reglages")?.open) chargerCamerasMasquees();
   if (typeof chargerSuppressionAuto === "function" && $("reglages")?.open) chargerSuppressionAuto();
   if (persist) localStorage.setItem("lang", _lang);
-  // Envoyé à chaque appel, pas seulement un choix explicite (persist) :
-  // le menu du systray (tray.py) lit cette valeur pour s'afficher dans la
-  // même langue que la page, y compris quand elle vient de detectLang()
-  // et n'a jamais été choisie à la main. Best-effort, jamais bloquant : une
-  // page ouverte hors-ligne ou un onglet d'arrière-plan ne doit pas faire
-  // échouer l'affichage.
+  // Sent on every call, not only an explicit choice (persist): the systray
+  // menu (tray.py) reads this value to show the same language as the page,
+  // including when it comes from detectLang() and was never chosen by hand.
+  // Best-effort, never blocking: an offline page or background tab must
+  // not break the display.
   fetch("/api/lang", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ lang: _lang }) }).catch(() => {});
 }
 
-// ── Préférences d'affichage propres à ce navigateur (issue #40) ───────────
-// Comme la taille de page et l'actualisation automatique : mémorisées dans
-// localStorage, donc propres à chaque appareil (un téléphone et un PC peuvent
-// vouloir des choses différentes), sans réglage serveur ni redémarrage. Masquer
-// une caméra ne la touche pas : elle continue d'enregistrer et de télécharger.
+// ── Display preferences local to this browser (issue #40) ─────────────────
+// Like page size and auto-refresh: stored in localStorage, so local to each
+// device (a phone and a PC may want different things), with no server setting
+// or restart. Hiding a camera does not touch it: it keeps recording and
+// downloading.
+// Per-user access (/api/me). Local mode without Cloudflare → admin.
+let ACCES = { email: "", role: "admin", cameras: null, permissions: ["*"] };
+function estAdmin() { return ACCES.role === "admin"; }
+// Cloudflare Access login (or local admin): Settings must stay reachable so
+// camera allowlists can be edited. Guests still cannot call admin APIs.
+function estConnecteAcces() {
+  return ACCES.role === "admin" || ACCES.role === "guest";
+}
+
+async function chargerAcces() {
+  try {
+    ACCES = await lireJSON(await fetch("/api/me"));
+  } catch (erreur) {
+    ACCES = { email: "", role: "admin", cameras: null, permissions: ["*"] };
+  }
+  appliquerRoleAcces();
+}
+
+function appliquerRoleAcces() {
+  document.body.classList.toggle("role-guest", !estAdmin());
+  const reglages = $("reglagesButton");
+  // Anyone who got through Cloudflare Access (or local mode) sees Settings.
+  if (reglages) reglages.hidden = !estConnecteAcces();
+  const refresh = $("refresh");
+  if (refresh) refresh.hidden = !estAdmin();
+  const apply = $("applyButton");
+  if (apply && !estAdmin()) apply.hidden = true;
+  let who = $("accessWhoami");
+  if (!who) {
+    who = document.createElement("span");
+    who.id = "accessWhoami";
+    who.className = "sub tiny";
+    const header = document.querySelector("header");
+    if (header) header.append(who);
+  }
+  if (ACCES.email) {
+    who.textContent = tf("access.whoami", {
+      email: ACCES.email + (estAdmin() ? "" : ` (${ACCES.role || "guest"})`),
+    });
+    who.hidden = false;
+  } else {
+    who.hidden = true;
+  }
+  if (ACCES.role === "unauthenticated") {
+    $("list").innerHTML = `<p class="empty">${h(ACCES.error || t("access.denied"))}</p>`;
+    $("count").textContent = "";
+    return;
+  }
+  if (ACCES.role === "guest" && ACCES.pending_allowlist) {
+    // Still load the app; empty camera lists come from the API. Show a hint.
+    if (!$("accessPendingHint")) {
+      const hint = document.createElement("p");
+      hint.id = "accessPendingHint";
+      hint.className = "empty";
+      hint.textContent = tf("access.pending", { email: ACCES.email || "" });
+      const list = $("list");
+      if (list && list.parentNode) list.parentNode.insertBefore(hint, list);
+    } else {
+      $("accessPendingHint").textContent = tf("access.pending", { email: ACCES.email || "" });
+      $("accessPendingHint").hidden = false;
+    }
+  } else {
+    const hint = $("accessPendingHint");
+    if (hint) hint.hidden = true;
+  }
+}
+
 const CLE_CAMERAS_MASQUEES = "blink2video.camerasMasquees";
 const CLE_TAILLE_CARTES = "blink2video.tailleCartes";
 const TAILLES_CARTES = { petites: 220, moyennes: 320, grandes: 480, tres_grandes: 720 };
 const TAILLE_CARTES_DEFAUT = "moyennes";
 let camerasMasquees = restaurerCamerasMasquees();
-// Dévoilement temporaire (case de la fenêtre de filtre) : jamais mémorisé, la
-// liste redevient masquée au prochain chargement.
+// Temporary reveal (filter window checkbox): never persisted; the list
+// goes back to hidden on the next load.
 let montrerMasquees = false;
 let tailleCartes = restaurerTailleCartes();
 
@@ -591,9 +462,9 @@ function appliquerTailleCartes() {
 }
 appliquerTailleCartes();
 
-// Ordre naturel des noms de caméras (« 2-Escalier » avant « 10-Cave »), dans
-// la langue de la page. Un collateur par langue : en construire un par
-// comparaison coûterait cher sur une liste longue.
+// Natural order of camera names ("2-Stairs" before "10-Basement"), in the
+// page language. One collator per language: building one per comparison
+// would be costly on a long list.
 const _collateurs = {};
 function comparerNoms(a, b) {
   if (!_collateurs[_lang]) {
@@ -637,34 +508,32 @@ function chargerCamerasMasquees() {
   }
 }
 
-// data.cameras (issu de /api/clips) ne connaît qu'une caméra qui a au moins
-// un clip de détection téléchargé. Une caméra seulement vue en direct
-// (bouton Enregistrement Direct, jamais de clip) en était donc absente : ses
-// vidéos s'affichaient bien groupées sous son nom, mais impossible de la
-// choisir dans le filtre pour s'y limiter (constaté en réel, 2026-09-04).
-// L'union avec les caméras réellement présentes dans chaque catégorie de
-// videos (daily/weekly/monthly/direct) couvre aussi bien ce cas que les
-// mêmes catégories pour la même raison, sans rien de spécifique à direct.
+// data.cameras (from /api/clips) only knows a camera that has at least one
+// downloaded detection clip. A camera only seen live (Direct Recording
+// button, never a clip) was therefore missing: its videos still grouped
+// under its name, but it could not be chosen in the filter (seen in
+// practice, 2026-09-04). Union with cameras actually present in each
+// videos category (daily/weekly/monthly/direct) covers that case and the
+// same categories for the same reason, nothing specific to direct.
 function toutesLesCameras() {
   const ensemble = new Set(data.cameras || []);
   for (const liste of Object.values(videos)) {
     for (const v of liste) ensemble.add(v.camera);
   }
-  // Une caméra sans aucun clip ni vidéo assemblée (webhook seul, jamais
-  // armée) doit quand même apparaître ici : sinon rien ne permet de filtrer
-  // sur elle dans Photos.
+  // A camera with no clip or assembled video (webhook only, never armed)
+  // must still appear here: otherwise nothing can filter on it in Photos.
   for (const s of snapshots) ensemble.add(s.camera);
   return [...ensemble];
 }
 
-// Le filtre ne propose pas les caméras masquées (sauf dévoilement temporaire),
-// triées dans l'ordre naturel : « 2-Escalier » avant « 10-Cave ».
+// The filter omits hidden cameras (except temporary reveal), sorted in
+// natural order: "2-Stairs" before "10-Basement".
 function camerasConnues() {
   return toutesLesCameras().filter((nom) => !estMasquee(nom)).sort(comparerNoms);
 }
 
-// Liste de la fenêtre des réglages : toutes les caméras, masquées ou non, y
-// compris celles vues seulement en direct et celles masquées puis disparues.
+// Settings window list: all cameras, hidden or not, including those only
+// seen live and those hidden then gone.
 function camerasPourMasquage() {
   const ensemble = new Set([...toutesLesCameras(), ...camerasMasquees]);
   for (const s of (system && system.systems) || []) {
@@ -673,12 +542,11 @@ function camerasPourMasquage() {
   return [...ensemble].sort(comparerNoms);
 }
 
-// c.battery (cameraCard, plus bas) n'est renseigné que si Blink en publie
-// un pour cette caméra : une Blink Mini, câblée en permanence, n'en a pas
-// - vu en vrai (2026-09-04) : le texte de réveil prolongé ("une caméra sur
-// batterie est plus lente") s'affichait quand même dessus, une affirmation
-// fausse pour ce modèle. Inconnue (systeme pas encore charge) => true : on
-// garde alors l'ancien texte plutot que d'affirmer a tort le contraire.
+// c.battery (cameraCard, below) is set only if Blink publishes one for
+// this camera: a permanently wired Blink Mini has none - seen in practice
+// (2026-09-04): the long wake text ("a battery camera is slower") still
+// showed on it, false for that model. Unknown (system not loaded yet) =>
+// true: keep the old text rather than wrongly claim the opposite.
 function cameraSurBatterie(name) {
   for (const s of (system && system.systems) || []) {
     const c = s.cameras.find((cam) => cam.key === name);
@@ -703,8 +571,8 @@ function fill(select, values, all) {
   if (values.includes(kept)) select.value = kept;
 }
 
-// "clips" et "direct" partagent data.clips (voir collect(), serve.py) : le
-// champ "kind" de chaque entrée décide laquelle des deux vues la montre.
+// "clips" and "direct" share data.clips (see collect(), serve.py): each
+// entry's "kind" field decides which of the two views shows it.
 function visible() {
   const kindAttendu = $("view").value === "direct" ? "direct" : "clip";
   return data.clips.filter((c) =>
@@ -721,35 +589,57 @@ function duration(seconds) {
     .map((v, i) => (i ? String(v).padStart(2, "0") : v)).join(":");
 }
 
+function vueRotation() {
+  const kind = $("view").value;
+  return kind === "rotation" || kind === "alllive";
+}
+
+function vueDirecte() {
+  const kind = $("view").value;
+  return kind === "live" || kind === "alllive" || kind === "rotation";
+}
+
 function render() {
   heuresDePassage();
   const kind = $("view").value;
-  // Clips et Clips Directs partagent data.clips et donc renderClips()
-  // (2026-09-04, même présentation demandée pour les deux) ; Journalières/
-  // Hebdomadaires/Mensuelles restent sur renderVideos(kind), Direct (le
-  // live) sur renderLive().
+  // Clips and Direct Clips share data.clips and therefore renderClips()
+  // (2026-09-04, same presentation requested for both); Daily/Weekly/
+  // Monthly stay on renderVideos(kind), Live on renderLive().
+  if (kind === "rotation" || kind === "alllive") {
+    $("outLabel").hidden = true;
+    $("filtreButton").hidden = true;
+    $("periodeSection").hidden = true;
+    $("filtreResume").textContent = "";
+    $("filtreCompte").textContent = "";
+    if (!system) return loadSystem(false);
+    if (system.error) {
+      $("list").innerHTML = `<p class="empty">${h(system.error)}</p>`;
+      return;
+    }
+    // Already cycling: do not rebuild / restart on incidental render().
+    if (rotationActive) return;
+    startRotation();
+    return;
+  }
+  if (kind === "live") return renderLive();
   const carteClips = kind === "clips" || kind === "direct";
   $("outLabel").hidden = !carteClips;
-  // Même périmètre que la caméra : Clips, Clips Directs, Journalières,
-  // Hebdomadaires, Mensuelles s'y filtrent toutes, seul Direct (le live)
-  // n'en a pas l'usage. La période, elle, vaut pour Clips et Clips Directs
-  // (/api/clips, les deux depuis data.clips) : daily/weekly/monthly ne la
-  // lisent toujours pas.
+  // Same scope as the camera: Clips, Direct Clips, Daily, Weekly, Monthly
+  // all filter there; only Live has no use for it. The period applies to
+  // Clips and Direct Clips (/api/clips, both from data.clips):
+  // daily/weekly/monthly still do not read it.
   $("filtreButton").hidden = kind === "live";
-  // La ronde n'a de sens que dans le direct, et ne lui survit pas.
-  $("rondeButton").hidden = kind !== "live";
-  if (kind !== "live") arreterRonde();
   $("periodeSection").hidden = !carteClips;
-  // Grouper par jour n'a de sens que pour les journalieres : hebdomadaires
-  // et mensuelles n'ont qu'un seul fichier par semaine/mois et par camera,
-  // regrouper par jour n'y changerait rien (issue #14 : "week and month
-  // makes no sense" pour ce mode, dixit le rapporteur). Pas davantage avec
-  // une caméra choisie (issue #37, voir regroupable()).
+  // Group by day only makes sense for dailies: weeklies and monthlies have
+  // one file per week/month per camera, so grouping by day would change
+  // nothing (issue #14: "week and month makes no sense" for this mode,
+  // per the reporter). Nor with a chosen camera (issue #37, see
+  // regroupable()).
   majGroupBy();
   $("filtreResume").textContent = carteClips ? resumeFiltre() : "";
-  // Le décompte n'a de sens que pour clips/direct ; renderClips() le repose
-  // à chaque rendu, mais quitter cette vue doit l'effacer, pas le laisser
-  // périmé derrière une autre vue.
+  // The count only matters for clips/direct; renderClips() resets it each
+  // render, but leaving this view must clear it, not leave it stale behind
+  // another view.
   if (!carteClips) $("filtreCompte").textContent = "";
   if (!carteClips) nettoyerLecteursClips();
   if (kind === "live") return renderLive();
@@ -757,19 +647,20 @@ function render() {
   return carteClips ? renderClips() : renderVideos(kind);
 }
 
-// --- direct et armement ----------------------------------------------------
+// --- live view and arming --------------------------------------------------
 let system = null;
 let rafraichirVignettes = true;
 
 async function loadSystem(force) {
-  if (system && !force) return renderLive();
-  // La vue peut avoir changé entre le déclenchement de cet appel et sa
-  // résolution (bascule rapide vers Clips, ou déclenchement précoce au
-  // chargement avant que la vue par défaut ne soit posée) : ne toucher au
-  // DOM que si Direct est encore affiché, sinon la réponse tardive
-  // écraserait une liste de clips déjà à l'écran sans que le menu déroulant
-  // ne le laisse deviner.
-  if ($("view").value === "live" && !nomsDirectsActifs().length && !ronde.boite) {
+  if (system && !force) {
+    return vueRotation() ? render() : renderLive();
+  }
+  // The view may have changed between this call firing and resolving
+  // (quick switch to Clips, or early fire on load before the default view
+  // is set): only touch the DOM if Live/Rotation is still shown, else the
+  // late response would overwrite a clip list already on screen without
+  // the dropdown hinting at it.
+  if (vueDirecte() && !nomsDirectsActifs().length) {
     $("list").innerHTML = `<p class="empty">${t("live.querying")}</p>`;
     $("count").textContent = "";
   }
@@ -779,37 +670,36 @@ async function loadSystem(force) {
     system = { error: String(error) };
   }
   if ($("view").value === "live") renderLive();
+  else if (vueRotation()) render();
 }
 
-// Un calcul lancé par les boucles de fond, hors de cette page : le
-// téléchargement et l'assemblage publient leur avancement dans un fichier, seul
-// moyen pour la page d'apprendre que la machine travaille. Tant qu'il tourne,
-// le bouton reste inactif : un second calcul attendrait le même verrou, sans
-// rien avancer.
+// Work started by background loops, outside this page: download and
+// assembly publish progress in a file, the only way for the page to learn
+// the machine is busy. While it runs, the button stays disabled: a second
+// job would wait on the same lock and make no progress.
 let travailEnCours = false;
 let travailVisible = false;
 let actualisationLocale = false;
-// Boucle d'attente d'un redémarrage après clic sur « Mettre à jour » (voir
-// son onclick plus bas). montrerTravail() l'arrête depuis l'extérieur quand
-// la mise à jour conclut sans redémarrer (phase.update_noop) : sans ça, elle
-// attendrait un retour du serveur qui ne viendra jamais.
+// Wait loop for a restart after clicking "Update" (see its onclick below).
+// montrerTravail() stops it from outside when the update finishes without
+// restarting (phase.update_noop): without that, it would wait for a server
+// return that never comes.
 let miseAJourAttente = null;
 let generationMaj = 0;
 
-// Le serveur ne connaît jamais la langue affichée (choix propre à chaque
-// onglet, en localStorage) : un libellé de phase arrive donc toujours en
-// français, accompagné d'une clé stable quand une traduction existe. Clé
-// absente ou inconnue de ce dictionnaire : le texte reçu reste affiché tel
-// quel plutôt qu'une chaîne vide, qui masquerait un travail réellement en
-// cours (ex. bug vécu en vrai : « Téléchargement des clips » figé en
-// français quelle que soit la langue choisie).
+// The server never knows the displayed language (per-tab choice in
+// localStorage): a phase label therefore always arrives in French, with a
+// stable key when a translation exists. Missing or unknown key: show the
+// received text as-is rather than an empty string, which would hide real
+// work in progress (e.g. real bug: "Downloading clips" stuck in French
+// regardless of chosen language).
 function libellePhase(cle, texteBrut, valeurs) {
   if (!cle || !((I18N[_lang] && I18N[_lang][cle]) || I18N.fr[cle])) return texteBrut;
   return valeurs ? tf(cle, valeurs) : t(cle);
 }
 
 function montrerTravail(travail) {
-  if (actualisationLocale) return;    // notre propre barre parle déjà
+  if (actualisationLocale) return;    // our own bar already speaks
   const visible = !!(travail && travail.quoi);
   if (!visible) {
     if (travailVisible) {
@@ -822,11 +712,11 @@ function montrerTravail(travail) {
     return;
   }
   if (travail.cle === "phase.update_noop") {
-    // La mise à jour a conclu sans arrêter ni relancer le serveur (déjà à
-    // jour, archive absente, git pull refusé...). L'onclick du bouton
-    // n'attend qu'une chose, sa disparition-puis-retour : sans ce
-    // déblocage explicite, il resterait bloqué sur « Mise à jour… »
-    // indéfiniment alors que rien n'est en cours.
+    // The update finished without stopping or restarting the server
+    // (already up to date, missing archive, git pull refused...). The
+    // button's onclick only waits for disappear-then-return: without this
+    // explicit unlock, it would stay stuck on "Updating…" forever while
+    // nothing is running.
     if (miseAJourAttente !== null) {
       clearInterval(miseAJourAttente);
       miseAJourAttente = null;
@@ -846,36 +736,31 @@ function montrerTravail(travail) {
   $("work").classList.add("on");
   const total = travail.total || 0;
   const fait = travail.fait || 0;
-  // Le téléchargement de la mise à jour avance en mégaoctets décimaux, pas en
-  // éléments comptés : des entiers, et pas de « +1 » de rang (« 77.5/
-  // 82.67831420898438 », vu en vrai le 2026-10-17).
-  const enMo = travail.cle === "phase.update_download";
-  const quoi = enMo
+  const quoi = travail.cle === "phase.update_download"
     ? libellePhase(travail.cle, travail.quoi, { mo: Math.round(total) })
     : libellePhase(travail.cle, travail.quoi);
-  // total === 1 : un pas unique, pas une mesure de progression (ex. « déjà à
-  // jour », voir phase.update_noop) - une fraction « 1/1 (100 %) » n'y
-  // ajouterait rien.
+  // total === 1: a single step, not a progress measure (e.g. "already up
+  // to date", see phase.update_noop) - a "1/1 (100 %)" fraction would add
+  // nothing.
   if (total > 1) {
     $("bar").max = total;
     $("bar").value = fait;
-    const plafond = enMo ? Math.round(total) : total;
-    const courant = fait >= total ? plafond : (enMo ? Math.floor(fait) : fait + 1);
+    const courant = fait >= total ? total : fait + 1;
     $("phase").textContent =
-      `${quoi} ${courant}/${plafond} (${Math.round((fait / total) * 100)} %)`;
+      `${quoi} ${courant}/${total} (${Math.round((fait / total) * 100)} %)`;
   } else {
     $("bar").removeAttribute("value");
     $("phase").textContent = quoi;
   }
-  // Le N/N retenu dix secondes est visible, mais n'est plus un verrou : un
-  // nouveau clic reste possible. Si la page avait vu le travail actif, sa fin
-  // déclenche exactement le même rafraîchissement qu'une disparition directe.
+  // The N/N held for ten seconds is visible, but is no longer a lock: a
+  // new click remains possible. If the page had seen active work, its end
+  // triggers the same refresh as a direct disappearance.
   if (termine && etaitActif && !actif) rechargerEnArrierePlan();
 }
 
-// Une version publiée plus récente que celle qui tourne : le bouton apparaît,
-// et il fait tout, du téléchargement à la relance. Pendant l'opération le
-// serveur s'arrête et revient : la page attend son retour, puis se recharge.
+// A published version newer than the one running: the button appears and
+// does everything, from download to relaunch. During the operation the
+// server stops and comes back: the page waits for its return, then reloads.
 function montrerMaj(neuve) {
   const bouton = $("update");
   bouton.hidden = !(neuve && neuve.version);
@@ -885,12 +770,11 @@ function montrerMaj(neuve) {
   bouton.title = tf("update.title", { version: neuve.version });
 }
 
-// Contrôles capables d'envoyer une requête ou d'ouvrir un nouvel état
-// (réglages, filtre, sélection, passage en direct) pendant qu'une mise à
-// jour est en vol : gelés le temps de l'opération, faute de quoi un clic
-// ailleurs peut atterrir sur un serveur en train de s'arrêter puis de
-// revenir sous une autre version. « refresh » a déjà sa propre règle (lié à
-// n'importe quel travail actif dans montrerTravail) et n'a pas besoin d'y être.
+// Controls that can send a request or open a new state (settings, filter,
+// selection, live view) while an update is in flight: frozen for the
+// operation, otherwise a click elsewhere can hit a server that is stopping
+// then coming back under another version. "refresh" already has its own
+// rule (tied to any active work in montrerTravail) and need not be here.
 const CONTROLES_GELES_PENDANT_MAJ = ["reglagesButton", "filtreButton", "applyButton", "view"];
 
 function gelerPendantMaj(gele) {
@@ -900,15 +784,15 @@ function gelerPendantMaj(gele) {
   }
 }
 
-// État du serveur vu depuis la page, pour attendre une relance (mise à jour,
-// Appliquer, Redémarrer) :
-//   "absent"  connexion refusée, ou 502/503/504 : un mandataire (nginx...)
-//             devant le serveur répond à sa place tant qu'il est arrêté, sans
-//             que fetch() lève quoi que ce soit ;
-//   "autre"   403 : un autre processus répond, avec son propre jeton. C'est
-//             le serveur relancé, plus vite que le sondage n'a pu le voir
-//             absent ;
-//   "present" toute autre réponse.
+// Server state as seen from the page, to wait for a relaunch (update,
+// Apply, Restart):
+//   "absent"  connection refused, or 502/503/504: a proxy (nginx...) in
+//             front of the server answers in its place while it is down,
+//             without fetch() throwing;
+//   "autre"   403: another process answers, with its own token. That is
+//             the relaunched server, faster than the poll could see it
+//             absent;
+//   "present" any other response.
 async function etatServeur() {
   try {
     const reponse = await fetch("/api/status", { cache: "no-store" });
@@ -920,10 +804,10 @@ async function etatServeur() {
   }
 }
 
-// Un pas de sondage : la relance est finie, et la page se recharge, quand le
-// serveur revient après avoir été vu absent, ou dès qu'un autre processus
-// répond (issue #35 : la page restait sur l'ancien serveur, et il fallait la
-// recharger à la main). suivi.parti dit si l'absence a été vue.
+// One poll step: relaunch is done and the page reloads when the server
+// returns after being seen absent, or as soon as another process answers
+// (issue #35: the page stayed on the old server and had to be reloaded by
+// hand). suivi.parti says whether absence was seen.
 async function sonderRelance(suivi) {
   const etat = await etatServeur();
   if (etat === "absent") suivi.parti = true;
@@ -936,10 +820,9 @@ $("update").onclick = async () => {
   bouton.dataset.encours = "1";
   bouton.disabled = true;
   bouton.textContent = t("update.updating");
-  // Le bouton reste utilisable tant que le serveur n'a pas confirmé le
-  // lancement : une requête rejetée (serveur injoignable) ou une réponse
-  // illisible le laissait grisé jusqu'au rechargement de la page (audit du
-  // 2026-10-02, B13).
+  // The button stays usable until the server confirms launch: a rejected
+  // request (server unreachable) or unreadable response left it greyed
+  // until page reload (audit 2026-10-02, B13).
   let resultat;
   try {
     const reponse = await fetch("/api/update", { method: "POST",
@@ -960,16 +843,16 @@ $("update").onclick = async () => {
   $("bar").removeAttribute("value");
   $("work").classList.add("on");
   $("refresh").disabled = true;
-  // Le serveur va disparaître puis revenir sous sa nouvelle version. On teste
-  // sa présence, et c'est son retour qui sert de fin de course. Une conclusion
-  // qui ne redémarre rien (déjà à jour, échec...) ne déclenche jamais ça :
-  // c'est phase.update_noop, vu par montrerTravail(), qui arrête alors cette
-  // boucle et débloque le bouton depuis l'extérieur.
+  // The server will disappear then return under its new version. We probe
+  // its presence, and its return is the finish line. A conclusion that
+  // restarts nothing (already up to date, failure...) never triggers this:
+  // phase.update_noop, seen by montrerTravail(), then stops this loop and
+  // unlocks the button from outside.
   const suivi = { parti: false };
   miseAJourAttente = setInterval(() => sonderRelance(suivi), 2000);
-  // Dernier filet si même phase.update_noop n'est jamais arrivé (ex. sous-
-  // processus mort avant de pouvoir écrire quoi que ce soit) : mieux vaut un
-  // bouton qui se débloque sans explication qu'un bouton mort pour de bon.
+  // Last safety net if even phase.update_noop never arrived (e.g. child
+  // process died before writing anything): better an unexplained unlock
+  // than a permanently dead button.
   setTimeout(() => {
     if (generation !== generationMaj || miseAJourAttente === null) return;
     clearInterval(miseAJourAttente);
@@ -982,29 +865,26 @@ $("update").onclick = async () => {
 
 let dernierRechargementAuto = 0;
 
-// Rechargement déclenché par l'arrière-plan (nouveau clip détecté, ou fin
-// d'un calcul) plutôt que par un clic explicite : jamais plus d'une fois
-// toutes les 60 secondes, le rythme normal de veille de veiller(). Pendant
-// un gros lot en cours de traitement, chaque nouveau clip détecté ou chaque
-// bascule de travailEnCours pouvait sinon redéclencher un rechargement
-// complet de la grille (toutes les vignettes vidéo détruites et
-// reconstruites), perçu comme un clignotement (constaté en réel, 2026-08-27).
+// Reload triggered by the background (new clip detected, or end of a job)
+// rather than an explicit click: never more than once every 60 seconds,
+// the normal watch rhythm of veiller(). During a large batch in progress,
+// each new clip or travailEnCours flip could otherwise trigger a full grid
+// reload (all video thumbnails destroyed and rebuilt), perceived as
+// flickering (seen in practice, 2026-08-27).
 function rechargerEnArrierePlan() {
   const maintenant = Date.now();
   if (maintenant - dernierRechargementAuto < 60000) return;
-  // load() remet à zéro toute sélection Écarter/Supprimer non encore
-  // appliquée (voir son commentaire) : correct pour un rechargement voulu
-  // par l'utilisateur, mais ici l'appelant est un événement de fond (fin de
-  // travail suivi, nouveaux clips détectés) sans rapport avec ce qu'il est
-  // en train de faire. Reporter au lieu d'écraser en silence ; le prochain
-  // passage de heuresDePassage()/montrerTravail() retentera.
+  // load() clears any Exclude/Delete selection not yet applied (see its
+  // comment): correct for a user-requested reload, but here the caller is
+  // a background event (tracked work ending, new clips) unrelated to what
+  // they are doing. Defer instead of silently wiping; the next
+  // heuresDePassage()/montrerTravail() pass will retry.
   const { exclure, inclure, supprimer } = calculerSelection();
   if (exclure.length + inclure.length + supprimer.length > 0) return;
-  // Même raison que le gel de renderLive() pour un direct actif (voir son
-  // commentaire) : reconstruire #list détruit toute <video> de clip en train
-  // d'être lue, perçu comme un rafraîchissement intempestif en plein
-  // visionnage (signalé par Nico, 2026-09-12). On reporte, comme pour une
-  // sélection en attente ci-dessus.
+  // Same reason as freezing renderLive() for an active live view (see its
+  // comment): rebuilding #list destroys any clip <video> being played,
+  // perceived as an untimely refresh mid-viewing (reported by Nico,
+  // 2026-09-12). Defer, as for a pending selection above.
   if ([...$("list").querySelectorAll("video")].some((v) => !v.paused)) return;
   dernierRechargementAuto = maintenant;
   load();
@@ -1017,32 +897,31 @@ async function heuresDePassage() {
   } catch (erreur) { return; }
   montrerMaj(etat.maj);
   const vus = etat.passages || {};
-  // Des clips sont arrivés depuis que la page a été chargée : on le dit, et
-  // c'est à vous de cliquer sur Actualiser. La liste ne se réorganise pas sous
-  // les yeux de qui est en train de la lire.
+  // Clips arrived since the page was loaded: we say so, and you click
+  // Refresh. The list does not reshuffle under someone reading it.
   //
-  // Face à total_known.clip (le vrai total du registre, jamais borné par le
-  // filtre actif), jamais data.clips.length : celui-ci ne compte que ce que
-  // le filtre courant affiche (une caméra, une période étroite…), pas tout
-  // ce qui est connu. Comparer le total réel à un sous-ensemble filtré
-  // annonçait des centaines de « nouveaux » clips qui n'avaient rien de
-  // nouveau (constaté en réel, 2026-08-27). total_known est un objet par
-  // genre depuis le 2026-09-04 : le soustraire entier donnait NaN, et les
-  // nouveaux clips n'étaient plus jamais annoncés (audit du 26/09, B03).
-  // Avant le premier chargement de la galerie, rien à comparer.
+  // Compare against total_known.clip (the real registry total, never
+  // bounded by the active filter), never data.clips.length: that only
+  // counts what the current filter shows (one camera, a narrow period…),
+  // not everything known. Comparing the real total to a filtered subset
+  // announced hundreds of "new" clips that were not new (seen in practice,
+  // 2026-08-27). total_known has been a per-kind object since 2026-09-04:
+  // subtracting it whole gave NaN, and new clips were never announced
+  // again (audit 26/09, B03). Before the first gallery load, nothing to
+  // compare.
   const connus = data && data.total_known ? data.total_known.clip : undefined;
   const arrives = typeof connus === "number"
     ? Math.max(0, (etat.clips || 0) - connus) : 0;
-  // Une seule heure, la plus récente des trois. Le détail du verbe le plus en
-  // retard alourdissait la ligne pour un cas rare.
+  // A single time, the most recent of the three. Detailing the most overdue
+  // verb weighed down the line for a rare case.
   const dates = ["watch", "download", "merge"].filter((cle) => vus[cle]);
   if (!dates.length) return;
 
   const instant = (cle) => new Date(vus[cle]).getTime();
   const plusRecent = dates.reduce((a, b) => (instant(a) > instant(b) ? a : b));
-  // Choix mémorisé d'un affichage à l'autre : une préférence qu'il faudrait
-  // recocher à chaque ouverture n'en serait pas une. Pendant un calcul, on ne
-  // recharge pas : la liste changerait sous les yeux à chaque vidéo assemblée.
+  // Choice remembered across displays: a preference you must re-check every
+  // open would not be one. During a job, do not reload: the list would
+  // change underfoot with each assembled video.
   if (arrives && $("auto").checked && !travailEnCours) {
     rechargerEnArrierePlan();
     return;
@@ -1060,7 +939,7 @@ async function etatDuTravail() {
   try {
     const etat = await lireJSON(await fetch("/api/travail", { cache: "no-store" }));
     if (generation === generationMaj) montrerTravail(etat.travail);
-  } catch (erreur) { /* le prochain passage réessaiera */ }
+  } catch (erreur) { /* the next pass will retry */ }
 }
 
 function nomsDirectsActifs() {
@@ -1071,22 +950,9 @@ function nomsDirectsActifs() {
   ])];
 }
 
-function renderLive() {
-  // Reconstruire la grille remplace tout son HTML, direct en cours compris :
-  // la balise <video> et son AbortController survivraient, orphelins, sous
-  // un DOM tout neuf qui ne les référence plus (vu en vrai : un clip qui
-  // arrive en tâche de fond suffit à déclencher ce rafraîchissement pendant
-  // qu'un direct tourne, qui semble alors s'arrêter sans jamais reprendre).
-  // Un direct actif gèle donc la grille jusqu'à ce qu'il s'arrête. De même
-  // une case prêtée à la ronde : redessinée en son absence, la grille en
-  // aurait deux du même identifiant, même après l'échec de son direct.
-  if (nomsDirectsActifs().length || ronde.boite) return;
-  if (!system) return loadSystem(false);
-  if (system.error) {
-    $("list").innerHTML = `<p class="empty">${h(system.error)}</p>`;
-    return;
-  }
-  // Caméras masquées exclues, les autres dans l'ordre naturel de leur nom.
+function peindreGrilleLive() {
+  if (!system || system.error) return;
+  // Hidden cameras excluded; the rest in natural name order.
   const camerasVisibles = (s) => s.cameras
     .filter((c) => !estMasquee(c.name))
     .sort((a, b) => comparerNoms(a.name, b.name));
@@ -1101,11 +967,11 @@ function renderLive() {
       <span class="sub tiny">${h([s.module,
         s.module_firmware ? tf("camera.firmware", { v: s.module_firmware }) : null,
         s.module_serial].filter(Boolean).join(" · "))}</span>
-      <button class="act ${s.armed ? "in" : "out"}"
+      ${estAdmin() ? `<button class="act admin-only ${s.armed ? "in" : "out"}"
               data-action="arm" data-scope="system" data-name="${h(s.key)}"
               data-armed="${!s.armed}">
         ${h(s.armed ? t("system.armed") : t("system.disarmed"))}
-      </button>
+      </button>` : ""}
     </h2>
     ${camerasVisibles(s).length
       ? `<div class="grid wide">${camerasVisibles(s).map((c) => cameraCard(c, s.armed)).join("")}</div>`
@@ -1115,23 +981,39 @@ function renderLive() {
   rafraichirVignettes = false;
 }
 
+function renderLive() {
+  // Rebuilding the grid replaces all its HTML, including an in-progress
+  // live view: the <video> tag and its AbortController would survive as
+  // orphans under a fresh DOM that no longer references them (seen in
+  // practice: a background clip arrival is enough to trigger this refresh
+  // while a live view runs, which then seems to stop and never resume).
+  // An active live view therefore freezes the grid until it stops.
+  if (nomsDirectsActifs().length) return;
+  if (!system) return loadSystem(false);
+  if (system.error) {
+    $("list").innerHTML = `<p class="empty">${h(system.error)}</p>`;
+    return;
+  }
+  peindreGrilleLive();
+}
+
 function actualiserVignettes() {
   for (const cadre of $("list").querySelectorAll(".live")) {
     const still = cadre.querySelector(".still");
     const name = cadre.querySelector('[data-action="watch-live"]')?.dataset.name;
     if (!still || !name) continue;
-    // Garder la dernière image visible pendant la requête à Blink.
+    // Keep the last image visible during the Blink request.
     fetch(urlVignette(name, true)).then((response) => {
       if (response.ok && still.isConnected) still.src = urlVignette(name);
     }).catch(() => {});
   }
 }
 
-// Un relevé de caméra arrive daté (ISO, à la minute, à l'heure du serveur),
-// avec « est-ce aujourd'hui ? » : la page compose le texte dans sa langue et
-// au format de date du navigateur, comme dateLocale() et dateSnapshot(). Le
-// serveur envoyait « 28/09 à 14:30 », français en dur (issue #37), et la page
-// devinait la phrase à prendre en cherchant ce « à » dedans.
+// A camera reading arrives dated (ISO, to the minute, server time), with
+// "is it today?": the page composes the text in its language and the
+// browser's date format, like dateLocale() and dateSnapshot(). The server
+// used to send "28/09 à 14:30", hard-coded French (issue #37), and the page
+// guessed which phrase to use by searching for that "à" inside.
 function dateReleve(c, locale) {
   const m = (c.measured_at || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
   if (!m) return null;
@@ -1142,15 +1024,14 @@ function dateReleve(c, locale) {
   return tf("camera.measured.on", { d: jour, h: heure });
 }
 
-// Température : séparateur décimal du navigateur, pas une virgule en dur.
+// Temperature: browser decimal separator, not a hard-coded comma.
 function degres(valeur, locale) {
   return valeur.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 }
 
 function cameraCard(c, systemArmed) {
-  // Une mesure vieille de plus d'une heure est datée, et une caméra hors
-  // ligne est signalée comme telle : sa dernière température connue peut
-  // remonter à plusieurs semaines.
+  // A reading older than one hour is dated, and an offline camera is
+  // flagged as such: its last known temperature may be weeks old.
   const vieille = c.age_seconds !== null && c.age_seconds > 3600;
   const num = (v) => v !== null && v !== undefined;
   const releve = [
@@ -1170,38 +1051,38 @@ function cameraCard(c, systemArmed) {
     <div class="live" id="live-${cssId(c.key)}">${repos(c.key, t("watch.live"))}</div>
     <div class="meta">
       <div>
-        <div class="time">${h(c.name)}</div>
+        <div class="time">${h(c.name)} <strong class="rotation-countdown" data-for="${h(c.key)}" hidden></strong></div>
         <div class="sub">${h(details || t("camera.none"))}</div>
         <div class="sub tiny">${h([c.model,
           c.firmware ? tf("camera.firmware", { v: c.firmware }) : null, c.serial,
           c.clips_source ? tf("camera.clipssource", { v: c.clips_source }) : t("camera.noclips"),
         ].filter(Boolean).join(" · "))}</div>
       </div>
-      <button class="act ${c.armed ? "in" : "out"}"
+      ${estAdmin() ? `<button class="act admin-only ${c.armed ? "in" : "out"}"
               data-action="arm" data-scope="camera" data-name="${h(c.key)}"
               data-armed="${!c.armed}">
         ${h(c.armed ? t("camera.detection.on") : t("camera.detection.off"))}
       </button>
-      <button class="act grouped" title="${h(t("camera.wake.title"))}"
+      <button class="act grouped admin-only" title="${h(t("camera.wake.title"))}"
               data-action="wake" data-name="${h(c.key)}">${h(t("camera.wake"))}</button>
-      <button class="act grouped" title="${h(t("camera.snapshot.title"))}"
+      <button class="act grouped admin-only" title="${h(t("camera.snapshot.title"))}"
               data-action="snapshot" data-name="${h(c.key)}">${h(t("camera.snapshot"))}</button>
-      <label class="act grouped continu"
+      <label class="act grouped continu admin-only"
              title="${h(t(c.battery ? "camera.continuous.title.battery" : "camera.continuous.title"))}">
         <input type="checkbox" data-action="continu" data-name="${h(c.key)}"${directContinu(c.key) ? " checked" : ""}>
         ${h(t("camera.continuous"))}
-      </label>
+      </label>` : ""}
     </div>
   </div>`;
 }
 
 const cssId = (name) => name.replace(/[^\w-]/g, "_");
 
-// Seul maillon de toute la chaîne que le serveur ne peut pas observer
-// lui-même : négociation SDP réussie ou connectionState "connected" ne
-// prouvent pas qu'une image est réellement arrivée à l'écran (décodage,
-// rendu <video>, tout ça se passe ici). Best-effort à dessein : un signal
-// perdu ne doit jamais gêner le direct affiché, seul direct.log en pâtit.
+// Only link in the whole chain the server cannot observe itself: a
+// successful SDP negotiation or connectionState "connected" does not prove
+// an image actually reached the screen (decode, <video> render — all
+// happen here). Best-effort by design: a lost signal must never disturb
+// the displayed live view; only direct.log suffers.
 function signalerDirect(name, evenement, detail, sessionId = WEBRTC_SESSION[name]) {
   fetch(`/api/direct-signal/${encodeURIComponent(name)}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -1209,21 +1090,32 @@ function signalerDirect(name, evenement, detail, sessionId = WEBRTC_SESSION[name
   }).catch(() => {});
 }
 
-// Un direct qui échoue doit rendre son bouton d'origine : laisser « Arrêter »
-// laisserait croire qu'un flux tourne, et il n'y aurait plus aucun moyen de
-// relancer. Retirer la balise <img> ferme au passage la connexion restée
-// ouverte côté serveur.
+// A failed live view must restore its original button: leaving "Stop"
+// would imply a stream is running, with no way to restart. Removing the
+// <img> also closes the connection left open on the server.
 function failWatch(name, message, sessionId) {
   signalerDirect(name, "abandon", message, sessionId);
   const box = $("live-" + cssId(name));
+  // Rotation / All Live drive themselves: show the error briefly, then
+  // skip to the next camera — never leave a "View live" button that needs
+  // a click.
+  if (rotationActive && vueRotation()) {
+    if (box) box.innerHTML = `<p class="hint overlay">${h(message)}</p>`;
+    if (rotationTimer) clearTimeout(rotationTimer);
+    rotationTimer = setTimeout(() => {
+      stopWatch(name);
+      cycleNext();
+    }, 2500);
+    return;
+  }
   if (box) box.innerHTML = repos(name, t("watch.retry")) + `<p class="hint overlay">${h(message)}</p>`;
 }
 
-// Ni <img> (MJPEG) ni la balise <video> du direct MSE ne portent l'attribut
-// controls (un scrubber n'aurait aucun sens sur un flux sans fin) : le
-// plein écran ne peut donc pas venir gratuitement du navigateur comme pour
-// les clips enregistrés. Bouton dédié plutôt qu'un clic sur toute la case :
-// essayé d'abord, jugé peu explicite à l'usage.
+// Neither <img> (MJPEG) nor the MSE live <video> carries the controls
+// attribute (a scrubber makes no sense on an endless stream): fullscreen
+// therefore cannot come for free from the browser as with recorded clips.
+// Dedicated button rather than a click on the whole card: tried first,
+// judged unclear in use.
 function toggleFullscreen(name) {
   if (document.fullscreenElement || document.webkitFullscreenElement) {
     (document.exitFullscreen || document.webkitExitFullscreen).call(document);
@@ -1233,10 +1125,10 @@ function toggleFullscreen(name) {
   (box.requestFullscreen || box.webkitRequestFullscreen).call(box);
 }
 
-// Commun aux deux protocoles depuis l'ajout de l'arrêt explicite MSE
-// (2026-09-06) : /api/arreter-direct cherche déjà la session correspondante
-// dans DIRECT_WEBRTC_SESSION ou DIRECT_MSE_SESSION indifféremment, le corps
-// de la requête n'a jamais rien eu de spécifique à WebRTC.
+// Shared by both protocols since explicit MSE stop was added (2026-09-06):
+// /api/arreter-direct already finds the matching session in
+// DIRECT_WEBRTC_SESSION or DIRECT_MSE_SESSION alike; the request body was
+// never WebRTC-specific.
 function arreterSessionDirect(sessionId, beacon = false) {
   if (!sessionId) return;
   const body = JSON.stringify({ session_id: sessionId });
@@ -1246,39 +1138,44 @@ function arreterSessionDirect(sessionId, beacon = false) {
         `/api/arreter-direct?token=${encodeURIComponent(BLINK_TOKEN)}`,
         new Blob([body], { type: "application/json" }),
       )) return;
-    } catch (erreur) { /* fetch keepalive sert de filet si Beacon est indisponible */ }
+    } catch (erreur) { /* fetch keepalive is the fallback if Beacon is unavailable */ }
   }
   fetch("/api/arreter-direct", { method: "POST", keepalive: true,
     headers: { "Content-Type": "application/json" }, body }).catch(() => {});
 }
 
 function stopWatch(name, beacon = false) {
-  // La case peut avoir disparu sous nos pieds (actualisation de la vue
-  // pendant le direct) : la remise au repos est cosmétique, mais couper les
-  // flux ci-dessous ne doit jamais en dépendre.
+  // The card may have vanished underfoot (view refresh during live):
+  // resetting to idle is cosmetic, but cutting the streams below must never
+  // depend on it.
   const box = $("live-" + cssId(name));
-  if (box) box.innerHTML = repos(name, t("watch.live"));
+  // In solo rotation the page advances itself: do not restore a "View live"
+  // button that would require a click between cameras. All Live keeps the
+  // dashboard tiles, so idle cameras get their button back.
+  if (box && !(rotationActive && $("view").value === "rotation")) {
+    box.innerHTML = repos(name, t("watch.live"));
+  }
   const autoStopTimer = LIVE_AUTO_STOP_TIMER[name];
   if (autoStopTimer) { clearTimeout(autoStopTimer); delete LIVE_AUTO_STOP_TIMER[name]; }
   const pending = LIVE_PENDING[name];
   if (pending) { pending.abort(); delete LIVE_PENDING[name]; }
   const controller = MSE_ABORT[name];
   if (controller) { controller.abort(); delete MSE_ABORT[name]; }
-  // Capturer l'identifiant avant d'annuler : le finally de la tentative peut
-  // retirer son état, et une nouvelle tentative peut déjà avoir commencé.
-  // Sans ce signal explicite, une caméra restée silencieuse après l'abort()
-  // ci-dessus ne libérait le module qu'au bout de LIVE_MAX_SECONDS (300 s) :
-  // send_live_mse() ne détecte une connexion fermée qu'en essayant d'écrire
-  // le bloc suivant, qui pouvait ne jamais arriver (bug réel).
+  // Capture the id before aborting: the attempt's finally may clear its
+  // state, and a new attempt may already have started. Without this
+  // explicit signal, a camera silent after the abort() above only freed
+  // the module after LIVE_MAX_SECONDS (300 s): send_live_mse() detects a
+  // closed connection only when writing the next block, which might never
+  // arrive (real bug).
   const mseSessionId = MSE_SESSION[name];
   if (mseSessionId) {
     delete MSE_SESSION[name];
     arreterSessionDirect(mseSessionId, beacon);
   }
-  // webrtcController coupe une reprise en cours (entre deux tentatives,
-  // sans pc active pour l'instant) ; pc ferme la tentative en cours si une
-  // negociation est deja engagee. Les deux peuvent coexister brievement,
-  // aucun des deux n'est garanti present a un instant donne.
+  // webrtcController cuts a retry in progress (between attempts, no active
+  // pc yet); pc closes the current attempt if a negotiation is already
+  // underway. Both may briefly coexist; neither is guaranteed present at
+  // a given moment.
   const webrtcController = WEBRTC_ABORT[name];
   const sessionId = WEBRTC_SESSION[name];
   if (sessionId) {
@@ -1293,19 +1190,19 @@ function stopWatch(name, beacon = false) {
   }
 }
 
-// --- MSE/fMP4 : remux sans réencodage, <video> décodé par le navigateur ---
-// Contrairement à <img>, un fetch() ne s'arrête pas tout seul quand on jette
-// la balise : il faut son propre AbortController, gardé ici par caméra pour
-// que stopWatch() puisse le couper.
+// --- MSE/fMP4: remux without re-encode, <video> decoded by the browser ---
+// Unlike <img>, a fetch() does not stop on its own when the tag is dropped:
+// it needs its own AbortController, kept here per camera so stopWatch()
+// can cut it.
 const MSE_ABORT = {};
 
-// « Direct continu », caméra par caméra (case de cameraCard) : chaque session
-// que Blink ferme de lui-même (au bout d'environ six minutes de vidéo, mesuré
-// le 2026-09-28) est aussitôt suivie d'une nouvelle, sans le budget de dix
-// minutes des reprises ordinaires, jusqu'à ce qu'on clique sur Arrêter.
-// Décochée par défaut : sur une caméra à batterie, un direct sans fin la vide
-// vite. Retenue d'une visite à l'autre, comme le filtre ; sans stockage
-// (navigation privée), le choix vaut pour la page ouverte.
+// "Continuous live", per camera (cameraCard checkbox): each session Blink
+// closes by itself (after about six minutes of video, measured 2026-09-28)
+// is immediately followed by a new one, without the ten-minute budget of
+// ordinary retries, until Stop is clicked. Unchecked by default: on a
+// battery camera, endless live drains it fast. Kept across visits, like
+// the filter; without storage (private browsing), the choice lasts for
+// the open page.
 const CLE_DIRECT_CONTINU = "blink2video.directContinu";
 const DIRECT_CONTINU_REVERIFICATION_MS = 60 * 1000;
 const _directsContinus = new Set((() => {
@@ -1318,6 +1215,8 @@ const _directsContinus = new Set((() => {
 })());
 
 function directContinu(name) {
+  // Rotation owns the dwell time: never auto-reconnect a camera mid-cycle.
+  if (rotationActive) return false;
   return _directsContinus.has(name);
 }
 
@@ -1326,14 +1225,14 @@ function choisirDirectContinu(name, actif) {
   else _directsContinus.delete(name);
   try {
     localStorage.setItem(CLE_DIRECT_CONTINU, JSON.stringify([..._directsContinus]));
-  } catch (erreur) { /* stockage indisponible : le choix vaut pour cette page */ }
+  } catch (erreur) { /* storage unavailable: choice lasts for this page */ }
 }
 
-// Minuterie du budget total d'un direct (MSE_BUDGET_TOTAL_MS,
-// WEBRTC_BUDGET_TOTAL_MS) : à échéance, `surEcoulement`, sauf en direct
-// continu où elle se revérifie chaque minute ; une case décochée en cours de
-// route rend ainsi au budget, déjà écoulé, son effet. Rend un objet dont `id`
-// est la minuterie en cours, pour clearTimeout.
+// Total live budget timer (MSE_BUDGET_TOTAL_MS, WEBRTC_BUDGET_TOTAL_MS): on
+// expiry, `surEcoulement`, except in continuous live where it rechecks each
+// minute; unchecking mid-stream thus still applies the already-elapsed
+// budget. Returns an object whose `id` is the current timer, for
+// clearTimeout.
 function armerBudget(name, delaiMs, surEcoulement) {
   const minuterie = { id: null };
   const verifier = () => {
@@ -1347,47 +1246,44 @@ function armerBudget(name, delaiMs, surEcoulement) {
   return minuterie;
 }
 
-// Un seul identifiant par watchMse() (pas par tentative de reconnexion,
-// comme WEBRTC_SESSION) : envoyé au serveur (send_live_mse) pour qu'il
-// puisse interrompre sa boucle d'envoi sur demande explicite plutôt que
-// d'attendre jusqu'à 300 s qu'un bloc arrive enfin de la caméra pour
-// détecter que le fetch a été annulé (bug réel : onglet fermé pendant un
-// silence de la caméra, module resté occupé plusieurs minutes).
+// One id per watchMse() (not per reconnect attempt, like WEBRTC_SESSION):
+// sent to the server (send_live_mse) so it can interrupt its send loop on
+// explicit request rather than wait up to 300 s for a camera block to
+// detect the fetch was cancelled (real bug: tab closed during camera
+// silence, module stayed busy for minutes).
 const MSE_SESSION = {};
-// Blink referme parfois la session en cours de route, sans rapport avec ce
-// projet (vu en vrai : entre quelques images et ~1 Mo transmis, puis la
-// connexion vers son relais s'interrompt en plein paquet - cause identifiée
-// côté blinkpy, voir blink_engine.py). Une reprise manuelle marche presque
-// toujours : on l'automatise. Le compteur d'échecs ne grimpe que sur une
-// reprise qui n'aura livré aucune image ; dès qu'une image arrive, il
-// retombe à zéro, pour ne pas abandonner un direct qui fonctionne juste par
-// à-coups. MSE_BUDGET_TOTAL_MS borne quand même la durée totale : un onglet
-// oublié ouvert ne doit pas relancer la caméra indéfiniment. Le délai entre
-// deux tentatives n'est pas cosmétique : Blink n'accepte qu'une seule
-// session de direct par compte à la fois et met du temps à libérer la
-// précédente côté serveur ; une reprise trop rapide se heurte à cette
-// session pas encore relâchée, pas à un vrai problème.
+// Blink sometimes closes the session mid-stream, unrelated to this project
+// (seen in practice: between a few frames and ~1 MB sent, then the relay
+// connection drops mid-packet - cause identified in blinkpy, see
+// blink_engine.py). A manual retry almost always works: automate it. The
+// failure counter only rises on a retry that delivered no frame; once a
+// frame arrives, it resets to zero, so a live view that works in fits and
+// starts is not abandoned. MSE_BUDGET_TOTAL_MS still caps total duration: a
+// forgotten open tab must not restart the camera forever. The delay between
+// attempts is not cosmetic: Blink allows only one live session per account
+// at a time and takes time to free the previous one server-side; a too-fast
+// retry hits that unreleased session, not a real problem.
 const MSE_MAX_ECHECS_A_VIDE = 5;
 const MSE_DELAI_RECONNEXION_MS = 3000;
 const MSE_DELAI_MODULE_OCCUPE_MS = 10000;
 const MSE_BUDGET_TOTAL_MS = 10 * 60 * 1000;
-// sourceopen est purement local et doit être quasi immédiat. La réponse HTTP,
-// elle, couvre jusqu'à 45 s pour ouvrir Blink puis 40 s pour obtenir le moov ;
-// sa borne est donc volontairement plus large. Une fois les en-têtes reçus,
-// le navigateur a encore une minute pour décoder sa première vraie image.
+// sourceopen is purely local and should be near-instant. The HTTP response
+// covers up to 45 s to open Blink then 40 s for the moov; its bound is
+// therefore deliberately wider. Once headers are received, the browser
+// still has one minute to decode its first real frame.
 const MSE_DELAI_SOURCEOPEN_MS = 10 * 1000;
 const MSE_DELAI_REPONSE_MS = 110 * 1000;
 const MSE_DELAI_PREMIERE_IMAGE_MS = 60 * 1000;
-// Le serveur coupe lui-même une session après 420 s (LIVE_MAX_SECONDS),
-// Blink d'ordinaire vers six minutes. Cette marge interrompt aussi read()
-// ou updateend si le navigateur ne propage pas sa fermeture.
+// The server itself cuts a session after 420 s (LIVE_MAX_SECONDS); Blink
+// usually around six minutes. This margin also interrupts read() or
+// updateend if the browser does not propagate its close.
 const MSE_DUREE_APRES_LECTURE_MS = 450 * 1000;
 const MSE_DELAI_DECODAGE_FINAL_MS = 1000;
 
 function erreurAnnulationMse() {
-  // Error + name reste compris des navigateurs qui n'acceptent pas encore
-  // le constructeur DOMException à deux arguments (notamment les vieux
-  // moteurs encore rencontrés sur Windows 7).
+  // Error + name stays understood by browsers that do not yet accept the
+  // two-argument DOMException constructor (notably older engines still
+  // seen on Windows 7).
   const error = new Error("Aborted");
   error.name = "AbortError";
   return error;
@@ -1413,10 +1309,10 @@ function attendreOuAbandon(ms, signal) {
   });
 }
 
-// Contrairement à fetch(), une Promise quelconque (reader.read() compris
-// selon le moteur) n'est pas tenue de rejeter quand son signal est annulé.
-// Cette enveloppe garantit que chaque attente rend la main ; l'appelant peut
-// alors annuler explicitement le reader dans son finally.
+// Unlike fetch(), an arbitrary Promise (including reader.read() depending
+// on the engine) need not reject when its signal is aborted. This wrapper
+// ensures each wait yields; the caller can then explicitly cancel the
+// reader in its finally.
 function operationOuAbandon(operation, signal) {
   return new Promise((resolve, reject) => {
     if (signal.aborted) { reject(erreurAnnulationMse()); return; }
@@ -1536,8 +1432,8 @@ function ajouterSegmentMse(sourceBuffer, value, signal) {
   });
 }
 
-// Un cycle connexion -> flux -> fin. Renvoie si au moins une image est
-// arrivée (utilisé par watchMse pour décider de réessayer ou d'abandonner).
+// One connection -> stream -> end cycle. Returns whether at least one
+// frame arrived (used by watchMse to retry or abandon).
 async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilInitial, sessionId) {
   const box = $("live-" + cssId(name));
   let hint = $("hint-" + cssId(name));
@@ -1550,11 +1446,10 @@ async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilI
   }
   if (hint) hint.textContent = texteAttente;
 
-  // Compteur pendant le tout premier réveil seulement (pas les reconnexions
-  // après échec) : sans lui, les 15-25 s de réveil d'une caméra sur batterie
-  // ressemblent à un blocage. Seuil et bascule de texte repris tels quels de
-  // l'ancien direct MJPEG (watch(), supprimé par 7339f85 ; cf.
-  // AUDIT-2026-08-13.md 28.15).
+  // Counter during the very first wake only (not reconnects after failure):
+  // without it, the 15-25 s wake of a battery camera looks like a hang.
+  // Threshold and text switch taken as-is from the old MJPEG live (watch(),
+  // removed by 7339f85; see AUDIT-2026-08-13.md 28.15).
   let minuteur = null;
   if (hint && reveilInitial) {
     minuteur = setInterval(() => {
@@ -1581,6 +1476,7 @@ async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilI
     tentative.confirmerLecture();
     if (hint) hint.remove();
     if (window.__mseMetric == null) window.__mseMetric = performance.now() - t0;
+    signalerVideoRotation(name);
   };
   const signalerErreurMedia = () => {
     if (signal.aborted) return;
@@ -1609,8 +1505,8 @@ async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilI
       let message = response.status === 409
         ? t("watch.refused.retry")
         : tf("watch.refused.code", { code: response.status });
-      // Un 409 décrit le verrou courant, pas LAST_LIVE_ERROR. Consulter cet
-      // endpoint dans ce cas réaffichait souvent l'ancien 503 de la caméra.
+      // A 409 describes the current lock, not LAST_LIVE_ERROR. Hitting that
+      // endpoint here often re-showed the camera's previous 503.
       if (response.status !== 409) {
         try {
           const reponseErreur = await operationOuAbandon(
@@ -1618,7 +1514,7 @@ async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilI
           );
           const info = await operationOuAbandon(() => lireJSON(reponseErreur), signal);
           if (info.camera === name && info.message) message = info.message;
-        } catch (error) { /* on garde le message générique */ }
+        } catch (error) { /* keep the generic message */ }
       }
       const error = new Error(message);
       error.status = response.status;
@@ -1644,9 +1540,8 @@ async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilI
       if (!morceau.value || morceau.value.byteLength === 0) continue;
       await ajouterSegmentMse(sourceBuffer, morceau.value, signal);
       if (!lecture) {
-        // Le premier morceau est souvent seulement ftyp+moov. play() aide
-        // l'autoplay, mais seul loadeddata/playing ci-dessus prouve qu'une
-        // vraie image a été décodée.
+        // The first chunk is often only ftyp+moov. play() helps autoplay,
+        // but only loadeddata/playing above proves a real frame was decoded.
         const lancement = video.play();
         if (lancement && typeof lancement.catch === "function") {
           lancement.catch(() => {});
@@ -1656,8 +1551,8 @@ async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilI
     if (mediaSource.readyState === "open" && !sourceBuffer.updating) {
       mediaSource.endOfStream();
     }
-    // Laisser au moteur un tour pour émettre loadeddata après le dernier
-    // append ; un EOF avec seulement le moov reste ensuite un vrai échec.
+    // Give the engine one turn to emit loadeddata after the last append;
+    // an EOF with only the moov then remains a real failure.
     if (!lecture) await attendreOuAbandon(MSE_DELAI_DECODAGE_FINAL_MS, signal);
     if (!lecture) throw new Error(t("watch.noimage"));
     return true;
@@ -1674,13 +1569,13 @@ async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilI
     video.removeEventListener("playing", confirmerLecture);
     video.removeEventListener("error", signalerErreurMedia);
     if (mediaSource) mediaSource.removeEventListener("error", signalerErreurMedia);
-    // Même après un EOF ou une erreur codec (donc sans clic sur Arrêter), le
-    // fetch de cette tentative doit recevoir son abort : cancel() seul n'est
-    // pas uniformément propagé jusqu'à la connexion HTTP par les navigateurs.
+    // Even after EOF or a codec error (so without clicking Stop), this
+    // attempt's fetch must get its abort: cancel() alone is not uniformly
+    // propagated to the HTTP connection by browsers.
     tentative.abandonner();
-    // cancel() n'est volontairement pas awaité : certains moteurs savent
-    // abandonner la lecture mais ne résolvent la Promise qu'après fermeture
-    // réseau. Le nettoyage lui-même ne doit jamais devenir le nouveau blocage.
+    // cancel() is deliberately not awaited: some engines can abandon the
+    // read but only resolve the Promise after the network close. Cleanup
+    // itself must never become the new hang.
     try {
       const annulation = reader
         ? reader.cancel()
@@ -1689,37 +1584,35 @@ async function connecterMse(name, video, signalGlobal, texteAttente, t0, reveilI
       if (annulation && typeof annulation.catch === "function") {
         annulation.catch(() => {});
       }
-    } catch (error) { /* flux déjà fermé */ }
+    } catch (error) { /* stream already closed */ }
     if (sourceBuffer && mediaSource && mediaSource.readyState === "open") {
-      try { sourceBuffer.abort(); } catch (error) { /* déjà détaché */ }
+      try { sourceBuffer.abort(); } catch (error) { /* already detached */ }
     }
     if (mediaSource && mediaSource.readyState === "open") {
-      try { mediaSource.endOfStream(); } catch (error) { /* append interrompu */ }
+      try { mediaSource.endOfStream(); } catch (error) { /* append interrupted */ }
     }
     if (url !== null) {
-      try { URL.revokeObjectURL(url); } catch (error) { /* URL déjà rendue */ }
+      try { URL.revokeObjectURL(url); } catch (error) { /* URL already revoked */ }
     }
     tentative.nettoyer();
   }
 }
 
-// --- WebRTC : relais sans réencodage (blink_webrtc.py côté serveur) ---
-// Réglage de la page web depuis le 2026-09-03 (BACKLOG.md) : actif seulement
-// si system.webrtc est vrai (réglage "live_protocol" = "webrtc", et aiortc
-// installé côté serveur). Pas de repli automatique vers MSE si la
-// négociation échoue (retiré le 2026-09-03, sur demande explicite de
-// l'utilisateur) : le choix du protocole appartient au réglage, pas à une
-// substitution silencieuse - sinon le réglage devient trompeur, on croit
-// avoir WebRTC alors qu'on a parfois MSE sans le savoir. Boucle de reprise
-// pour la négociation initiale (watchWebRTC()/tenterWebRTC() ci-dessous),
-// symétrique à celle de connecterMse() : un essai unique laissait "ça
-// bloque" à l'utilisateur des qu'une camera sur batterie mettait plus que
-// PREMIERE_IMAGE_MAX_SECONDS (blink_webrtc.py) à se reveiller, surtout
-// juste apres une bascule depuis une autre camera (2026-09-03,
-// BACKLOG.md). Une coupure APRÈS la première image (connexion tombée en
-// cours de route, une fois la négociation reussie) n'est, elle, toujours
-// pas reprise automatiquement : portee differente, pas le symptome
-// rencontre ici, un nouveau clic suffit pour ce cas-la.
+// --- WebRTC: relay without re-encode (blink_webrtc.py on the server) ---
+// Web page setting since 2026-09-03 (BACKLOG.md): active only if
+// system.webrtc is true ("live_protocol" = "webrtc", and aiortc installed
+// on the server). No automatic fallback to MSE if negotiation fails
+// (removed 2026-09-03, at the user's explicit request): protocol choice
+// belongs to the setting, not a silent substitution - otherwise the
+// setting becomes misleading, you think you have WebRTC while sometimes
+// getting MSE unnoticed. Retry loop for the initial negotiation
+// (watchWebRTC()/tenterWebRTC() below), symmetric to connecterMse(): a
+// single try left "it's stuck" for the user whenever a battery camera
+// took longer than PREMIERE_IMAGE_MAX_SECONDS (blink_webrtc.py) to wake,
+// especially right after switching from another camera (2026-09-03,
+// BACKLOG.md). A cut AFTER the first frame (connection dropped mid-
+// stream, once negotiation succeeded) is still not auto-retried: different
+// scope, not the symptom seen here; a new click is enough for that case.
 const WEBRTC_PC = {};
 const WEBRTC_ABORT = {};
 const WEBRTC_SESSION = {};
@@ -1729,12 +1622,12 @@ const WEBRTC_MAX_ECHECS = 5;
 const WEBRTC_DELAI_RECONNEXION_MS = 3000;
 const WEBRTC_DELAI_MODULE_OCCUPE_MS = 10000;
 const WEBRTC_BUDGET_TOTAL_MS = 10 * 60 * 1000;
-// Budget absolu : acquisition du module, réveil Blink, paramètres H.264 et
-// SDP. Après la réponse, la première image possède aussi sa propre borne.
+// Absolute budget: module acquisition, Blink wake, H.264 parameters and
+// SDP. After the response, the first frame also has its own bound.
 const WEBRTC_DELAI_DEMARRAGE_MS = 130 * 1000;
 const WEBRTC_DELAI_PREMIERE_IMAGE_MS = 30 * 1000;
 const WEBRTC_DELAI_DECONNEXION_MS = 10 * 1000;
-// Même marge qu'en MSE au-dessus des 420 s du serveur (SESSION_MAX_SECONDS).
+// Same margin as MSE above the server's 420 s (SESSION_MAX_SECONDS).
 const WEBRTC_DUREE_APRES_LECTURE_MS = 450 * 1000;
 
 function nouvelIdentifiantDirect() {
@@ -1743,17 +1636,16 @@ function nouvelIdentifiantDirect() {
   return Array.from(octets, (octet) => octet.toString(16).padStart(2, "0")).join("");
 }
 
-// MODULE_SLOT (serve.py) est global : le module de synchronisation ne
-// relaie qu'un seul direct a la fois, quelle que soit la camera. /api/
-// attente-module attend que ce jeton soit reellement libre avant de
-// tenter quoi que ce soit - remplace le 2026-09-03 un delai fixe devine
-// (10s, puis 1s pour ce cas precis) : mesure en reel sur deux bascules
-// successives, le vrai temps de liberation (blinkpy attend la fin reelle
-// de la connexion vers le relais Blink avant d'envoyer "done") variait de
-// 1,65s a 8,8s - bien trop pour un delai fixe, pas assez pour un autre.
-// Sans ceci, passer d'une camera a l'autre sans cliquer Arreter laissait
-// la premiere camera tenir le verrou, la seconde tombant en 409 -
-// "ca ne marche pas", signale par l'utilisateur (2026-09-03).
+// MODULE_SLOT (serve.py) is global: the sync module relays only one live
+// at a time, whatever the camera. /api/attente-module waits until that
+// token is really free before trying anything - replaced on 2026-09-03 a
+// guessed fixed delay (10s, then 1s for this precise case): measured in
+// practice on two successive switches, the real free time (blinkpy waits
+// for the real end of the Blink relay connection before sending "done")
+// varied from 1.65s to 8.8s - far too long for a fixed delay, not enough
+// for another. Without this, switching cameras without clicking Stop left
+// the first camera holding the lock, the second falling to 409 -
+// "it doesn't work", reported by the user (2026-09-03).
 async function attendreModuleLibre(signal) {
   try {
     const reponse = await operationOuAbandon(
@@ -1762,18 +1654,20 @@ async function attendreModuleLibre(signal) {
     return !!info.libre;
   } catch (erreur) {
     if (signal.aborted) throw erreurAnnulationMse();
-    return true;  // en echouant ouvert : la tentative suivante dira si ca bloque toujours
+    return true;  // fail open: the next attempt will say if it still blocks
   }
 }
 
 async function watchLive(name) {
-  // Enregistrer le choix avant toute attente. Un clic plus récent invalide
-  // aussi les demandes dont /attente-module n'a pas encore répondu.
+  // Record the choice before any wait. A more recent click invalidates
+  // requests whose /attente-module has not answered yet as well.
   for (const autre of nomsDirectsActifs()) stopWatch(autre);
   const controller = new AbortController();
   LIVE_PENDING[name] = controller;
+  // Rotation has its own dwell timer; auto-stop would put the tile back
+  // to "View live" mid-rotation and look like the user must click again.
   const autoStopSeconds = Number(system && system.live_auto_stop_seconds) || 0;
-  if (autoStopSeconds > 0) {
+  if (autoStopSeconds > 0 && !rotationActive) {
     LIVE_AUTO_STOP_TIMER[name] = setTimeout(() => stopWatch(name), autoStopSeconds * 1000);
   }
   const t0 = performance.now();
@@ -1791,8 +1685,8 @@ async function watchLive(name) {
   try {
     await attendreModuleLibre(controller.signal);
     if (controller.signal.aborted || LIVE_PENDING[name] !== controller) return;
-    // Ces fonctions installent leur contrôleur avant leur première attente :
-    // la grille reste protégée quand LIVE_PENDING est retiré dans le finally.
+    // These functions install their controller before their first wait:
+    // the grid stays protected when LIVE_PENDING is removed in finally.
     return system && system.webrtc
       ? watchWebRTC(name, controller, t0) : watchMse(name);
   } catch (error) {
@@ -1802,6 +1696,200 @@ async function watchLive(name) {
     clearTimeout(idBudget);
     if (LIVE_PENDING[name] === controller) delete LIVE_PENDING[name];
   }
+}
+
+const CLE_ROTATION = "blink2video.rotation";
+let rotationTimer = null;
+let rotationCountdown = null;
+let rotationIndex = 0;
+let rotationActive = false;
+let rotationCameraCourante = null;
+let rotationSecondesDwell = 30;
+
+function cameraParCle(cle) {
+  if (!system || !system.systems) return null;
+  for (const s of system.systems) {
+    const trouvee = (s.cameras || []).find(
+      (c) => c.key === cle || c.name === cle);
+    if (trouvee) return trouvee;
+  }
+  return null;
+}
+
+function camerasPourRotation() {
+  if (!system || !system.systems) return [];
+  const prefs = JSON.parse(localStorage.getItem(CLE_ROTATION) || "{}");
+  // Empty array is truthy but matches nothing: treat as "all cameras".
+  const selected = (prefs.cameras && prefs.cameras.length) ? prefs.cameras : null;
+  const now = new Date();
+  const hour = now.getHours();
+  if (prefs.timeWindow && (hour < prefs.startHour || hour >= prefs.endHour)) return [];
+
+  const all = [];
+  for (const s of system.systems) {
+    for (const c of (s.cameras || []).slice().sort(
+      (a, b) => comparerNoms(a.name, b.name))) {
+      if (estMasquee(c.name)) continue;
+      if (c.offline) continue;  // only online cameras
+      if (!selected || selected.includes(c.name) || selected.includes(c.key)) {
+        all.push(c.key || c.name);
+      }
+    }
+  }
+  return all;
+}
+
+function peindreSceneRotation(name, cams, pos) {
+  const cam = cameraParCle(name);
+  const label = cam ? cam.name : name;
+  $("count").textContent = `Rotation · ${pos}/${cams.length}`;
+  $("list").innerHTML =
+    `<div class="rotation-stage">
+      <div class="rotation-banner">
+        <span class="rotation-title">
+          <strong>${h(label)}</strong>
+          <strong class="rotation-countdown waiting">${h(t("rotation.waiting"))}</strong>
+        </span>
+        <span class="sub">${h(`${pos} / ${cams.length}`)}</span>
+      </div>
+      <div class="live" id="live-${cssId(name)}">
+        <p class="hint overlay">${h(t("watch.waking"))}</p>
+      </div>
+    </div>`;
+}
+
+function elCountdownRotation(name) {
+  if ($("view").value === "alllive" && name) {
+    const esc = (typeof CSS !== "undefined" && CSS.escape)
+      ? CSS.escape(name) : name.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    return document.querySelector(`.rotation-countdown[data-for="${esc}"]`);
+  }
+  return document.querySelector(".rotation-countdown");
+}
+
+function afficherAttenteRotation(name) {
+  for (const el of document.querySelectorAll(".rotation-countdown")) {
+    if (el.dataset.for && el.dataset.for !== name) {
+      el.hidden = true;
+      el.classList.remove("waiting");
+      el.textContent = "";
+    }
+  }
+  const el = elCountdownRotation(name);
+  if (!el) return;
+  el.hidden = false;
+  el.classList.add("waiting");
+  el.textContent = t("rotation.waiting");
+}
+
+function arreterCountdownRotation() {
+  if (rotationCountdown) clearInterval(rotationCountdown);
+  rotationCountdown = null;
+}
+
+function demarrerCountdownRotation(secondesTotales) {
+  arreterCountdownRotation();
+  let restant = Math.max(0, Math.ceil(secondesTotales));
+  const afficher = () => {
+    const el = elCountdownRotation(rotationCameraCourante);
+    if (!el) return;
+    el.classList.remove("waiting");
+    el.hidden = false;
+    el.textContent = `(${restant})`;
+  };
+  afficher();
+  rotationCountdown = setInterval(() => {
+    restant -= 1;
+    if (restant < 0) {
+      arreterCountdownRotation();
+      return;
+    }
+    afficher();
+  }, 1000);
+}
+
+// Called when the first video frame is on screen. Starts the dwell
+// countdown and the advance timer — not during wake/connect.
+function signalerVideoRotation(name) {
+  if (!rotationActive || !vueRotation()) return;
+  if (name !== rotationCameraCourante) return;
+  if (rotationTimer) return;  // already armed for this camera
+  demarrerCountdownRotation(rotationSecondesDwell);
+  rotationTimer = setTimeout(() => {
+    if (!rotationActive || !vueRotation()) return;
+    if (name !== rotationCameraCourante) return;
+    stopWatch(name);
+    cycleNext();
+  }, rotationSecondesDwell * 1000);
+}
+
+function startRotation() {
+  stopRotation();
+  const cams = camerasPourRotation();
+  if (!cams.length) {
+    $("count").textContent = "";
+    const label = $("view").value === "alllive" ? "All Live Views" : "rotation";
+    $("list").innerHTML =
+      `<p class="empty">No online cameras available for ${label}.</p>`;
+    return;
+  }
+  if ($("view").value === "alllive") peindreGrilleLive();
+  rotationActive = true;
+  rotationIndex = 0;
+  cycleNext();
+}
+
+async function cycleNext() {
+  if (!rotationActive || !vueRotation()) return;
+  const cams = camerasPourRotation();
+  if (!cams.length) {
+    stopRotation();
+    $("count").textContent = "";
+    const label = $("view").value === "alllive" ? "All Live Views" : "rotation";
+    $("list").innerHTML =
+      `<p class="empty">No online cameras available for ${label}.</p>`;
+    return;
+  }
+  const pos = (rotationIndex % cams.length) + 1;
+  const name = cams[rotationIndex % cams.length];
+  rotationIndex++;
+  const prefs = JSON.parse(localStorage.getItem(CLE_ROTATION) || "{}");
+  rotationSecondesDwell = Number(prefs.duration) || 30;
+  rotationCameraCourante = name;
+  if (rotationTimer) clearTimeout(rotationTimer);
+  rotationTimer = null;
+  arreterCountdownRotation();
+  if ($("view").value === "alllive") {
+    // Keep the Live Views dashboard; only wake the next tile.
+    if (!$("list").querySelector(".grid.wide")) peindreGrilleLive();
+    $("count").textContent = `All Live · ${pos}/${cams.length}`;
+    afficherAttenteRotation(name);
+    const box = $("live-" + cssId(name));
+    if (box) {
+      box.innerHTML = `<p class="hint overlay">${h(t("watch.waking"))}</p>
+        <button class="watch stop" data-action="stop-live"
+                data-name="${h(name)}">${h(t("watch.stop"))}</button>`;
+    }
+  } else {
+    peindreSceneRotation(name, cams, pos);
+  }
+  // Dwell countdown + advance timer start in signalerVideoRotation()
+  // once the first frame is on screen — not during wake.
+
+  try {
+    await watchLive(name);
+  } catch (erreur) { /* failWatch may advance; dwell timer otherwise will */ }
+}
+
+function stopRotation() {
+  if (rotationTimer) clearTimeout(rotationTimer);
+  rotationTimer = null;
+  arreterCountdownRotation();
+  rotationCameraCourante = null;
+  // Keep rotationActive true while cutting streams so stopWatch does
+  // not paint a "View live" button on a tile we are about to replace.
+  for (const name of nomsDirectsActifs()) stopWatch(name);
+  rotationActive = false;
 }
 
 async function watchWebRTC(name, controller = new AbortController(), t0 = performance.now()) {
@@ -1842,12 +1930,13 @@ async function watchWebRTC(name, controller = new AbortController(), t0 = perfor
     derniereErreur = null;
     if (minuteur !== null) { clearInterval(minuteur); minuteur = null; }
     if (hint) { hint.remove(); hint = null; }
+    signalerVideoRotation(name);
   };
 
-  // Une réponse SDP ne prouve pas la lecture : reprendre les échecs jusqu'à
-  // la première image. Après celle-ci, une fin rend la main à l'utilisateur,
-  // sauf en direct continu, où Blink ayant fermé la session (ou le flux
-  // s'étant interrompu après lecture), une nouvelle s'ouvre aussitôt.
+  // An SDP answer does not prove playback: retry failures until
+  // the first frame. After that, an end returns control to the user,
+  // except in continuous live, where Blink having closed the session (or the stream
+  // having stopped after playback) opens a new one immediately.
   let echecs = 0;
   let essais = 0;
   let derniereErreur = null;
@@ -1874,8 +1963,8 @@ async function watchWebRTC(name, controller = new AbortController(), t0 = perfor
         }
         derniereErreur = error;
         if (error.webrtcIncompatible || (error.webrtcLecture && !directContinu(name))) break;
-        // Un autre onglet ou un téléchargement peut occuper le module.
-        // Seul le budget global borne ce cas, sans épuiser les essais caméra.
+        // Another tab or a download may occupy the module.
+        // Only the global budget bounds this case, without exhausting camera retries.
         if (error.webrtcLecture) echecs = 0;
         else if (error.status !== 409) echecs++;
       } finally {
@@ -1904,15 +1993,15 @@ async function watchWebRTC(name, controller = new AbortController(), t0 = perfor
   }
 }
 
-// Garder la tentative jusqu'à la fin du flux permet un nettoyage identique
-// après erreur ICE, absence d'image, annulation pendant l'offre ou lecture.
+// Keeping the attempt until the stream ends allows identical cleanup
+// after ICE error, missing frame, cancel during offer, or playback.
 async function tenterWebRTC(name, video, signal, essai, surLecture = () => {}) {
   if (signal.aborted) throw erreurAnnulationMse();
   const sessionId = nouvelIdentifiantDirect();
   const controller = new AbortController();
-  // Navigateur et serveur sur le même réseau local (c'est tout l'usage de
-  // blink2video) : aucun NAT à traverser, un serveur STUN n'apporterait
-  // qu'un aller-retour réseau inutile.
+  // Browser and server on the same LAN (that is all
+  // blink2video usage): no NAT to traverse; a STUN server would only
+  // add a useless network round-trip.
   const pc = new RTCPeerConnection({ iceServers: [] });
   WEBRTC_PC[name] = pc;
   WEBRTC_SESSION[name] = sessionId;
@@ -1944,9 +2033,9 @@ async function tenterWebRTC(name, video, signal, essai, surLecture = () => {}) {
     surLecture();
   };
   const verifierImage = () => {
-    // playing seul peut précéder tout décodage. Les moteurs récents offrent
-    // une preuve de présentation via requestVideoFrameCallback ; sur les
-    // autres, vérifier aussi la présence d'une image décodée et ses dimensions.
+    // playing alone may precede any decode. Recent engines offer
+    // presentation proof via requestVideoFrameCallback; on
+    // others, also check for a decoded frame and its dimensions.
     if (!video.requestVideoFrameCallback && video.readyState >= 2 && video.videoWidth > 0) {
       confirmerImage();
     }
@@ -1991,17 +2080,17 @@ async function tenterWebRTC(name, video, signal, essai, surLecture = () => {}) {
 
   try {
     pc.addTransceiver("video", { direction: "recvonly" });
-    // Canal de données sans autre usage que sa fermeture : quand le serveur
-    // ferme la session (Blink a coupé, plafond, flux silencieux), le
-    // navigateur le voit se fermer aussitôt, alors que la connexion ne passe
-    // « disconnected » qu'au bout de plusieurs secondes, suivies de
-    // WEBRTC_DELAI_DECONNEXION_MS. La fin est constatée tout de suite, et
-    // « Direct continu » relance sans attendre (vingt secondes gagnées,
-    // mesuré le 2026-09-28).
+    // Data channel used only for its close: when the server
+    // closes the session (Blink cut, ceiling, silent stream), the
+    // browser sees it close at once, whereas the connection only goes
+    // "disconnected" after several seconds, followed by
+    // WEBRTC_DELAI_DECONNEXION_MS. The end is noticed immediately, and
+    // "Continuous live" restarts without waiting (twenty seconds saved,
+    // measured 2026-09-28).
     pc.createDataChannel("fin").addEventListener("close", () => finir());
     const offre = await operationOuAbandon(() => pc.createOffer(), controller.signal);
-    // Vérifier l'offre réelle avant de réveiller la caméra. La présence
-    // de RTCPeerConnection seule ne garantit pas le décodeur H.264.
+    // Check the real offer before waking the camera. The presence
+    // of RTCPeerConnection alone does not guarantee the H.264 decoder.
     if (!/^a=rtpmap:\d+ H264\/90000\s*$/im.test(offre.sdp || "")) {
       const error = new Error(t("watch.noh264"));
       error.webrtcIncompatible = true;
@@ -2073,10 +2162,9 @@ async function watchMse(name) {
 
   const controller = new AbortController();
   MSE_ABORT[name] = controller;
-  // Un seul identifiant pour toute la durée de watchMse(), pas par tentative
-  // de reconnexion : send_live_mse() l'enregistre à chaque nouvel essai, et
-  // /api/arreter-direct doit pouvoir couper QUELLE que soit la tentative en
-  // cours au moment où l'utilisateur clique sur Arrêter.
+  // One id for the whole watchMse() duration, not per reconnect attempt:
+  // send_live_mse() records it on each new try, and /api/arreter-direct must
+  // be able to cut WHICHEVER attempt is current when the user clicks Stop.
   const sessionId = nouvelIdentifiantDirect();
   MSE_SESSION[name] = sessionId;
   let budgetEcoule = false;
@@ -2089,7 +2177,7 @@ async function watchMse(name) {
   let derniereErreur = null;
   let lecturePendantBudget = false;
   try {
-    // En direct continu, seul Arrêter ou des échecs répétés sans image
+    // In continuous live, only Stop or repeated failures with no frame
     // mettent fin aux reprises (voir directContinu).
     while (echecsAVide < MSE_MAX_ECHECS_A_VIDE
            && (directContinu(name) || performance.now() - t0 < MSE_BUDGET_TOTAL_MS)) {
@@ -2104,7 +2192,7 @@ async function watchMse(name) {
         echecsAVide = aLu ? 0 : echecsAVide + 1;
       } catch (error) {
         if (error.name === "AbortError" && controller.signal.aborted) {
-          if (!budgetEcoule) return;  // bouton Arrêter
+          if (!budgetEcoule) return;  // Stop button
           break;
         }
         derniereErreur = error;
@@ -2112,9 +2200,9 @@ async function watchMse(name) {
           lecturePendantBudget = true;
           echecsAVide = 0;
         } else if (error.status !== 409) {
-          // 409 = un autre onglet ou une actualisation tient encore le module.
-          // Ne pas consommer les cinq essais en quelques secondes ; le budget
-          // global de dix minutes reste la borne dure.
+          // 409 = another tab or a refresh still holds the module.
+          // Do not burn the five tries in a few seconds; the global
+          // ten-minute budget remains the hard bound.
           echecsAVide++;
         }
       }
@@ -2124,7 +2212,7 @@ async function watchMse(name) {
       try {
         await attendreOuAbandon(delai, controller.signal);
       } catch (error) {
-        if (!budgetEcoule) return;  // arrêt demandé pendant l'attente
+        if (!budgetEcoule) return;  // stop requested during the wait
         break;
       }
     }
@@ -2137,8 +2225,8 @@ async function watchMse(name) {
   const finParBudget = budgetEcoule
     || performance.now() - t0 >= MSE_BUDGET_TOTAL_MS;
   if (finParBudget && lecturePendantBudget) {
-    // Budget total écoulé après une vraie lecture : retour silencieux au
-    // repos, comme avant, plutôt qu'une fausse erreur de fin de flux.
+    // Total budget elapsed after real playback: silent return to
+    // idle, as before, rather than a fake end-of-stream error.
     stopWatch(name);
   } else if (derniereErreur) {
     failWatch(name, String(derniereErreur.message || derniereErreur));
@@ -2147,9 +2235,9 @@ async function watchMse(name) {
   }
 }
 
-// L'état de repos d'un cadre : la dernière image connue de la caméra, et le
-// bouton par-dessus. Arrêter un direct ramène ici, donc la vignette revient au
-// lieu de laisser un rectangle noir jusqu'au rechargement de la page.
+// Idle state of a frame: the camera's last known image, and the button on
+// top. Stopping a live view returns here, so the thumbnail comes back
+// instead of leaving a black rectangle until page reload.
 function repos(name, libelle) {
   return `<img class="still" src="${h(urlVignette(name))}" alt="">
      <button class="watch" data-action="watch-live" data-name="${h(name)}">${h(libelle)}</button>
@@ -2161,15 +2249,15 @@ function urlVignette(name, refresh = false) {
   return avecJeton(refresh ? `${url}&refresh=1` : url);
 }
 
-// Factorisé : posé à la fois ici (repos, y compris l'état d'échec qui
-// réutilise repos()) et dans watchMse() une fois le flux lancé, pour rester
-// visible dans tous les états plutôt que d'apparaître seulement en cours de
+// Factored: placed both here (idle, including the failure state that
+// reuses repos()) and in watchMse() once the stream starts, to stay
+// visible in all states rather than appear only during
 // lecture.
 function expandBtn(name) {
-  // Icône seule, jamais de texte : un bouton neuf n'est jamais encore
-  // l'élément plein écran courant, donc l'état "entrer" est toujours le bon
-  // à la création. syncExpandButtons() corrige l'icône/le libellé ensuite,
-  // au changement de langue comme au passage en/hors plein écran.
+  // Icon only, never text: a new button is never yet
+  // the current fullscreen element, so the "enter" state is always right
+  // at creation. syncExpandButtons() fixes the icon/label later,
+  // on language change as on entering/leaving fullscreen.
   return `<button class="watch expand" data-action="fullscreen" data-name="${h(name)}"
                    title="${h(t("live.fullscreen.title"))}"
                    aria-label="${h(t("live.fullscreen.title"))}">⛶</button>`;
@@ -2188,285 +2276,14 @@ function syncExpandButtons() {
 document.addEventListener("fullscreenchange", syncExpandButtons);
 document.addEventListener("webkitfullscreenchange", syncExpandButtons);
 
-// --- Ronde des directs (issue #40, demande de MCas86 du 2026-10-17) ---
-// Les directs en plein écran, une caméra après l'autre : chacune reste à
-// l'écran le temps choisi, compté à partir de sa première image, puis cède
-// la place à la suivante, et la ronde recommence. Un navigateur n'accorde le
-// plein écran qu'au clic : un seul conteneur (#ronde) y entre, une fois, et
-// la case de direct de chaque caméra (#live-…) y passe à son tour avant de
-// regagner sa carte. watchLive() fait le reste comme pour une bascule à la
-// main : il arrête le direct précédent et attend que le module se libère
-// (MODULE_SLOT ne relaie qu'un direct à la fois). Réglages retenus dans ce
-// navigateur, comme la taille des vignettes : un écran mural n'a pas ceux
-// d'un téléphone.
-const CLE_RONDE = "blink2video.ronde";
-const RONDE_SECONDES_DEFAUT = 30;
-const RONDE_SECONDES_MIN = 10;
-// Le relais de Blink coupe de lui-même au bout d'environ six minutes de
-// vidéo (mesuré le 2026-09-28) : au-delà de cinq, la ronde montrerait un
-// direct interrompu jusqu'à la fin du tour.
-const RONDE_SECONDES_MAX = 300;
-// Une caméra qui ne montre rien dans ce délai cède son tour ; après un échec
-// déclaré, la suivante vient plus vite.
-const RONDE_ATTENTE_IMAGE_MS = 60 * 1000;
-const RONDE_APRES_ECHEC_MS = 5 * 1000;
-// Hors plage horaire ou sans caméra, la ronde se revérifie à ce rythme.
-const RONDE_REVERIFICATION_MS = 30 * 1000;
-
-// `tour` numérote les passages : un rappel parti pour un tour révolu (la fin
-// d'un direct déjà remplacé) ne décide plus rien.
-const ronde = {
-  active: false, pleinEcran: false, position: -1, tour: 0,
-  cle: null, boite: null, ancre: null, image: false, minuterie: null,
-};
-let reglagesRonde = lireReglagesRonde();
-
-function normaliserReglagesRonde(brut) {
-  const r = brut && typeof brut === "object" ? brut : {};
-  const secondes = Number.parseInt(r.secondes, 10);
-  const heure = (v) => (typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? v : "");
-  return {
-    // Les caméras écartées plutôt que les retenues : une caméra ajoutée plus
-    // tard entre d'elle-même dans la ronde.
-    exclues: Array.isArray(r.exclues) ? r.exclues.filter((cle) => typeof cle === "string") : [],
-    secondes: Number.isFinite(secondes)
-      ? Math.min(RONDE_SECONDES_MAX, Math.max(RONDE_SECONDES_MIN, secondes))
-      : RONDE_SECONDES_DEFAUT,
-    debut: heure(r.debut),
-    fin: heure(r.fin),
-  };
-}
-
-function lireReglagesRonde() {
-  try {
-    return normaliserReglagesRonde(JSON.parse(localStorage.getItem(CLE_RONDE) || "null"));
-  } catch (erreur) {
-    return normaliserReglagesRonde(null);
-  }
-}
-
-function enregistrerReglagesRonde() {
-  try {
-    localStorage.setItem(CLE_RONDE, JSON.stringify(reglagesRonde));
-  } catch (erreur) { /* stockage indisponible : réglages valables pour cette page */ }
-}
-
-// Vrai si `maintenant` (heure locale du navigateur) tombe dans [debut, fin[.
-// Sans plage complète, ou debut égal à fin, toute la journée ; une plage qui
-// passe minuit (22:00 à 06:00) est comprise.
-function dansPlageRonde(reglages, maintenant) {
-  const { debut, fin } = reglages;
-  if (!debut || !fin || debut === fin) return true;
-  const minutes = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
-  const m = maintenant.getHours() * 60 + maintenant.getMinutes();
-  const d = minutes(debut), f = minutes(fin);
-  return d < f ? m >= d && m < f : m >= d || m < f;
-}
-
-// Caméras de la grille, dans son ordre : les visibles seulement, une caméra
-// masquée n'ayant pas de case de direct.
-function camerasGrille() {
-  if (!system || system.error || !system.systems) return [];
-  return system.systems.flatMap((s) => s.cameras
-    .filter((c) => !estMasquee(c.name))
-    .sort((a, b) => comparerNoms(a.name, b.name)));
-}
-
-// Celles de la ronde : en ligne (réveiller une caméra hors ligne ne mène qu'à
-// une attente) et non écartées dans ses réglages.
-function camerasRonde(reglages) {
-  return camerasGrille().filter((c) => !c.offline && !reglages.exclues.includes(c.key));
-}
-
-function afficherMessageRonde(texte) {
-  $("rondeMessage").textContent = texte;
-  $("rondeMessage").hidden = !texte;
-  if (texte) $("rondeTitre").textContent = t("ronde.titre");
-}
-
-function armerTourRonde(delaiMs) {
-  clearTimeout(ronde.minuterie);
-  ronde.minuterie = setTimeout(tourDeRonde, delaiMs);
-}
-
-// Le direct de la caméra en cours montre-t-il encore des images ?
-function imageEnCoursRonde() {
-  const video = ronde.boite && ronde.boite.querySelector("video");
-  return Boolean(video && !video.paused && !video.ended && video.readyState >= 2);
-}
-
-// Rend la case de direct à sa carte, son direct arrêté : stopWatch() la remet
-// au repos là où elle se trouve, avant son retour.
-function rendreCaseRonde() {
-  const { cle, boite, ancre } = ronde;
-  Object.assign(ronde, { cle: null, boite: null, ancre: null, image: false });
-  if (!boite) return;
-  stopWatch(cle);
-  if (ancre.isConnected) ancre.replaceWith(boite);
-  else boite.remove();
-}
-
-// Un tour : la caméra suivante prend l'écran, ou un message dit pourquoi
-// aucune ne le prend.
-function tourDeRonde() {
-  if (!ronde.active) return;
-  const tour = ++ronde.tour;
-  clearTimeout(ronde.minuterie);
-  const cameras = camerasRonde(reglagesRonde);
-  if (!cameras.length || !dansPlageRonde(reglagesRonde, new Date())) {
-    rendreCaseRonde();
-    afficherMessageRonde(cameras.length
-      ? tf("ronde.pause", { debut: reglagesRonde.debut }) : t("ronde.aucune"));
-    armerTourRonde(RONDE_REVERIFICATION_MS);
-    return;
-  }
-  ronde.position = (ronde.position + 1) % cameras.length;
-  const camera = cameras[ronde.position];
-  // Seule de sa ronde, une caméra qui montre encore des images garde l'écran.
-  if (camera.key === ronde.cle && imageEnCoursRonde()) {
-    armerTourRonde(reglagesRonde.secondes * 1000);
-    return;
-  }
-  rendreCaseRonde();
-  // Grille pas encore dessinée, ou effacée par une relecture du système
-  // pendant qu'elle prêtait une case : la redessiner avant de renoncer.
-  if (!$("live-" + cssId(camera.key))) renderLive();
-  const boite = $("live-" + cssId(camera.key));
-  if (!boite) {
-    // Système encore en cours de chargement.
-    afficherMessageRonde(t("ronde.aucune"));
-    armerTourRonde(RONDE_APRES_ECHEC_MS);
-    return;
-  }
-  const ancre = document.createComment("ronde");
-  boite.replaceWith(ancre);
-  $("rondeScene").appendChild(boite);
-  Object.assign(ronde, { cle: camera.key, boite, ancre, image: false });
-  afficherMessageRonde("");
-  $("rondeTitre").textContent = `${camera.name} · ${ronde.position + 1}/${cameras.length}`;
-  armerTourRonde(RONDE_ATTENTE_IMAGE_MS);
-  watchLive(camera.key).finally(() => {
-    // Direct fini sans la moindre image, échec déclaré : inutile d'attendre
-    // le délai entier.
-    if (ronde.active && ronde.tour === tour && !ronde.image) armerTourRonde(RONDE_APRES_ECHEC_MS);
-  });
-}
-
-// Première image de la caméra en cours : son temps d'antenne commence.
-// « playing » ne remonte pas vers les parents, d'où l'écoute en phase de
-// capture sur la scène.
-function surImageRonde(event) {
-  if (!ronde.active || ronde.image || !ronde.boite || !ronde.boite.contains(event.target)) return;
-  ronde.image = true;
-  armerTourRonde(reglagesRonde.secondes * 1000);
-}
-
-function demarrerRonde() {
-  if (ronde.active) return;
-  Object.assign(ronde, { active: true, pleinEcran: false, position: -1 });
-  const conteneur = $("ronde");
-  conteneur.hidden = false;
-  // Sans API plein écran (iPhone), #ronde couvre déjà toute la fenêtre.
-  const entrer = conteneur.requestFullscreen || conteneur.webkitRequestFullscreen;
-  if (entrer) {
-    try {
-      const promesse = entrer.call(conteneur);
-      if (promesse && promesse.catch) promesse.catch(() => {});
-    } catch (erreur) { /* refusé : la fenêtre entière fait l'affaire */ }
-  }
-  tourDeRonde();
-}
-
-function arreterRonde() {
-  if (!ronde.active) return;
-  ronde.active = false;
-  ronde.tour++;
-  clearTimeout(ronde.minuterie);
-  rendreCaseRonde();
-  $("ronde").hidden = true;
-  if ((document.fullscreenElement || document.webkitFullscreenElement) === $("ronde")) {
-    const sortir = document.exitFullscreen || document.webkitExitFullscreen;
-    try {
-      const promesse = sortir.call(document);
-      if (promesse && promesse.catch) promesse.catch(() => {});
-    } catch (erreur) { /* déjà sorti */ }
-  }
-  ronde.pleinEcran = false;
-  // La grille, gelée tant qu'elle prêtait une case, rattrape ce qu'elle a
-  // manqué ; seulement dans le direct, une autre vue la remplace déjà.
-  if ($("view").value === "live") renderLive();
-}
-
-// Quitter le plein écran (Échap, geste du système) arrête la ronde, qui
-// tournerait sinon derrière la page.
-function surPleinEcranRonde() {
-  const actif = document.fullscreenElement || document.webkitFullscreenElement || null;
-  if (actif === $("ronde")) ronde.pleinEcran = true;
-  else if (ronde.active && ronde.pleinEcran) arreterRonde();
-}
-
-function ouvrirReglagesRonde() {
-  const conteneur = $("rondeCameras");
-  const cameras = camerasGrille();
-  conteneur.replaceChildren();
-  if (!cameras.length) conteneur.textContent = t("ronde.aucune");
-  for (const c of cameras) {
-    const label = document.createElement("label");
-    const case_ = document.createElement("input");
-    case_.type = "checkbox";
-    case_.value = c.key;
-    case_.checked = !reglagesRonde.exclues.includes(c.key);
-    label.appendChild(case_);
-    label.append(` ${c.name}${c.offline ? ` (${t("camera.offline")})` : ""}`);
-    conteneur.appendChild(label);
-  }
-  $("rondeSecondes").value = String(reglagesRonde.secondes);
-  $("rondeDebut").value = reglagesRonde.debut;
-  $("rondeFin").value = reglagesRonde.fin;
-  $("rondeReglages").showModal();
-}
-
-// Le clic sur Démarrer est le geste qui autorise le plein écran : la ronde
-// part de ce même clic, la fenêtre des réglages à peine refermée.
-function demarrerRondeDepuisReglages() {
-  const cases = [...$("rondeCameras").querySelectorAll('input[type="checkbox"]')];
-  const listees = new Set(cases.map((c) => c.value));
-  reglagesRonde = normaliserReglagesRonde({
-    // Une caméra écartée mais absente de la liste (masquée) le reste.
-    exclues: [
-      ...reglagesRonde.exclues.filter((cle) => !listees.has(cle)),
-      ...cases.filter((c) => !c.checked).map((c) => c.value),
-    ],
-    secondes: $("rondeSecondes").value,
-    debut: $("rondeDebut").value,
-    fin: $("rondeFin").value,
-  });
-  enregistrerReglagesRonde();
-  $("rondeReglages").close();
-  demarrerRonde();
-}
-
-$("rondeButton").onclick = ouvrirReglagesRonde;
-$("rondeDemarrer").onclick = demarrerRondeDepuisReglages;
-$("rondeFermer").onclick = () => $("rondeReglages").close();
-$("rondeSuivante").onclick = () => tourDeRonde();
-$("rondeArreter").onclick = arreterRonde;
-$("rondeScene").addEventListener("playing", surImageRonde, true);
-document.addEventListener("fullscreenchange", surPleinEcranRonde);
-document.addEventListener("webkitfullscreenchange", surPleinEcranRonde);
-// En plein écran, Échap revient au navigateur (surPleinEcranRonde) ; sans
-// plein écran accordé, la ronde l'écoute elle-même.
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && ronde.active) arreterRonde();
-});
-
-// Comme expandBtn : posé dans repos() ET dans watchWebRTC()/watchMse(), mais
-// seul un direct effectivement lancé a un flux à enregistrer - repos() ne
-// l'inclut donc pas. Toujours "à l'arrêt" à la création : le serveur efface
-// ENREGISTREMENT_DIRECT_ACTIF au début de chaque nouveau direct (serve.py),
-// un bouton neuf ne peut donc jamais démarrer déjà actif.
+// Like expandBtn: placed in repos() AND in watchWebRTC()/watchMse(), but
+// only a live view actually started has a stream to record - repos()
+// therefore omits it. Always "stopped" at creation: the server clears
+// ENREGISTREMENT_DIRECT_ACTIF at the start of each new live (serve.py),
+// so a new button can never start already active.
 function recordBtn(name) {
-  return `<button class="watch record" data-action="toggle-record" data-name="${h(name)}"
+  if (!estAdmin()) return "";
+  return `<button class="watch record admin-only" data-action="toggle-record" data-name="${h(name)}"
                    title="${h(t("live.record.title"))}">${h(t("live.record.start"))}</button>`;
 }
 
@@ -2476,10 +2293,10 @@ function appliquerEtatEnregistrement(bouton, actif) {
   bouton.title = actif ? t("live.record.stop") : t("live.record.title");
 }
 
-// Un seul drapeau global côté serveur (ENREGISTREMENT_DIRECT_ACTIF,
-// serve.py) : la case "actif" de la réponse est la source de vérité, pas
-// l'état supposé du bouton avant le clic - deux onglets sur le même direct
-// restent ainsi cohérents l'un avec l'autre.
+// One global server-side flag (ENREGISTREMENT_DIRECT_ACTIF,
+// serve.py): the response's "actif" field is the source of truth, not
+// the button's assumed state before the click - two tabs on the same live
+// thus stay consistent with each other.
 async function toggleRecord(name, bouton) {
   const sessionId = WEBRTC_SESSION[name];
   if (!sessionId && !MSE_ABORT[name]) return;
@@ -2494,8 +2311,8 @@ async function toggleRecord(name, bouton) {
     if (!reponse.ok || info.error || WEBRTC_SESSION[name] !== sessionId) return;
     appliquerEtatEnregistrement(bouton, Boolean(info.actif));
   } catch (erreur) {
-    // Rien de plus utile a afficher qu'un bouton resté sur son état
-    // précédent : l'utilisateur voit que le clic n'a pas pris et peut
+    // Nothing more useful to show than a button left in its
+    // previous state: the user sees the click did not take and can
     // recliquer.
   } finally {
     bouton.disabled = false;
@@ -2514,12 +2331,11 @@ async function setArmed(scope, name, armed) {
   renderLive();
 }
 
-// Contrairement a setArmed(), peut prendre jusqu'a 2 minutes (voir
-// reveiller_camera cote serveur) : le bouton se desactive pendant l'attente
-// plutot que de laisser croire qu'un second clic accelererait quoi que ce
-// soit. Le try/finally, pas juste le chemin normal, couvre aussi le cas ou
-// renderLive() est gele (direct actif ailleurs, voir 28.20) et ne
-// remplace donc jamais ce bouton par un neuf.
+// Unlike setArmed(), may take up to 2 minutes (see reveiller_camera on the
+// server): the button disables during the wait rather than implying a
+// second click would speed anything up. try/finally, not just the happy
+// path, also covers when renderLive() is frozen (live active elsewhere,
+// see 28.20) and therefore never replaces this button with a new one.
 async function reveillerCamera(name, bouton) {
   const libelle = bouton.textContent;
   bouton.disabled = true;
@@ -2567,10 +2383,10 @@ async function prendreSnapshot(name, bouton) {
   }
 }
 
-// Fonction dédiée plutôt que passer par load() : un appel après une prise
-// manuelle (prendreSnapshot) ou à chaque bascule de vue (load()) ne doit pas
-// redemander clips/vidéos ni réinitialiser leurs cases à cocher en attente
-// (excludedStaged/supprimerStaged), pour rien.
+// Dedicated function rather than going through load(): a call after a
+// manual shot (prendreSnapshot) or on each view switch (load()) must not
+// re-fetch clips/videos or reset their pending checkboxes
+// (excludedStaged/supprimerStaged) for nothing.
 async function chargerSnapshots() {
   const answer = await fetch("/api/snapshots");
   const result = await lireJSON(answer);
@@ -2598,9 +2414,9 @@ const CLIPS_PAR_PAGE = 50;
 const TAILLES_PAGE_CLIPS = [25, 50, 100, 0];
 const CLE_TAILLE_PAGE_CLIPS = "blink2video.clipsParPage";
 let pageClips = 0;
-// La barre du haut (figée sous l'en-tête) prend de la place et n'intéresse pas tout le monde : une
-// case du panneau Réglages la masque, propre à ce navigateur comme la taille des vignettes. Celle du
-// bas de la liste reste, pour changer de page.
+// The top bar (pinned under the header) takes space and not everyone wants
+// it: a Settings panel checkbox hides it, local to this browser like
+// thumbnail size. The one at the bottom of the list stays, to change page.
 const CLE_BARRE_PAGINATION = "blink2video.barrePagination";
 let barrePaginationHaute = (() => {
   try { return localStorage.getItem(CLE_BARRE_PAGINATION) !== "0"; } catch (erreur) { return true; }
@@ -2608,9 +2424,9 @@ let barrePaginationHaute = (() => {
 let clipsParPage = restaurerTaillePageClips();
 let nettoyerLecteursClips = () => {};
 
-// L'en-tête est figé en haut de la page, et la barre « Clips par page » se fige juste dessous :
-// elle a besoin de sa hauteur réelle, qui change quand l'en-tête passe à la ligne (fenêtre
-// étroite). Publiée en variable CSS (--entete-h), suivie quand l'en-tête change de taille.
+// The header is pinned at the top, and the "Clips per page" bar pins just under it:
+// it needs the real height, which changes when the header wraps (narrow
+// window). Published as CSS variable (--entete-h), watched when the header changes size.
 (function suivreHauteurEntete() {
   const entete = document.querySelector("header");
   if (!entete) return;
@@ -2664,37 +2480,37 @@ function changerPageClips(page, direction, taille = clipsParPage) {
 
 function renderClips() {
   nettoyerLecteursClips();
-  // Propre au genre affiché (clip ou direct) : data.clips mélange les deux
-  // depuis le 2026-09-04, ce récapitulatif ne doit pas compter l'autre vue.
+  // Specific to the displayed kind (clip or direct): data.clips mixes both
+  // since 2026-09-04; this summary must not count the other view.
   const kindAttendu = $("view").value === "direct" ? "direct" : "clip";
   const genre = data.clips.filter((c) => c.kind === kindAttendu);
   const clips = visible();
   const taille = clipsParPage || Math.max(1, clips.length);
   const pages = Math.max(1, Math.ceil(clips.length / taille));
   pageClips = Math.max(0, Math.min(pageClips, pages - 1));
-  // Pas de décompte ici : les clips sont sous les yeux, et trois nombres de
-  // plus en haut de page ne disent rien qu'on cherchait.
+  // No count here: the clips are in plain sight, and three numbers
+  // higher on the page would say nothing one was looking for.
   $("count").textContent = "";
 
-  // À côté du résumé du filtre plutôt que dans la liste : un texte qui décrit
-  // ce qui est affiché reste avec le reste de ce qui décrit le filtre, pas
-  // mélangé aux résultats eux-mêmes qui défilent.
+  // Beside the filter summary rather than in the list: text that describes
+  // what is shown stays with the rest of what describes the filter, not
+  // mixed into the scrolling results themselves.
   $("filtreCompte").textContent = data.filtered
     ? tf("clips.window", { m: genre.length, total: data.total_known[kindAttendu] })
     : "";
 
   if (!clips.length) {
-    // Distinguer « rien ne correspond au filtre » de « rien n'a jamais été
-    // récupéré » : dans le second cas, la cause la plus fréquente est l'absence
-    // de clé USB sur le module, les enregistrements partant alors dans le cloud
-    // de l'abonnement Blink, que cet outil ne lit pas. « Lancez blink2video
-    // download » n'a plus sa place ici : avec la composition par défaut
-    // (start), le téléchargement tourne déjà en arrière-plan, et le dire
-    // dessus n'aidait qu'à confondre un premier utilisateur pile au moment
-    // où la page est encore vide (vu en vrai, essai à froid).
-    // "clips.none.ever" parle de téléchargement/clé USB, propre aux clips
-    // de détection - sans objet pour un enregistrement du direct, qui a son
-    // propre message ("direct.none.ever").
+    // Distinguish "nothing matches the filter" from "nothing was ever
+    // fetched": in the second case, the most common cause is no
+    // USB key on the module, with recordings then going to the cloud
+    // of the Blink subscription, which this tool does not read. "Run blink2video
+    // download" no longer belongs here: with the default composition
+    // (start), download already runs in the background, and saying so
+    // on top only confused a first-time user right when
+    // the page is still empty (seen in practice, cold start).
+    // "clips.none.ever" talks about download/USB key, specific to detection
+    // clips - irrelevant for a live recording, which has its own message
+    // ("direct.none.ever").
     $("list").innerHTML = genre.length
       ? `<p class="empty">${t("clips.none.filtered")}</p>`
       : `<p class="empty">${t(kindAttendu === "direct" ? "direct.none.ever" : "clips.none.ever")}</p>`;
@@ -2710,19 +2526,18 @@ function renderClips() {
   preparerLecteursClips();
 }
 
-// « Grouper par » : le choix ne se pose que pour les journalières, et tant
-// qu'aucune caméra n'est choisie. Avec une caméra, chaque jour n'aurait
-// qu'une carte, seule sur sa ligne sous son propre titre (issue #37) : on
-// retombe alors sur un seul groupe, où les journées se suivent en grille,
-// chacune datée sur sa carte. Le choix reste enregistré et revient quand la
-// caméra est décochée.
+// "Group by": the choice only applies for dailies, and while no camera
+// is chosen. With a camera, each day would have only one card, alone on
+// its row under its own title (issue #37): it then falls back to a single
+// group, where days follow in a grid, each dated on its card. The choice
+// stays saved and returns when the camera is unchecked.
 function regroupable(kind) {
   return kind === "daily" && !$("camera").value;
 }
 
-// Le choix « Grouper par » suit la caméra tant que le panneau du filtre est
-// ouvert : décidé seulement au rendu, il n'apparaissait qu'après « Filtrer »
-// puis une réouverture du panneau (issue #36, suite).
+// The "Group by" choice follows the camera while the filter panel is
+// open: decided only at render, it only appeared after "Filter"
+// then reopening the panel (issue #36, follow-up).
 function majGroupBy() {
   $("groupBySection").hidden = !regroupable($("view").value);
 }
@@ -2739,14 +2554,13 @@ function renderVideos(kind) {
     $("list").innerHTML = `<p class="empty">${t("videos.none")}</p>`;
     return;
   }
-  // Grouper par jour (issue #14) : toutes les cameras d'une meme
-  // journaliere ensemble, sans avoir a rouvrir chaque camera pour
-  // comparer un meme jour. label d'une journaliere est deja AAAA-MM-JJ
-  // (nom_fichier = f"{day}_{camera}.mp4", merge_daily.py) : le tri
-  // alphabetique EST le tri chronologique, pas besoin de le reparser.
-  // N'a de sens que pour "daily" (render() cache le selecteur sinon) :
-  // hebdomadaires/mensuelles n'ont qu'un seul fichier par periode et par
-  // camera, un groupement par "jour" n'y changerait rien.
+  // Group by day (issue #14): all cameras of the same daily together,
+  // without reopening each camera to compare the same day. A daily's label
+  // is already YYYY-MM-DD (nom_fichier = f"{day}_{camera}.mp4",
+  // merge_daily.py): alphabetical sort IS chronological; no need to reparse.
+  // Only makes sense for "daily" (render() hides the selector otherwise):
+  // weeklies/monthlies have one file per period per camera; grouping by
+  // "day" would change nothing.
   const parJour = regroupable(kind) && $("groupBy").value === "day";
   const cles = parJour
     ? [...new Set(items.map((v) => v.label))].sort().reverse()
@@ -2765,17 +2579,17 @@ function renderVideos(kind) {
   `).join("");
 }
 
-// Le nom du fichier porte l'horodatage UTC (déclencherSnapshot, serve.py) :
-// pas de champ séparé à demander, juste le reformater pour l'affichage.
+// The filename carries the UTC timestamp (declencherSnapshot, serve.py):
+// no separate field to ask for, just reformat for display.
 function dateSnapshot(horodatage) {
   const m = horodatage.match(/^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})Z_/);
   if (!m) return horodatage;
   return new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}Z`).toLocaleString();
 }
 
-// label d'une journaliere est AAAA-MM-JJ (voir renderVideos) : sans heure,
-// interpreter en UTC minuit puis reformater en date locale evite qu'un
-// fuseau a l'ouest de UTC ne fasse glisser l'affichage sur la veille.
+// A daily's label is YYYY-MM-DD (see renderVideos): with no time, interpret
+// as UTC midnight then reformat to local date so a west-of-UTC timezone
+// does not shift the display to the previous day.
 function dateLocale(jour) {
   const m = jour.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return jour;
@@ -2806,8 +2620,8 @@ function pictureCard(s) {
     <div class="meta">
       <div class="time">${h(dateSnapshot(s.horodatage))}</div>
       <a class="act" href="${h(media)}" download>${h(t("videos.download"))}</a>
-      <button class="act grouped" title="${h(t("pictures.delete.title"))}"
-              data-action="delete-snapshot" data-fichier="${h(s.fichier)}">${h(t("pictures.delete"))}</button>
+      ${estAdmin() ? `<button class="act grouped admin-only" title="${h(t("pictures.delete.title"))}"
+              data-action="delete-snapshot" data-fichier="${h(s.fichier)}">${h(t("pictures.delete"))}</button>` : ""}
     </div>
   </div>`;
 }
@@ -2816,9 +2630,9 @@ function videoCard(v, parJour = false) {
   const url = `${v.kind}/${encodeURI(v.path)}`;
   const media = avecJeton(`/media/${url}`);
   const poster = avecJeton(`/thumb/${url}`);
-  // Groupe par jour (issue #14) : le h2 porte deja la date, repeter le
-  // meme label sur chaque carte n'apprendrait rien - la camera, elle,
-  // n'apparait plus nulle part ailleurs dans ce mode.
+  // Group by day (issue #14): the h2 already carries the date; repeating
+  // the same label on each card would teach nothing - the camera name no
+  // longer appears anywhere else in this mode.
   return `<div class="card">
     <video preload="none" controls playsinline
            poster="${h(poster)}" src="${h(media)}"></video>
@@ -2921,17 +2735,17 @@ function card(c) {
   const [an, mois, jour] = c.day.split("-");
   const ligne = [c.camera, duration(c.duration), `${jour}/${mois}/${an}`, c.time,
                  c.model].filter(Boolean).join(" · ");
-  // c.kind ("clip" ou "direct") choisit le préfixe d'URL : resolve_media()
-  // (serve.py) route chacun vers sa propre racine disque, mêmes routes
-  // /media|thumb/<kind>/<identity> pour les deux (2026-09-04, même
-  // présentation demandée pour les enregistrements du direct).
+  // c.kind ("clip" or "direct") picks the URL prefix: resolve_media()
+  // (serve.py) routes each to its own disk root, same routes
+  // /media|thumb/<kind>/<identity> for both (2026-09-04, same
+  // presentation requested for live recordings).
   return `<div class="card ${c.excluded ? "out" : ""}">
     <div class="clip-player" tabindex="0" aria-label="${h(ligne)}"
          data-poster="${h(avecJeton(`/thumb/${c.kind}/${encodeURI(c.identity)}`))}"
          data-src="${h(avecJeton(`/media/${c.kind}/${encodeURI(c.identity)}`))}"></div>
     <div class="meta">
       <div class="time line">${h(ligne)}</div>
-      <label class="act" title="${h(t("clip.discard.title"))}">
+      ${estAdmin() ? `<label class="act admin-only" title="${h(t("clip.discard.title"))}">
         <input type="checkbox" ${c.excludedStaged ? "checked" : ""}
                data-action="stage-exclusion" data-identity="${h(c.identity)}">
         ${h(t("clip.discard"))}
@@ -2939,21 +2753,20 @@ function card(c) {
       ${c.sourceDeleted
         || (c.kind === "clip" && (data.suppressionAuto || []).includes(c.cameraKey))
         ? "" : `
-      <label class="act" title="${h(t("clip.deleteSource.title"))}">
+      <label class="act admin-only" title="${h(t("clip.deleteSource.title"))}">
         <input type="checkbox" ${c.supprimerStaged ? "checked" : ""}
                data-action="stage-suppression" data-identity="${h(c.identity)}">
         ${h(t("clip.deleteSource"))}
-      </label>`}
+      </label>`}` : ""}
     </div>
   </div>`;
 }
 
-// Le filtre (caméra + période + « Grouper par ») survit d'une visite à
-// l'autre : quelqu'un qui ne veut voir que les clips de la semaine ne doit
-// pas refaire ce choix à chaque ouverture de la page. Défaut « tout
-// l'historique » tant que rien n'a jamais été choisi (constaté en réel,
-// 2026-08-27). « Grouper par » revenait à sa valeur par défaut à chaque
-// rechargement, donc à chaque redémarrage de blink2video (issue #36).
+// The filter (camera + period + "Group by") survives from visit to visit:
+// someone who only wants this week's clips need not redo that choice on
+// each page open. Default "all history" until something has been chosen
+// (seen in practice, 2026-08-27). "Group by" reset to its default on each
+// reload, hence on each blink2video restart (issue #36).
 const CLE_FILTRE = "blink2video.filtre";
 const GROUPEMENTS = ["camera", "day"];
 
@@ -2961,12 +2774,12 @@ function sauvegarderFiltre() {
   try {
     localStorage.setItem(CLE_FILTRE, JSON.stringify(
       { camera: $("camera").value, plage: plageClips, groupBy: $("groupBy").value }));
-  } catch (erreur) { /* stockage indisponible (navigation privée…) : tant pis */ }
+  } catch (erreur) { /* storage unavailable (private browsing…): never mind */ }
 }
 
-// Le <select> de « Grouper par » a ses options dès le HTML (à l'inverse de
-// celui des caméras, rempli plus tard) : le choix retenu se pose tout de
-// suite, avant le premier rendu.
+// The "Group by" <select> has its options from the HTML (unlike the
+// camera one, filled later): the kept choice is set right away, before
+// the first render.
 function restaurerGroupement(filtre) {
   if (filtre && GROUPEMENTS.includes(filtre.groupBy)) $("groupBy").value = filtre.groupBy;
 }
@@ -2983,13 +2796,13 @@ function restaurerFiltre() {
 const _filtrePersiste = restaurerFiltre();
 let plageClips = _filtrePersiste?.plage || { preset: "all" };
 restaurerGroupement(_filtrePersiste);
-// Choix en cours dans le panneau, appliqué seulement au clic sur Filtrer -
-// tant qu'aucun préréglage ni plage personnalisée n'a été retouché dans
-// cette ouverture du panneau, Filtrer ne fait que reprendre plageClips.
+// In-progress choice in the panel, applied only on Filter click - until
+// no preset or custom range has been touched in this panel opening,
+// Filter only reuses plageClips.
 let plageEnAttente = null;
-// La caméra restaurée ne peut être posée qu'une fois la vraie liste connue
-// (premier fill(), voir load()) : un <select> vide ignore toute valeur qu'on
-// lui donne avant d'avoir ses <option>.
+// The restored camera can only be set once the real list is known
+// (first fill(), see load()): an empty <select> ignores any value given
+// before it has its <option>s.
 let _filtreCameraAppliquee = false;
 
 function paramsPourPlage() {
@@ -3004,14 +2817,13 @@ function paramsPourPlage() {
   return s ? `?${s}` : "";
 }
 
-// Deux load() peuvent se chevaucher (clics rapprochés entre préréglages, ou
-// un load() de fond pendant qu'un autre tourne encore) : sans annulation de
-// celui d'avant, une requête plus lente mais lancée plus tôt (souvent celle
-// du chargement initial, sur « ce mois-ci ») pouvait répondre après une plus
-// rapide et réappliquer des données périmées par-dessus - la sélection
-// paraissait alors bloquée sur ce mois-ci, ou la grille rendait deux fois
-// coup sur coup (clignotement). AbortController est le mécanisme standard
-// pour ça, pas une invention locale (constaté en réel, 2026-08-27).
+// Two load() calls may overlap (close clicks between presets, or a
+// background load() while another still runs): without cancelling the
+// previous one, a slower request started earlier (often the initial load
+// for "this month") could answer after a faster one and re-apply stale
+// data on top - the selection then seemed stuck on this month, or the
+// grid rendered twice in a row (flicker). AbortController is the standard
+// mechanism for that, not a local invention (seen in practice, 2026-08-27).
 let __chargementEnCours = null;
 
 async function load() {
@@ -3024,32 +2836,32 @@ async function load() {
       fetch(`/api/clips${paramsPourPlage()}`, { signal: controleur.signal }),
       fetch("/api/videos", { signal: controleur.signal }),
     ]);
-    // La lecture des corps aussi : l'annulation peut tomber après les
-    // en-têtes, pendant la lecture, et l'AbortError s'échappait alors en
-    // rejet non traité (deux changements de vue rapprochés, vu par le test
-    // de la page dans un vrai navigateur, 2026-10-12).
+    // Body reads too: cancel may land after the headers, during the
+    // read, and AbortError then escaped as an unhandled rejection (two
+    // close view changes, seen by the page test in a real browser,
+    // 2026-10-12).
     nouvellesDonnees = await lireJSON(answer);
     nouvellesVideos = await lireJSON(videoAnswer);
   } catch (erreur) {
-    if (erreur.name === "AbortError") return; // une requête plus récente a pris le relais
+    if (erreur.name === "AbortError") return; // a more recent request took over
     throw erreur;
   }
   data = nouvellesDonnees;
   videos = nouvellesVideos;
   if (data.error) { $("log").style.display = "block"; $("log").textContent = data.error; return; }
-  // État de la sélection : à zéro à chaque rechargement, il reflète l'état
-  // réel qu'on vient de relire, pas une intention encore en attente.
+  // Selection state: zeroed on each reload, it reflects the
+  // real state just re-read, not a still-pending intent.
   for (const c of data.clips || []) {
     c.excludedStaged = c.excluded;
     c.supprimerStaged = false;
   }
-  // Le nom seul : le modèle n'apparaissait ici que pour les caméras déjà vues
-  // en direct, et sous son code interne (hawk, sedona, lotus) quand Blink n'en
-  // donne pas le nom (issue #37). Il reste sur la carte de la caméra.
+  // Name alone: the model only appeared here for cameras already seen
+  // live, and under its internal code (hawk, sedona, lotus) when Blink
+  // does not give the name (issue #37). It stays on the camera card.
   fill($("camera"), camerasConnues(), t("filter.allcameras"));
-  // La caméra restaurée ne peut être posée qu'une fois ; les fois suivantes,
-  // fill() a déjà de quoi préserver seul la sélection en cours (voir sa
-  // propre note sur `kept`).
+  // The restored camera can only be set once; later times, fill() already
+  // has enough to preserve the current selection alone (see its own note
+  // on `kept`).
   if (!_filtreCameraAppliquee) {
     _filtreCameraAppliquee = true;
     if (_filtrePersiste?.camera && data.cameras.includes(_filtrePersiste.camera)) {
@@ -3061,13 +2873,13 @@ async function load() {
   chargerSnapshots();
 }
 
-// Un préréglage suffit à retrouver un incident récent (aujourd'hui, cette
-// semaine…) ; la plage personnalisée, elle, vise une période précise à
-// l'heure près, pour ne pas défiler tout l'historique d'une caméra toujours
-// armée (signalé sur Reddit, 2026-08-27). Ni l'un ni l'autre ne s'applique
-// tant que Filtrer n'a pas été cliqué : choisir un préréglage puis se
-// raviser pour une caméra ne doit pas déjà avoir rechargé la grille une
-// première fois pour rien.
+// A preset is enough to find a recent incident (today, this
+// week…); the custom range aims at a precise period to the
+// hour, so you need not scroll a always-armed camera's whole
+// history (reported on Reddit, 2026-08-27). Neither applies
+// until Filter has been clicked: picking a preset then
+// changing your mind for a camera must not already have reloaded the grid
+// once for nothing.
 function choisirPreset(nom) {
   plageEnAttente = { preset: nom };
   $("rangeFrom").value = ""; $("rangeTo").value = "";
@@ -3100,17 +2912,16 @@ async function appliquerFiltre() {
   if (plageEnAttente) plageClips = plageEnAttente;
   sauvegarderFiltre();
   $("filtre").close();
-  // Pas de message de chargement intermédiaire : /api/clips répond en
-  // quelques millisecondes en local, trop vite pour se lire comme un
-  // chargement - seulement comme un clignotement de toute la grille à
-  // chaque changement de filtre (constaté en réel, 2026-08-27).
+  // No intermediate loading message: /api/clips answers in a few
+  // milliseconds locally, too fast to read as loading - only as a
+  // flicker of the whole grid on each filter change (seen in practice,
+  // 2026-08-27).
   await load();
 }
 
-// Une plage personnalisée affiche les dates réellement choisies plutôt
-// qu'un « Période personnalisée » générique : c'est justement pour cibler
-// une période précise qu'on l'a choisie, autant la voir sans rouvrir le
-// panneau.
+// A custom range shows the dates actually chosen rather than a generic
+// "Custom period": that is exactly to target a precise period, so show
+// it without reopening the panel.
 function libellePlagePersonnalisee() {
   const formater = (v) => {
     if (!v) return null;
@@ -3126,12 +2937,11 @@ function libellePlagePersonnalisee() {
   return t("range.custom");
 }
 
-// Résumé affiché dans l'en-tête à côté du bouton Filtre, pour savoir ce qui
-// est actif sans rouvrir le panneau. La caméra y figure toujours, y compris
-// le défaut silencieux « toutes caméras » - même logique que la période,
-// déjà affichée même sur son propre défaut (« tout l'historique ») : les
-// deux disent la vérité sur ce qui est montré, jamais seulement ce qui
-// restreint quelque chose.
+// Summary shown in the header beside the Filter button, to know what
+// is active without reopening the panel. The camera always appears there,
+// including the silent default "all cameras" - same logic as the period,
+// already shown even on its own default ("all history"): both tell the
+// truth about what is shown, never only what restricts something.
 function resumeFiltre() {
   const morceaux = [];
   const option = $("camera").selectedOptions[0];
@@ -3142,11 +2952,11 @@ function resumeFiltre() {
   return morceaux.join(" · ");
 }
 
-// Écarter et Supprimer sont des cases, pas des actions immédiates : coup par
-// coup, la suppression USB paierait à chaque clic le délai de régénération
-// du manifeste par le Sync Module (jusqu'à une minute, voir AUDIT 28.73/75).
-// Le bouton Appliquer traite tout le lot en un seul appel, une seule lecture
-// de manifeste par Sync Module concerné plutôt qu'une par clip.
+// Exclude and Delete are checkboxes, not immediate actions: one by one,
+// USB delete would pay on each click the Sync Module manifest regeneration
+// delay (up to one minute, see AUDIT 28.73/75). The Apply button handles
+// the whole batch in one call, one manifest read per affected Sync Module
+// rather than one per clip.
 function stagerExclusion(identity, coche) {
   const clip = data.clips.find((c) => c.identity === identity);
   if (clip) clip.excludedStaged = coche;
@@ -3190,11 +3000,11 @@ async function appliquerSelection() {
       body: JSON.stringify({ exclure, inclure, supprimer }) });
     const resultat = await lireJSON(reponse);
     if (resultat.error) { alert(resultat.error); return; }
-    // Écarter/Réintégrer : mise à jour optimiste, comme l'ancien toggle()
-    // (AUDIT 28.33/28.75). Le registre s'écrit en tâche de fond côté
-    // serveur pour ne jamais bloquer la réponse ; la relire tout de suite
-    // ici la course parfois, avant que l'écriture n'ait fini (constaté par
-    // Nico : « les écartés restent présents » jusqu'à un F5 manuel).
+    // Exclude/Reinclude: optimistic update, like the old toggle()
+    // (AUDIT 28.33/28.75). The registry writes in the background on the
+    // server so the response is never blocked; re-reading it right away
+    // here sometimes races, before the write finishes (reported by
+    // Nico: "excluded stay present" until a manual F5).
     for (const identity of exclure) {
       const clip = data.clips.find((c) => c.identity === identity);
       if (clip) { clip.excluded = true; clip.excludedStaged = true; }
@@ -3203,8 +3013,8 @@ async function appliquerSelection() {
       const clip = data.clips.find((c) => c.identity === identity);
       if (clip) { clip.excluded = false; clip.excludedStaged = false; }
     }
-    // Supprimer : l'appel était synchrone côté serveur, le résultat est
-    // donc fiable tout de suite, pas une supposition.
+    // Delete: the call was synchronous on the server; the result is
+    // therefore reliable at once, not a guess.
     let echecs = 0;
     for (const [identity, statut] of Object.entries(resultat.resultats || {})) {
       const clip = data.clips.find((c) => c.identity === identity);
@@ -3224,9 +3034,9 @@ async function appliquerSelection() {
   }
 }
 
-// --- connexion Blink -------------------------------------------------------
-// Le serveur garde la session Blink ouverte entre les deux requêtes : la page
-// n'a qu'à poser les questions dans l'ordre où il les réclame.
+// --- Blink login -----------------------------------------------------------
+// The server keeps the Blink session open between the two requests: the page
+// only has to ask questions in the order it demands.
 let authResolve = null;
 
 function showAuth(stage, message) {
@@ -3282,9 +3092,9 @@ $("authOk").onclick = async () => {
   if (result.status === "ok") {
     $("auth").close();
     $("code").value = "";
-    // ?login=1 n'a servi qu'à ouvrir ce dialogue au premier lancement ; le
-    // laisser dans l'adresse referait apparaître la connexion à chaque
-    // actualisation ou depuis un signet, alors que la session est valide.
+    // ?login=1 only served to open this dialog on first launch; leaving
+    // it in the address would show the login again on every refresh or
+    // from a bookmark, even though the session is valid.
     const parametres = new URLSearchParams(location.search);
     if (parametres.get("login") === "1") {
       parametres.delete("login");
@@ -3316,7 +3126,7 @@ $("refresh").onclick = async () => {
   $("work").classList.add("on");
   let label = t("refresh.starting");
   $("phase").textContent = label;
-  $("bar").removeAttribute("value");   // barre indéterminée tant qu'on ne sait pas
+  $("bar").removeAttribute("value");   // indeterminate bar until we know
 
   const source = new EventSource(avecJeton("/api/refresh"));
   source.onmessage = (message) => {
@@ -3329,9 +3139,9 @@ $("refresh").onclick = async () => {
       $("bar").removeAttribute("value");
     }
     if (event.progress) {
-      // done est fractionnaire : la partie entière compte les clips terminés,
-      // la décimale l'avancement dans le clip en cours. La barre est donc
-      // continue au lieu de sauter d'un cran par clip.
+      // done is fractional: the integer part counts finished clips, the
+      // decimal the progress within the current clip. The bar therefore
+      // advances continuously instead of jumping one step per clip.
       const p = event.progress;
       $("bar").max = p.total;
       $("bar").value = p.done;
@@ -3352,15 +3162,15 @@ $("refresh").onclick = async () => {
       actualisationLocale = false;
       if (!event.ok) $("phase").textContent = t("refresh.errors");
       load();
-      // « Actualiser » ne rapatriait que les clips : la batterie, la
-      // température et le signal de chaque caméra restaient sur leur
-      // dernière lecture, parfois vieille de plusieurs jours, tant qu'on
-      // n'ouvrait pas soi-même l'onglet Direct (bug vécu en vrai : une
-      // caméra affichait une mesure ancienne jusqu'à un rafraîchissement
-      // manuel depuis l'appli officielle). loadSystem(true) force le même
-      // passage que cette appli fait de son côté (blink.refresh(force=True),
-      // qui relit vraiment chaque caméra, pas seulement le résumé du
-      // compte - voir system_state() côté serveur).
+      // "Refresh" only brought back clips: battery,
+      // temperature and signal of each camera stayed on their
+      // last reading, sometimes days old, until you
+      // opened the Live tab yourself (real bug: a
+      // camera showed an old reading until a manual
+      // refresh from the official app). loadSystem(true) forces the same
+      // pass that app does on its side (blink.refresh(force=True),
+      // which truly re-reads each camera, not only the account
+      // summary - see system_state() on the server).
       rafraichirVignettes = true;
       loadSystem(true);
     }
@@ -3392,33 +3202,35 @@ $("tailleCartes").onchange = () => {
   appliquerTailleCartes();
 };
 majCaseMasquees();
-// "view" a besoin de données fraîches, pas juste d'un nouveau rendu de ce qui
-// est déjà en mémoire : Clips, Clips Directs, Journalières, Hebdomadaires,
-// Mensuelles peuvent tous avoir changé pendant que l'onglet restait ouvert
-// (bouton d'enregistrement, téléchargement de fond...) sans qu'/api/clips ou
-// /api/videos n'aient jamais été redemandés depuis (constaté en réel,
-// 2026-09-04 : direct enregistré, invisible dans Clips Directs jusqu'à un
-// rechargement complet de la page). "live" n'en a pas besoin, il lit
-// `system` (loadSystem), jamais `data`/`videos`.
+// "view" needs fresh data, not just a new render of what is already in
+// memory: Clips, Direct Clips, Daily, Weekly, Monthly may all have
+// changed while the tab stayed open (record button, background
+// download...) without /api/clips or /api/videos ever being re-fetched
+// since (seen in practice, 2026-09-04: recorded live, invisible in Direct
+// Clips until a full page reload). "live" does not need that; it reads
+// `system` (loadSystem), never `data`/`videos`.
 $("view").onchange = () => {
   pageClips = 0;
-  if ($("view").value === "live") {
+  // Always cut an active cycle when the dropdown changes (including
+  // rotation ↔ All Live), then restart if the new view needs one.
+  stopRotation();
+  if (vueDirecte()) {
     rafraichirVignettes = true;
     render();
     return;
   }
-  // Quitter Direct retire ses vidéos du DOM : fermer aussi les sessions
-  // et les réveils en attente avant de reconstruire une autre vue.
+  // Leaving Live removes its videos from the DOM: also close sessions
+  // and pending wakes before rebuilding another view.
   for (const name of nomsDirectsActifs()) stopWatch(name);
   load();
 };
-// Seule cette ligne de texte se met à jour d'elle-même : elle sert précisément
-// à repérer une boucle arrêtée, ce qu'on ne verrait pas en regardant des clips
+// Only this text line updates by itself: it is precisely for
+// spotting a stopped loop, which you would not see by looking at clips
 // qui, eux, ne changent plus.
-// Un worker automatique peut commencer à n'importe quel moment. La sonde
-// dédiée ne lit que .blink_travail.json : trois secondes en permanence restent
-// légères, même sous Windows 7. Le bilan plus coûteux (registre + passages +
-// mise à jour) conserve, lui, sa cadence d'une minute.
+// An automatic worker may start at any time. The dedicated
+// probe only reads .blink_travail.json: three seconds continuously stay
+// light, even under Windows 7. The costlier summary (registry + passages +
+// update) keeps its one-minute cadence.
 etatDuTravail();
 (function veillerTravail() {
   setTimeout(async () => {
@@ -3437,9 +3249,9 @@ $("auto").onchange = () => {
   localStorage.setItem("auto", $("auto").checked ? "1" : "0");
   heuresDePassage();
 };
-// Reflète l'état réel du système (fichier de démarrage présent ou non), pas
-// une préférence mémorisée côté page : deux installations d'un même profil
-// navigateur ne doivent pas se faire croire l'état de l'autre.
+// Reflects the real system state (startup file present or not), not
+// a page-side remembered preference: two installs of the same browser
+// profile must not believe each other's state.
 fetch("/api/autostart").then(lireJSON).then((etat) => {
   $("autostart").checked = !!etat.actif;
 }).catch(() => {});
@@ -3462,7 +3274,7 @@ $("autostart").onchange = async () => {
   }
 };
 
-let portActuel = null;   // relu à chaque ouverture, comparé à l'envoi
+let portActuel = null;   // re-read on each open, compared to the submit
 
 function afficherFormulaireReglages(reglages) {
   $("usbMinutes").value = reglages.usb_minutes;
@@ -3489,9 +3301,9 @@ function afficherFormulaireReglages(reglages) {
   afficherUrlWebhook(reglages.webhook_token);
 }
 
-// NOM_CAMERA reste un espace réservé littéral : l'utilisateur le remplace
-// lui-même dans la configuration de son automatisation, cette page ne
-// connaît pas d'avance quelle caméra sera visée par l'appel externe.
+// NOM_CAMERA stays a literal placeholder: the user replaces
+// it themselves in their automation config; this page does
+// not know ahead which camera the external call will target.
 function afficherUrlWebhook(jeton) {
   $("webhookUrl").value = `${location.origin}/webhook/snapshot?camera=NOM_CAMERA&token=${jeton}`;
 }
@@ -3504,9 +3316,9 @@ $("webhookRegenerer").onclick = async () => {
   afficherUrlWebhook(resultat.token);
 };
 
-// Un onglet par groupe plutôt qu'une longue page à défiler : la liste des
-// noms sert à la fois à peupler tabXxx/panelXxx (voir le gabarit HTML) et à
-// éviter de répéter les quatre mêmes lignes pour bascule/ouverture.
+// One tab per group rather than a long page to scroll: the name
+// list both populates tabXxx/panelXxx (see the HTML template) and
+// avoids repeating the same four lines for switch/open.
 const ONGLETS_REGLAGES = ["General", "Video", "Acces", "Alertes"];
 
 function basculerOngletReglages(actif) {
@@ -3526,32 +3338,205 @@ function configurerDialogueReglages(configurationInitiale) {
   $("reglagesClose").hidden = configurationInitiale;
   $("stopButton").hidden = configurationInitiale;
   $("reglages").dataset.initialSetup = configurationInitiale ? "1" : "0";
-  // Toujours le premier onglet à l'ouverture : plus simple à retrouver qu'un
-  // dernier onglet mémorisé, pour un dialogue qui ne reste jamais affiché
+  // Always the first tab on open: easier to find than a
+  // last remembered tab, for a dialog that is never left displayed
   // longtemps entre deux ouvertures.
   basculerOngletReglages("General");
 }
 
 async function ouvrirReglages(configurationInitiale = false) {
-  try {
-    const reglages = await lireJSON(await fetch("/api/reglages"));
-    configurationInitiale = configurationInitiale || !!reglages.initial_setup;
-    afficherFormulaireReglages(reglages);
-  } catch (erreur) { /* les champs gardent leur dernière valeur affichée */ }
-  configurerDialogueReglages(configurationInitiale);
-  chargerCamerasMasquees();
-  $("tailleCartes").value = tailleCartes;
-  $("barrePagination").checked = barrePaginationHaute;
-  chargerSourdine();
-  chargerSuppressionAuto();
+  if (!estConnecteAcces()) return;
+  if (estAdmin()) {
+    try {
+      const reglages = await lireJSON(await fetch("/api/reglages"));
+      configurationInitiale = configurationInitiale || !!reglages.initial_setup;
+      afficherFormulaireReglages(reglages);
+    } catch (erreur) { /* fields keep their last displayed value */ }
+    configurerDialogueReglages(configurationInitiale);
+    chargerCamerasMasquees();
+    $("tailleCartes").value = tailleCartes;
+    $("barrePagination").checked = barrePaginationHaute;
+    chargerSourdine();
+    chargerSuppressionAuto();
+    await chargerFormulaireAcces();
+  } else {
+    // Guest signed in via Cloudflare: still open Settings so Shared access
+    // is reachable if they are promoted to admin; otherwise show the Access tab.
+    configurerDialogueReglages(false);
+    $("tailleCartes").value = tailleCartes;
+    $("barrePagination").checked = barrePaginationHaute;
+    await chargerFormulaireAcces();
+    basculerOngletReglages("Acces");
+  }
   $("reglages").showModal();
+}
+
+let _accesEdition = null;
+
+function camerasConnuesPourAcces() {
+  const noms = new Map();
+  if (system && system.systems) {
+    for (const s of system.systems) {
+      for (const c of s.cameras || []) {
+        const label = c.name || c.key;
+        const cle = c.key || c.name;
+        if (cle) noms.set(cle, label);
+      }
+    }
+  }
+  return [...noms.entries()].sort((a, b) => comparerNoms(a[1], b[1]));
+}
+
+async function chargerFormulaireAcces() {
+  const liste = $("accessUsersListe");
+  if (!liste) return;
+  try {
+    const reponse = await fetch("/api/access");
+    _accesEdition = await lireJSON(reponse);
+    if (_accesEdition.error || reponse.status >= 400) {
+      throw new Error(_accesEdition.error || "forbidden");
+    }
+  } catch (erreur) {
+    liste.textContent = estAdmin()
+      ? t("reglages.accessSaveFailed")
+      : tf("access.pending", { email: ACCES.email || "" });
+    return;
+  }
+  // Team domain is kept in blink_access.json only (not edited in the UI).
+  if ($("cfAud")) $("cfAud").value = (_accesEdition.cloudflare || {}).aud || "";
+  $("accessAdmins").value = (_accesEdition.admin_emails || []).join(", ");
+  peindreListeAccesUsers();
+}
+
+function peindreListeAccesUsers() {
+  const liste = $("accessUsersListe");
+  if (!liste || !_accesEdition) return;
+  const cameras = camerasConnuesPourAcces();
+  liste.replaceChildren();
+  if (!(_accesEdition.users || []).length) {
+    const p = document.createElement("p");
+    p.className = "sub tiny";
+    p.textContent = t("reglages.accessGuestHint");
+    liste.append(p);
+  }
+  for (const user of _accesEdition.users || []) {
+    const bloc = document.createElement("div");
+    bloc.className = "accessUser";
+    const head = document.createElement("header");
+    const titre = document.createElement("strong");
+    titre.textContent = user.email;
+    const retirer = document.createElement("button");
+    retirer.type = "button";
+    retirer.textContent = t("reglages.accessRemove");
+    retirer.onclick = () => {
+      _accesEdition.users = _accesEdition.users.filter((u) => u.email !== user.email);
+      peindreListeAccesUsers();
+    };
+    head.append(titre, retirer);
+    const cams = document.createElement("div");
+    cams.className = "cams";
+    if (!cameras.length) {
+      cams.textContent = t("reglages.accessNoCams");
+    } else {
+      for (const [cle, label] of cameras) {
+        const lab = document.createElement("label");
+        const case_ = document.createElement("input");
+        case_.type = "checkbox";
+        const allowed = new Set(user.cameras || []);
+        const labelLc = String(label).toLowerCase();
+        case_.checked = allowed.has(cle) || allowed.has(label)
+          || [...allowed].some((v) => String(v).toLowerCase() === labelLc
+            || String(v) === cle);
+        case_.onchange = () => {
+          const set = new Set(user.cameras || []);
+          if (case_.checked) {
+            set.add(cle);
+            set.add(label);
+          } else {
+            set.delete(cle);
+            set.delete(label);
+          }
+          user.cameras = [...set];
+        };
+        lab.append(case_, document.createTextNode(" " + label));
+        cams.append(lab);
+      }
+    }
+    bloc.append(head, cams);
+    liste.append(bloc);
+  }
+}
+
+async function sauverFormulaireAcces() {
+  if (!_accesEdition) return;
+  const status = $("accessSaveStatus");
+  const admins = ($("accessAdmins").value || "").split(",")
+    .map((e) => e.trim()).filter(Boolean);
+  const payload = {
+    admin_emails: admins.length ? admins : [],
+    cloudflare: {
+      // Preserve team domain from disk; AUD can be edited in the UI.
+      team_domain: (_accesEdition.cloudflare || {}).team_domain || "",
+      aud: ($("cfAud") && $("cfAud").value || "").trim()
+        || (_accesEdition.cloudflare || {}).aud || "",
+    },
+    users: (_accesEdition.users || []).map((u) => ({
+      email: u.email,
+      cameras: u.cameras || [],
+      permissions: u.permissions || ["view_live", "view_clips", "view_pictures"],
+    })),
+  };
+  try {
+    _accesEdition = await lireJSON(await fetch("/api/access", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }));
+    if (_accesEdition.error) throw new Error(_accesEdition.error);
+    peindreListeAccesUsers();
+    if ($("cfAud")) $("cfAud").value = (_accesEdition.cloudflare || {}).aud || "";
+    $("accessAdmins").value = (_accesEdition.admin_emails || []).join(", ");
+    if (status) {
+      status.hidden = false;
+      status.textContent = t("reglages.accessSaved");
+    }
+  } catch (erreur) {
+    if (status) {
+      status.hidden = false;
+      status.textContent = t("reglages.accessSaveFailed");
+    }
+  }
 }
 $("reglagesButton").onclick = () => ouvrirReglages(false);
 $("reglagesClose").onclick = () => $("reglages").close();
+if ($("accessAddUser")) {
+  $("accessAddUser").onclick = () => {
+    if (!_accesEdition) return;
+    const email = ($("accessNewEmail").value || "").trim().toLowerCase();
+    if (!email) return;
+    if ((_accesEdition.users || []).some((u) => u.email === email)) {
+      $("accessNewEmail").value = "";
+      return;
+    }
+    if ((_accesEdition.admin_emails || []).map((e) => e.toLowerCase()).includes(email)) {
+      $("accessNewEmail").value = "";
+      return;
+    }
+    _accesEdition.users = _accesEdition.users || [];
+    _accesEdition.users.push({
+      email,
+      cameras: [],
+      permissions: ["view_live", "view_clips", "view_pictures"],
+    });
+    $("accessNewEmail").value = "";
+    peindreListeAccesUsers();
+  };
+}
+if ($("accessSave")) $("accessSave").onclick = () => sauverFormulaireAcces();
 $("reglages").addEventListener("cancel", (evenement) => {
-  // Échap ne doit pas transformer une installation neuve en page vide : le
-  // parent attend la validation et aucun téléchargement ne démarrera. Le
-  // dialogue reste fermable lors de toutes les ouvertures ordinaires.
+  // Escape must not turn a fresh install into a blank page: the parent
+  // awaits validation and no download will start. The dialog stays
+  // dismissible on all ordinary openings.
   if ($("reglages").dataset.initialSetup === "1") evenement.preventDefault();
 });
 
@@ -3565,10 +3550,10 @@ for (const bouton of document.querySelectorAll("#filtre .presets button")) {
 $("rangeFrom").oninput = choisirPlagePersonnalisee;
 $("rangeTo").oninput = choisirPlagePersonnalisee;
 
-// Ouvre le sélecteur natif côté serveur (tkinter : voir /api/choisir-dossier)
-// plutôt qu'un <input type="file" webkitdirectory> - celui-ci ne rend qu'un
-// nom de dossier relatif au navigateur, jamais un chemin absolu utilisable
-// par le serveur (restriction de vie privée du web, pas une limite de ce code).
+// Opens the native server-side picker (tkinter: see /api/choisir-dossier)
+// rather than an <input type="file" webkitdirectory> - that only yields a
+// browser-relative folder name, never an absolute path usable by the
+// server (web privacy restriction, not a limit of this code).
 $("storageDirBrowse").onclick = async () => {
   const bouton = $("storageDirBrowse");
   bouton.disabled = true;
@@ -3587,9 +3572,9 @@ $("storageDirBrowse").onclick = async () => {
   }
 };
 
-// Semaine et mois n'ont de sens que si la journalière tourne : décocher
-// « jour » les grise et les décoche, plutôt que de laisser espérer un
-// agrégat qui ne sera jamais construit faute de base.
+// Week and month only make sense if daily runs: unchecking
+// "day" greys and unchecks them, rather than letting you hope for an
+// aggregate that will never be built without a base.
 function appliquerDependanceMergeJour() {
   const actif = $("mergeJour").checked;
   $("mergeSemaine").disabled = !actif;
@@ -3601,8 +3586,8 @@ function appliquerDependanceMergeJour() {
 }
 $("mergeJour").onchange = appliquerDependanceMergeJour;
 
-// Les cadences n'ont plus de sens si rien n'est téléchargé : grisées plutôt
-// que retirées, pour retrouver la dernière valeur en recochant.
+// Cadences no longer make sense if nothing is downloaded: greyed rather
+// than removed, so the last value returns when rechecked.
 function appliquerDependanceDownloadAuto() {
   const actif = $("downloadAuto").checked;
   $("usbMinutes").disabled = !actif;
@@ -3610,8 +3595,8 @@ function appliquerDependanceDownloadAuto() {
 }
 $("downloadAuto").onchange = appliquerDependanceDownloadAuto;
 
-// Taille/couleur/opacité n'ont d'effet que si l'horodatage est incrusté :
-// grisées plutôt que retirées, même principe que les cadences ci-dessus.
+// Size/color/opacity only take effect if the timestamp is burned in:
+// greyed rather than removed, same principle as cadences above.
 function appliquerDependanceTimestamp() {
   const actif = $("timestamp").checked;
   $("fontSize").disabled = !actif;
@@ -3620,10 +3605,10 @@ function appliquerDependanceTimestamp() {
 }
 $("timestamp").onchange = appliquerDependanceTimestamp;
 
-// Séparé du reste du panneau : contrairement aux cadences, au port ou au
-// fuseau, la sourdine n'exige pas de redémarrage (watch relit son état à
-// chaque passage), donc chaque case s'applique tout de suite, comme le
-// bouton Écarter d'un clip.
+// Separate from the rest of the panel: unlike cadences, port or
+// timezone, mute needs no restart (watch re-reads its state on each
+// pass), so each checkbox applies at once, like the Exclude button of a
+// clip.
 async function chargerListeReglageCameras({ liste, url, traduction, selection, champ, nomCamera }) {
   const conteneur = $(liste);
   conteneur.textContent = t(`${traduction}.loading`);
@@ -3676,12 +3661,12 @@ async function chargerSourdine() {
   });
 }
 
-// Même motif que chargerSourdine() : chaque case s'applique tout de suite,
-// pas de redémarrage. Une caméra peut porter plusieurs clés internes au fil
-// du temps (Sync Module remplacé, vieux clips USB sans identifiant stable -
-// issue GitHub #1) : la page n'affiche que son nom, la résolution
-// nom -> clé(s) est réglée côté serveur (suppression_auto_choices() dans
-// serve.py), jamais ici.
+// Same pattern as chargerSourdine(): each checkbox applies at once,
+// no restart. A camera may carry several internal keys over time
+// (Sync Module replaced, old USB clips without a stable id - GitHub
+// issue #1): the page only shows its name; name -> key(s) resolution is
+// handled on the server (suppression_auto_choices() in serve.py), never
+// here.
 async function chargerSuppressionAuto() {
   return chargerListeReglageCameras({
     liste: "suppressionAutoListe", url: "/api/suppression-auto", traduction: "suppressionAuto",
@@ -3689,9 +3674,9 @@ async function chargerSuppressionAuto() {
   });
 }
 
-// « Vérifier les mises à jour » : GitHub tout de suite, sans attendre le fil
-// de fond du serveur (une heure au plus). Une version trouvée fait paraître
-// le bouton « Installer » en haut de la page, comme d'habitude (issue #35).
+// "Check for updates": GitHub right away, without waiting for the server
+// background thread (at most one hour). A found version shows
+// the "Install" button at the top of the page, as usual (issue #35).
 $("verifierMajButton").onclick = async () => {
   const bouton = $("verifierMajButton");
   bouton.disabled = true;
@@ -3716,9 +3701,9 @@ $("verifierMajButton").onclick = async () => {
   }
 };
 
-// Même déroulé que le bouton de mise à jour : enregistrer, attendre que le
-// serveur redémarre, puis retrouver la page. Les trois parcours d'attente
-// restent distincts : nouveau port, première configuration, relance ordinaire.
+// Same flow as the update button: save, wait for the
+// server to restart, then get the page back. The three wait paths
+// stay distinct: new port, first configuration, ordinary relaunch.
 function lireParametresReglages() {
   const usb = parseInt($("usbMinutes").value, 10);
   const cloud = parseInt($("cloudMinutes").value, 10);
@@ -3777,8 +3762,8 @@ $("reglagesApply").onclick = async () => {
     }
     configurationInitiale = !!resultat.initial_setup;
   } catch (erreur) {
-    // Le redémarrage peut couper la réponse. Conserver le sondage dans ce
-    // cas : son délai de garde signalera si l'arrêt n'a pas commencé.
+    // Restart may cut the response. Keep polling in that
+    // case: its guard delay will signal if the stop never started.
   } finally {
     bouton.disabled = false;
     bouton.textContent = t("reglages.apply");
@@ -3808,7 +3793,7 @@ function signalerEchecRedemarrageReglages() {
 }
 
 function attendreChangementPortReglages(port) {
-  // Attendre la disparition de l'ancien serveur avant de quitter son origine.
+  // Wait for the old server to disappear before leaving its origin.
   const nouvelleAdresse = `http://${location.hostname}:${port}/`;
   afficherAttenteReglages(tf("reglages.portchange", { url: nouvelleAdresse }));
   let parti = false;
@@ -3820,7 +3805,7 @@ function attendreChangementPortReglages(port) {
     }
     if (parti) {
       clearInterval(attentePort);
-      // Laisser au nouveau serveur le temps de se lier au port.
+      // Give the new server time to bind the port.
       setTimeout(() => { location.href = nouvelleAdresse; }, 3000);
     }
   }, 1000);
@@ -3833,19 +3818,19 @@ function attendreChangementPortReglages(port) {
 }
 
 function attendreFinConfigurationInitiale() {
-  // Le parent start remplace le serveur temporaire après validation. Le
-  // statut explicite évite de manquer une coupure très brève entre les deux.
+  // The start parent replaces the temporary server after validation. The
+  // explicit status avoids missing a very brief cut between the two.
   afficherAttenteReglages(t("reglages.restarting.settings"));
   let delaiInitial = null;
   const attenteInitiale = setInterval(async () => {
     try {
       const reponse = await fetch("/api/status", { cache: "no-store" });
       if (reponse.status === 403) {
-        // Le nouveau serveur est là, avec son propre jeton : cette page ne
-        // peut plus l'interroger, et .json() échouait ici en silence jusqu'au
-        // délai d'échec (audit du 26/09/2026, B04). Une page fraîche obtient
-        // le nouveau jeton ; lancerParcoursInitial() n'y rouvre les réglages
-        // que si le serveur les exige encore.
+        // The new server is there, with its own token: this page can
+        // no longer query it, and .json() failed here silently until the
+        // failure delay (audit 26/09/2026, B04). A fresh page gets the
+        // new token; lancerParcoursInitial() only reopens settings there
+        // if the server still requires them.
         clearInterval(attenteInitiale);
         clearTimeout(delaiInitial);
         location.reload();
@@ -3855,7 +3840,7 @@ function attendreFinConfigurationInitiale() {
       if (etat.initial_setup === false) {
         clearInterval(attenteInitiale);
         clearTimeout(delaiInitial);
-        // Retirer ?setup=1 pour ne pas rouvrir les réglages déjà validés.
+        // Remove ?setup=1 so already-validated settings are not reopened.
         location.href = location.pathname;
       }
     } catch (erreur) { /* coupure attendue entre les deux serveurs */ }
@@ -3891,8 +3876,8 @@ $("redemarrerButton").onclick = async () => {
       return;
     }
   } catch (erreur) {
-    // Comme pour Appliquer : le redémarrage peut couper la réponse avant
-    // qu'elle n'arrive, le sondage ci-dessous prend le relais.
+    // As with Apply: restart may cut the response before it arrives;
+    // the poll below takes over.
   } finally {
     bouton.disabled = false;
     bouton.textContent = t("reglages.restart");
@@ -3915,24 +3900,24 @@ $("stopButton").onclick = async () => {
       bouton.textContent = t("reglages.stop");
       return;
     }
-  } catch (erreur) { /* la réponse peut ne pas arriver, l'arrêt est déjà lancé */ }
+  } catch (erreur) { /* response may not arrive; stop is already launched */ }
   document.body.innerHTML = `<p class="empty">${t("stop.stopped")}</p>`;
-  // « accepté » n'est pas « terminé ». Si le serveur répond encore après le
-  // délai maximal de grâce + kill, rendre l'échec visible au lieu d'affirmer
-  // indéfiniment que l'application est arrêtée.
+  // "accepted" is not "done". If the server still answers after the
+  // max grace + kill delay, make the failure visible instead of claiming
+  // forever that the app is stopped.
   setTimeout(async () => {
     try {
       const reponse = await fetch("/api/status", { cache: "no-store" });
       if (reponse.ok) {
         document.body.innerHTML = `<p class="empty">${t("stop.failed")}</p>`;
       }
-    } catch (erreur) { /* disparition attendue : arrêt confirmé */ }
+    } catch (erreur) { /* expected disappearance: stop confirmed */ }
   }, 30000);
 };
 
-// Les cartes sont reconstruites à chaque actualisation : une délégation sur
-// leur conteneur garde les handlers hors des chaînes HTML et évite toute
-// interprétation d'un nom de caméra ou de fichier comme code JavaScript.
+// Cards are rebuilt on each refresh: delegation on
+// their container keeps handlers out of HTML strings and avoids any
+// interpretation of a camera or file name as JavaScript code.
 $("list").addEventListener("click", (event) => {
   const cible = event.target.closest("[data-action]");
   if (!cible || !$("list").contains(cible)) return;
@@ -3948,14 +3933,21 @@ $("list").addEventListener("click", (event) => {
       reveillerCamera(name, cible);
       break;
     case "continu":
-      // La case bascule d'elle-même (aucun preventDefault ici) : on
-      // retient son nouvel état, lu par les boucles de reprise du direct.
+      // The checkbox toggles by itself (no preventDefault here): we
+      // keep its new state, read by the live retry loops.
       choisirDirectContinu(name, cible.checked);
       break;
     case "snapshot":
       prendreSnapshot(name, cible);
       break;
     case "watch-live":
+      if (rotationActive && $("view").value === "alllive") {
+        if (rotationTimer) clearTimeout(rotationTimer);
+        rotationTimer = null;
+        arreterCountdownRotation();
+        rotationCameraCourante = name;
+        afficherAttenteRotation(name);
+      }
       watchLive(name);
       break;
     case "stop-live":
@@ -3993,40 +3985,57 @@ document.querySelectorAll("[data-lang-btn]").forEach((button) => {
   button.onclick = () => setLang(button.dataset.langBtn, true);
 });
 
-// Vue par défaut posée AVANT setLang() : celui-ci appelle render(), qui lit
-// $("view").value pour décider quoi peindre. Sans cadre du navigateur pour
-// distinguer une option "selected" ici, la valeur par défaut du <select>
-// serait la première déclarée (Direct) - render() y déclencherait alors un
-// appel réseau vers /api/system dont la réponse, arrivée en retard, écrase
-// la liste de clips déjà affichée sans que le menu déroulant ne bouge (bug
-// vécu en conditions réelles : la page « repassait en Direct toute seule »).
-$("view").value = "clips";
-// Override manuel mémorisé prioritaire ; sinon la langue du navigateur, comme
-// au premier lancement de lidar2map. Placé ici, en fin de script : setLang()
-// appelle render()/renderLive(), qui référencent des `let` déclarés plus haut
-// (MSE_ABORT, actualisationLocale...) — appelé trop tôt, avant l'exécution de
-// ces déclarations, ça lève ReferenceError (zone morte temporelle), comme vu
-// en testant réellement au navigateur.
-setLang(localStorage.getItem("lang") || detectLang(), false);
+// Ensure All Live Views exists even when the embedded HTML is from an
+// older build (js updated without rebuilding the exe).
+(function assurerOptionAllLive() {
+  const sel = $("view");
+  if (!sel || sel.querySelector('option[value="alllive"]')) return;
+  const opt = document.createElement("option");
+  opt.value = "alllive";
+  opt.dataset.i18n = "view.alllive";
+  opt.textContent = t("view.alllive");
+  const rotation = sel.querySelector('option[value="rotation"]');
+  if (rotation) sel.insertBefore(opt, rotation);
+  else sel.append(opt);
+})();
 
-load();
-// E-01 : connexion puis réglages s'enchaînent dans le même onglet. Le second
-// dialogue n'est ouvert qu'après une authentification réussie ; l'annulation
-// laisse le parent en attente et garantit qu'aucun worker ne démarre.
+// Default view set BEFORE setLang(): that calls render(), which reads
+// $("view").value to decide what to paint. Live Views is the default.
+$("view").value = "live";
+// Remembered manual override first; else the browser language, as
+// on lidar2map's first launch. Placed here, at end of script: setLang()
+// calls render()/renderLive(), which reference `let`s declared above
+// (MSE_ABORT, actualisationLocale...) — called too early, before those
+// declarations run, raises ReferenceError (temporal dead zone), as seen
+// when testing for real in the browser.
 (async function lancerParcoursInitial() {
+  await chargerAcces();
+  if (ACCES.role === "unauthenticated") {
+    setLang(localStorage.getItem("lang") || detectLang(), false);
+    appliquerRoleAcces();
+    return;
+  }
+  setLang(localStorage.getItem("lang") || detectLang(), false);
+  load();
+  // E-01: login then settings chain in the same tab. The second
+  // dialog opens only after successful auth; cancel
+  // leaves the parent waiting and ensures no worker starts.
   const parametres = new URLSearchParams(location.search);
   let continuer = true;
-  if (parametres.get("login") === "1") continuer = await authenticate();
-  if (continuer && parametres.get("setup") === "1") {
-    // Une page rechargée avec ?setup=1 après la validation (jeton périmé au
-    // remplacement du serveur, voir lireJSON()) ne rouvre le dialogue
-    // obligatoire, sans Fermer ni Échap, que si le serveur l'exige encore
-    // (audit du 26/09/2026, B04). Dans le doute, il reste obligatoire.
+  if (estAdmin() && parametres.get("login") === "1") {
+    continuer = await authenticate();
+  }
+  if (estAdmin() && continuer && parametres.get("setup") === "1") {
+    // A page reloaded with ?setup=1 after validation (stale token on
+    // server replacement, see lireJSON()) only reopens the dialog as
+    // required, with neither Close nor Escape, if the server still
+    // requires it (audit 26/09/2026, B04). When in doubt, keep it
+    // mandatory.
     let exige = true;
     try {
       const etat = await lireJSON(await fetch("/api/status", { cache: "no-store" }));
       exige = etat.initial_setup !== false;
-    } catch (erreur) { /* statut illisible : garder le dialogue obligatoire */ }
+    } catch (erreur) { /* unreadable status: keep the dialog mandatory */ }
     if (exige) {
       await ouvrirReglages(true);
     } else {

@@ -1,7 +1,7 @@
-# Pièces de test
+﻿# Test fixtures
 
-`clip_usb_reel_neutre.mp4` : un vrai clip de détection enregistré sur la clé USB d'un Sync Module Blink (caméra de bureau, 2026-10-05), 1280x720, 21,5 s, 1,6 Mo, publié tel quel, octet pour octet. Il montre un objet sombre devant une étagère blanche : personne, rien d'identifiable. Sa piste audio ne contient que le bruit de fond du micro (niveau moyen environ -51 dB, crête -34 dB), vérifié avant publication.
+`clip_usb_reel_neutre.mp4`: a real detection clip recorded on a Blink Sync Module USB stick (desk camera, 2026-10-05), 1280x720, 21.5 s, 1.6 MB, published as-is, byte for byte. It shows a dark object in front of a white shelf: no person, nothing identifiable. Its audio track is only microphone background noise (average level about -51 dB, peak -34 dB), verified before publication.
 
-Il sert à une chose précise : chaque clip enregistré sur la clé USB d'un Sync Module contient une unité d'accès H.264 sans image, que `ffprobe` signale par `missing picture in access unit with size 9` alors que la vidéo est complète (issue #49). Les clips fabriqués par FFmpeg ou venus du cloud n'ont pas cette particularité, et c'est pourquoi la CI n'a jamais vu ce défaut. Voir `test_validation_clip_usb_reel.py`.
+It serves one precise purpose: every clip recorded on a Sync Module USB stick contains an H.264 access unit with no picture, which `ffprobe` reports as `missing picture in access unit with size 9` even though the video is complete (issue #49). Clips made by FFmpeg or from the cloud do not have this quirk, which is why CI never saw this defect. See `test_validation_clip_usb_reel.py`.
 
-Ne remplacez pas ce fichier par un clip retouché : le test en vérifie l'empreinte SHA-256.
+Do not replace this file with an edited clip: the test checks its SHA-256 fingerprint.

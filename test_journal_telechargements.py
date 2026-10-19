@@ -95,7 +95,7 @@ class JournalTelechargementsUnPassage(unittest.IsolatedAsyncioTestCase):
                 ligne,
                 rf"^\d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d  {source}  Jardin/.+\.mp4  {len(VIDEO)} o$")
         # La ligne de notification porte le même nombre que le toast.
-        self.assertTrue(lignes[-1].endswith("  notification  2 clip(s) annoncé(s)"), lignes)
+        self.assertTrue(lignes[-1].endswith("  notification  2 clip(s) announced"), lignes)
         # Aucun identifiant de compte ni URL dans le journal.
         self.assertFalse(any("http" in l or "network" in l for l in lignes))
 

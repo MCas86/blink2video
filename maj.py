@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Mise à jour depuis les releases GitHub.
+"""Update from GitHub releases.
 
-Deux temps, séparés parce qu'ils n'ont pas le même risque.
+Two stages, separated because they do not carry the same risk.
 
-Le premier ne coûte rien et n'engage rien : demander à GitHub quelle est la
-dernière version publiée, la comparer à la nôtre, garder la réponse en cache.
-C'est ce qui allume l'indication dans l'interface.
+The first costs nothing and commits to nothing: ask GitHub what the
+latest published version is, compare it to ours, keep the answer in cache.
+That is what lights up the indicator in the interface.
 
-Le second remplace l'installation. L'ordre y est dicté par une contrainte
-simple : un programme ne peut pas se remplacer lui-même pendant qu'il tourne,
-et sous Windows il ne peut même pas être déplacé. On télécharge donc l'archive,
-on l'extrait dans le sous-dossier ``update`` de l'installation, on vérifie que
-le nouvel exécutable répond, et c'est *lui* qu'on charge de finir le travail.
-Lancé depuis ce dossier de préparation, hors des trois éléments remplacés, il
-peut arrêter l'ancienne version, permuter les fichiers, puis relancer. Rien
-n'est touché tant que la nouvelle version n'a pas prouvé qu'elle démarre.
+The second replaces the installation. The order is dictated by a simple
+constraint: a program cannot replace itself while it is running,
+and under Windows it cannot even be moved. So we download the archive,
+extract it into the installation's ``update`` subfolder, verify that
+the new executable responds, and it is *that* one we charge with finishing the work.
+Launched from this preparation folder, outside the three replaced elements, it
+can stop the old version, swap the files, then relaunch. Nothing
+is touched until the new version has proven it starts.
 """
 
 from __future__ import annotations
@@ -41,62 +41,10 @@ from blink_tls import contexte_tls
 
 try:
     from nico579_commons import maj_install
-except ImportError:  # ce module doit rester importable sans dépendance (python -S)
+except ImportError:  # this module must stay importable without dependencies (python -S)
     maj_install = None
 
 LIBELLES = {
-    "fr": {
-        "aide_desc": "Installer la dernière version publiée.",
-        "aide_check": "dire s'il existe une version plus récente, sans rien installer",
-        "message_windows7":
-            "Mise à jour automatique désactivée pour l'édition Windows 7 "
-            "legacy : une archive Windows standard réinstallerait Python 3.12 "
-            "et ne démarrerait plus sur ce système.",
-        "empreinte_release_absente":
-            "Cette release ne fournit aucune empreinte SHA-256 : mise à jour "
-            "automatique refusée. Téléchargez-la manuellement depuis GitHub.",
-        "archive_recue": "  archive reçue : {nom} ({mo} Mo)",
-        "version_dossier_impropre": "Numéro de version impropre à un dossier : {version!r}",
-        "dossier_deja_existant":
-            "Le dossier {racine} existe déjà et n'appartient pas à "
-            "blink2video. Renommez-le avant de relancer la mise à jour.",
-        "echec_binaire_absent": "Échec : {nom} absent de l'archive.",
-        "echec_binaire_ne_demarre_pas": "Échec : le nouvel exécutable ne démarre pas ({erreur}).",
-        "echec_binaire_annonce":
-            "Échec : le nouvel exécutable annonce « {annonce} », "
-            "on attendait « {attendue} ».",
-        "binaire_verifie": "  vérifié : {annonce}",
-        "relance": "Relance : {commande}",
-        "hors_du_service":
-            "Sous le service systemd : la suite se poursuit hors de l'unité, "
-            "pour survivre à son arrêt.",
-        "racine_controle_illisible": "Mise à jour interrompue : racine de contrôle illisible.",
-        "racines_controle_multiples":
-            "Mise à jour interrompue : plusieurs racines de contrôle possibles.",
-        "pas_un_depot_git":
-            "Ces sources ne viennent pas d'un dépôt git : rien à tirer. "
-            "Téléchargez l'archive publiée, ou clonez le dépôt.",
-        "deja_a_jour": "blink2video {version} est à jour.",
-        "maj_commun": "Mise à jour par l'installateur commun.",
-        "maj_ancien_chemin": "Installateur commun impossible ici ({raison}) : mise à jour élément par élément.",
-        "echec_maj_commun": "La mise à jour a échoué : {erreur}",
-        "maj_git_pull": "Mise à jour {ancienne} vers {neuve} (git pull)",
-        "git_pull_refuse":
-            "« git pull » a refusé : des modifications locales attendent "
-            "peut-être. Rien n'a changé.",
-        "depot_version_inattendue":
-            "Le dépôt annonce {obtenue} après le tirage, on attendait {neuve}. "
-            "Relance refusée.",
-        "passage_nouvelle_version": "Passage à la nouvelle version…",
-        "archive_absente_pour_ce_systeme":
-            "La version {version} est publiée, mais sans archive "
-            "pour ce système. Voir {page}",
-        "maj_vers": "Mise à jour {ancienne} vers {neuve}",
-        "echec_maj_binaire_incorrect":
-            "Échec de la mise à jour : le nouvel exécutable n'a pas démarré correctement.",
-        "echec_maj_exception": "Échec de la mise à jour : {type}: {erreur}",
-        "version_disponible": "Version {version} disponible (vous avez {actuelle}) : {page}",
-    },
     "en": {
         "aide_desc": "Install the latest published release.",
         "aide_check": "say whether a newer release exists, without installing anything",
@@ -150,12 +98,16 @@ LIBELLES = {
         "version_disponible": "Version {version} available (you have {actuelle}): {page}",
     },
 }
+LIBELLES["fr"] = dict(LIBELLES["en"])
 
-# Les messages de la permutation (arrêt, remplacement, restauration) viennent du
-# commun : un seul texte pour les quatre applications.
+
+# Permutation messages (stop, replace, restore) come from the
+# common package: one text for the four applications.
 if maj_install is not None:
     for _langue, _textes in maj_install.LIBELLES_PERMUTATION.items():
         LIBELLES[_langue].update(_textes)
+
+LIBELLES["fr"] = dict(LIBELLES["en"])
 
 
 def msg(cle: str, **valeurs) -> str:
@@ -164,31 +116,31 @@ def msg(cle: str, **valeurs) -> str:
 
 DEPOT = "nico579/blink2video"
 CACHE = Path(".blink_maj.json")
-# Une heure. Six heures faisaient attendre une version publiée jusqu'à une
-# demi-journée (issue #35) ; une question par heure reste loin des soixante
-# que l'API de GitHub accorde par heure et par adresse sans compte. Pour ne
-# pas attendre du tout, le bouton « Vérifier les mises à jour » des réglages
-# (verifier_maintenant). L'interface, elle, lit le cache sans jamais
-# interroger GitHub à l'ouverture d'une page.
+# One hour. Six hours made a published version wait up to half a
+# day (issue #35); one query per hour stays far below the sixty
+# the GitHub API grants per hour per address without an account. To not
+# wait at all, the « Check for updates » button in settings
+# (verifier_maintenant). The interface itself reads the cache without ever
+# querying GitHub when a page opens.
 FRAICHEUR = 3600
 DOSSIER_TRAVAIL = "update"
 MARQUEUR_TRAVAIL = ".blink2video-update"
-# Avant 0.10.5, les mises à jour étaient préparées à côté de l'installation.
-# Conserver ce préfixe permet d'effacer leurs éventuels restes une dernière fois.
+# Before 0.10.5, updates were prepared next to the installation.
+# Keeping this prefix lets us erase any leftovers one last time.
 PREFIXE_TRAVAIL_HISTORIQUE = ".blink_maj_"
-# Une archive officielle fait aujourd'hui environ 120 Mo. Ces plafonds ne
-# servent pas a deviner sa taille (celle publiee par GitHub doit correspondre
-# exactement), mais a refuser avant ecriture une metadonnee manifestement
-# aberrante et a borner une archive compressee hostile.
+# An official archive is about 120 MB today. These ceilings do not
+# guess its size (the one published by GitHub must match
+# exactly), but refuse before writing a plainly absurd metadata
+# value and bound a hostile compressed archive.
 MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 4 * 1024 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 100_000
 
 
-# ------------------------------------------------------------------ détection
+# ------------------------------------------------------------------ detection
 
 def _archive_de_ce_systeme(assets: list) -> dict:
-    """L'archive publiée qui correspond à cette machine, s'il y en a une."""
+    """The published archive that matches this machine, if any."""
     if sys.platform == "win32":
         marque = "windows"
     elif sys.platform == "darwin":
@@ -203,9 +155,9 @@ def _archive_de_ce_systeme(assets: list) -> dict:
             continue
         nom = str(asset.get("name", ""))
         nom_minuscule = nom.lower()
-        # L'artefact Windows 7 reste manuel. Même s'il est ajouté par erreur à
-        # une release, un Windows récent ne doit pas le choisir à la place de
-        # l'archive officielle, qui porte elle aussi « windows » dans son nom.
+        # The Windows 7 artefact stays manual. Even if wrongly added to
+        # a release, a recent Windows must not pick it instead of
+        # the official archive, which also carries « windows » in its name.
         if marque == "windows" and "windows7" in nom_minuscule:
             continue
         suffixe = ".zip" if marque in ("windows", "macos") else ".tar.gz"
@@ -216,26 +168,26 @@ def _archive_de_ce_systeme(assets: list) -> dict:
                 "nom": nom,
                 "url": asset.get("browser_download_url"),
                 "taille": int(asset.get("size") or 0),
-                # GitHub expose aujourd'hui le digest de l'asset. Le fichier
-                # compagnon reste un repli pour les réponses d'API qui ne
-                # fourniraient pas encore ce champ.
+                # GitHub now exposes the asset digest. The companion
+                # file remains a fallback for API responses that would
+                # not yet provide this field.
                 "sha256": _archive().sha256_normalise(asset.get("digest")),
                 "checksum_url": checksum.get("browser_download_url"),
             }
     return {}
 
 
-# La recherche de la dernière release reste ICI et non dans
-# nico579_commons.maj (Verificateur), contrairement à celle des trois autres
-# applications : ce module est le programme de mise à jour, il doit s'importer
-# et fonctionner sans AUCUNE dépendance installée (c'est justement quand les
-# dépendances sont cassées qu'on en a besoin ; test_updater_reste_importable_
-# sans_dependances, python -S). Et installer() a besoin de l'archive de ce
-# système et du contrôle d'empreinte, que le Verificateur ne porte pas.
-# Spécialisation assumée, vue en comparant les jumeaux le 2026-10-06.
+# Looking up the latest release stays HERE and not in
+# nico579_commons.maj (Verificateur), unlike the other three
+# applications: this module is the update program, it must import
+# and work with NO installed dependency (it is precisely when
+# dependencies are broken that we need it; test_updater_reste_importable_
+# sans_dependances, python -S). And installer() needs this system's
+# archive and hash check, which Verificateur does not carry.
+# Assumed specialization, seen comparing the twins on 2026-10-06.
 def _ouvrir_github(url: str) -> dict:
-    """La réponse JSON de GitHub, avec les racines de contexte_tls() (celles du
-    système et de certifi : Windows 7 ne reçoit plus toutes les nouvelles)."""
+    """GitHub's JSON response, with contexte_tls() roots (system and
+    certifi: Windows 7 no longer receives all new ones)."""
     requete = urllib.request.Request(
         url, headers={"Accept": "application/vnd.github+json",
                       "User-Agent": f"blink2video/{runtime.VERSION}"})
@@ -246,11 +198,11 @@ def _ouvrir_github(url: str) -> dict:
 
 @functools.lru_cache(maxsize=None)
 def _verificateur():
-    """La recherche de la dernière release est celle de nico579_commons.maj
-    (Verificateur), la même pour les quatre applications ; ici, le contexte TLS
-    et le cache sur disque du dossier de l'application. Importée à l'usage : ce
-    module est le programme de mise à jour, il doit s'importer sans aucune
-    dépendance (test_updater_reste_importable_sans_dependances)."""
+    """Latest-release lookup is that of nico579_commons.maj
+    (Verificateur), the same for the four applications; here, the TLS context
+    and the on-disk cache in the application folder. Imported on use: this
+    module is the update program, it must import without any
+    dependency (test_updater_reste_importable_sans_dependances)."""
     from nico579_commons import maj as maj_commune
     return maj_commune.Verificateur(
         DEPOT, runtime.VERSION, fraicheur_s=FRAICHEUR, ouvrir=_ouvrir_github,
@@ -258,17 +210,17 @@ def _verificateur():
 
 
 def _version_locale() -> str:
-    """La VERSION réellement sur disque, pour qui tourne depuis les sources.
+    """The VERSION actually on disk, for whoever runs from sources.
 
-    Un bundle ne peut pas diverger de lui-même en cours de route (voir
-    `frozen()`, seule la mise à jour remplace ses fichiers, et elle redémarre
-    toujours le processus) : `runtime.VERSION` suffit alors. Depuis les
-    sources, ce fichier peut changer sous un processus déjà lancé (tirage ou
-    commit pendant que blink2video tourne) ; comparer à la constante chargée
-    à l'import ferait croire qu'une version déjà installée reste à venir, et
-    la mise à jour déclenchée depuis ce faux positif ne trouverait plus rien
-    à faire (constaté en réel : bouton « Installer » qui ne fait jamais
-    rien)."""
+    A bundle cannot diverge from itself mid-flight (see
+    `frozen()`, only the update replaces its files, and it always
+    restarts the process): `runtime.VERSION` then suffices. From
+    sources, this file can change under an already-running process (pull or
+    commit while blink2video runs); comparing to the constant loaded
+    at import would make an already-installed version look still upcoming, and
+    the update triggered from that false positive would find nothing
+    left to do (observed in the wild: « Install » button that never
+    does anything)."""
     if runtime.frozen():
         return runtime.VERSION
     try:
@@ -282,17 +234,17 @@ def _version_locale() -> str:
 
 
 def _conclure_sans_relance(message: str) -> None:
-    """Publie une conclusion de mise à jour qui n'arrête ni ne relance rien.
+    """Publishes an update conclusion that neither stops nor relaunches anything.
 
-    `installer()` et `_depuis_les_sources()` partagent une contrainte : ni un
-    « déjà à jour », ni une archive absente, ni un `git pull` refusé ne vont
-    arrêter puis relancer le serveur. La page web attend pourtant précisément
-    cette disparition-puis-retour pour savoir que c'est fini (voir son
-    commentaire « le serveur va disparaître puis revenir »). Sans ce signal,
-    le bouton reste bloqué sur « Mise à jour… » indéfiniment, sans qu'aucune
-    erreur ni « déjà à jour » ne remonte jamais (constaté en réel : clic sans
-    effet visible). `total=1` : un seul pas, pas une mesure de progression,
-    donc pas de fraction affichée (montrerTravail ne montre un N/N que si
+    `installer()` and `_depuis_les_sources()` share a constraint: neither an
+    « already up to date », nor a missing archive, nor a refused `git pull` will
+    stop then relaunch the server. The web page nevertheless expects precisely
+    this disappear-then-return to know it is done (see its
+    comment « the server will disappear then come back »). Without this signal,
+    the button stays stuck on « Updating… » indefinitely, with neither
+    error nor « already up to date » ever surfacing (observed in the wild: click with
+    no visible effect). `total=1`: a single step, not a progress measure,
+    so no fraction shown (montrerTravail only shows N/N if
     total > 1)."""
     print(message)
     runtime.travail(message, 1, 1, cle="phase.update_noop")
@@ -300,16 +252,16 @@ def _conclure_sans_relance(message: str) -> None:
 
 
 def disponible(force: bool = False, reseau: bool = True) -> dict:
-    """La version publiée si elle est plus récente que la nôtre, sinon rien.
+    """The published version if it is newer than ours, otherwise nothing.
 
-    Le cache évite d'appeler GitHub à chaque question, et sert encore quand la
-    machine est hors ligne : une mise à jour signalée hier reste vraie. Sans
-    `reseau`, on se contente de la dernière réponse : c'est ainsi que
-    l'interface répond, une requête de page n'ayant pas à attendre GitHub."""
+    The cache avoids calling GitHub on every question, and still helps when the
+    machine is offline: an update signaled yesterday remains true. Without
+    `reseau`, we settle for the last answer: that is how
+    the interface responds, a page request not having to wait for GitHub."""
     if runtime.build_windows7():
         return {}
     verificateur = _verificateur()
-    # Depuis les sources, le fichier peut changer sous un processus lancé.
+    # From sources, the file can change under a running process.
     verificateur.version_locale = _version_locale()
     verifie = verificateur.verifie_a
     if reseau and (force or verifie is None or time.time() - verifie > FRAICHEUR):
@@ -322,11 +274,11 @@ def disponible(force: bool = False, reseau: bool = True) -> dict:
 
 
 def verifier_maintenant() -> tuple:
-    """Pour le bouton « Vérifier les mises à jour » des réglages : interroge
-    GitHub sans attendre que le cache vieillisse (issue #35). Rend la version
-    plus récente, ou {}, et si GitHub a bien répondu : la page distingue
-    ainsi « déjà à jour » de « GitHub injoignable », que disponible() confond
-    exprès pour le fil de fond. L'édition Windows 7 n'en propose aucune."""
+    """For the « Check for updates » button in settings: queries
+    GitHub without waiting for the cache to age (issue #35). Returns the newer
+    version, or {}, and whether GitHub replied: the page thus distinguishes
+    « already up to date » from « GitHub unreachable », which disponible()
+    deliberately conflates for the background thread. The Windows 7 edition offers none."""
     if runtime.build_windows7():
         return {}, True
     repondu = _verificateur().verifier()
@@ -336,9 +288,9 @@ def verifier_maintenant() -> tuple:
 # --------------------------------------------------------------- installation
 
 def _archive():
-    """nico579_commons.maj_archive : choix et validation du fichier de release,
-    téléchargement vérifié, extraction sans risque. Importé à l'usage, pas à
-    l'import : ce module doit rester importable sans aucune dépendance
+    """nico579_commons.maj_archive: release file choice and validation,
+    verified download, safe extraction. Imported on use, not at
+    import: this module must stay importable without any dependency
     (test_updater_reste_importable_sans_dependances)."""
     from nico579_commons import maj_archive
     return maj_archive
@@ -346,8 +298,8 @@ def _archive():
 
 @contextlib.contextmanager
 def _en_langue_courante():
-    """Les refus du commun portent une clé et ses valeurs ; ici ils redeviennent
-    l'OSError au texte de la langue de la page, comme avant."""
+    """Common-package refusals carry a key and its values; here they become
+    OSError again with the page language text, as before."""
     try:
         yield
     except _archive().ErreurMiseAJour as erreur:
@@ -359,14 +311,14 @@ def _agent() -> str:
 
 
 def _url_release_officielle(url: str, nom: str) -> bool:
-    """Lie l'URL initiale au dépôt, au format de tag et au fichier attendus : le
-    cache de mise à jour vit dans le dossier de données, son contenu ne
-    constitue pas une autorité."""
+    """Ties the initial URL to the expected repository, tag format and file: the
+    update cache lives in the data folder; its contents are not
+    an authority."""
     return _archive().url_de_release(url, DEPOT, nom)
 
 
 def _lire_empreinte(url: str, nom_archive: str) -> str:
-    """Lit le petit fichier ``<archive>.sha256`` publié avec l'archive."""
+    """Reads the small ``<archive>.sha256`` file published with the archive."""
     with _en_langue_courante():
         return _archive().lire_empreinte(
             url, nom_archive, DEPOT, agent=_agent(), ouvrir=urllib.request.urlopen,
@@ -389,10 +341,10 @@ def _nom_archive_sur(nom) -> str:
 
 
 def _telecharger(url: str, destination: Path, taille: int, sha256: str) -> None:
-    """Rapatrie l'archive en publiant son avancement.
+    """Fetches the archive while publishing its progress.
 
-    Le même canal que le téléchargement des clips et l'assemblage : l'interface
-    montre déjà cette barre, il n'y avait rien à inventer."""
+    The same channel as clip download and assembly: the interface
+    already shows this bar, there was nothing to invent."""
     def progression(recu: int, total: int) -> None:
         runtime.travail(
             f"Téléchargement de la mise à jour ({recu // (1024 * 1024)} Mo)",
@@ -408,8 +360,8 @@ def _telecharger(url: str, destination: Path, taille: int, sha256: str) -> None:
 
 
 def _extraire(archive: Path, vers: Path) -> Path:
-    """Déballe l'archive et rend le dossier du bundle qu'elle contenait (les
-    archives publiées contiennent un unique dossier « blink2video »)."""
+    """Unpacks the archive and returns the bundle folder it contained (published
+    archives contain a single « blink2video » folder)."""
     with _en_langue_courante():
         return _archive().extraire(archive, vers, taille_max=MAX_EXTRACTED_BYTES,
                                    membres_max=MAX_ARCHIVE_MEMBERS)
@@ -421,11 +373,11 @@ def _executable(dossier: Path) -> Path:
 
 
 def _creer_dossier_travail(installe: Path, version: str) -> Path:
-    """Crée ``installe/update/<version>`` sans réutiliser une préparation.
+    """Creates ``installe/update/<version>`` without reusing a preparation.
 
-    Le marqueur distingue notre répertoire d'un éventuel dossier homonyme créé
-    par l'utilisateur : le nettoyage récursif ne touche jamais un dossier qu'il
-    ne reconnaît pas comme appartenant à blink2video.
+    The marker distinguishes our directory from a possible homonymous folder
+    created by the user: recursive cleanup never touches a folder it does
+    not recognize as belonging to blink2video.
     """
     nom_version = str(version).strip().lstrip("vV")
     if (not nom_version or nom_version in (".", "..")
@@ -439,8 +391,8 @@ def _creer_dossier_travail(installe: Path, version: str) -> Path:
         if not racine.is_dir():
             raise OSError(msg("dossier_deja_existant", racine=racine))
         if not marqueur.is_file():
-            # Une interruption entre mkdir() et l'écriture du marqueur laisse
-            # un dossier vide : il est sûr de reprendre ce cas précis.
+            # An interruption between mkdir() and writing the marker leaves
+            # an empty folder: it is safe to resume this exact case.
             if any(racine.iterdir()):
                 raise OSError(msg("dossier_deja_existant", racine=racine))
             marqueur.write_text(
@@ -450,25 +402,25 @@ def _creer_dossier_travail(installe: Path, version: str) -> Path:
         racine.mkdir()
         marqueur.write_text("Répertoire temporaire de mise à jour.\n", encoding="utf-8")
     travail = racine / nom_version
-    # Sans exist_ok : une deuxième mise à jour simultanée ne doit jamais écrire
-    # dans l'archive ou les fichiers partiels de la première.
+    # Without exist_ok: a second simultaneous update must never write
+    # into the first's archive or partial files.
     travail.mkdir()
     return travail
 
 
 def _ligne(dossier: Path, *arguments: str) -> list:
-    """Commande qui lance blink2video installé dans ce dossier.
+    """Command that launches blink2video installed in this folder.
 
-    Depuis un bundle c'est un exécutable ; depuis les sources, l'interpréteur
-    et le script. Le reste de ce module ignore la différence."""
+    From a bundle it is an executable; from sources, the interpreter
+    and the script. The rest of this module ignores the difference."""
     if runtime.frozen():
         return [str(_executable(dossier)), *arguments]
     return [sys.executable, "-u", str(dossier / f"{runtime.ENTREE}.py"), *arguments]
 
 
 def _rendre_executable(dossier: Path) -> None:
-    """Un zip ne transporte pas le bit d'exécution : macOS le perd, et la
-    quarantaine Gatekeeper s'ajoute à toute archive téléchargée."""
+    """A zip does not carry the executable bit: macOS loses it, and
+    Gatekeeper quarantine is added to every downloaded archive."""
     if sys.platform == "win32":
         return
     cible = _executable(dossier)
@@ -481,11 +433,11 @@ def _rendre_executable(dossier: Path) -> None:
 
 
 def _verifier(dossier: Path, attendue: str) -> bool:
-    """Le nouvel exécutable démarre-t-il, et annonce-t-il la bonne version ?
+    """Does the new executable start, and does it report the right version?
 
-    C'est le garde-fou de toute l'opération : tant qu'il n'a pas répondu, rien
-    n'est remplacé. Une archive tronquée ou incompatible avec le système
-    échoue ici, sur une installation encore intacte."""
+    That is the guardrail of the whole operation: until it has answered, nothing
+    is replaced. A truncated or system-incompatible archive
+    fails here, on an installation still intact."""
     binaire = _executable(dossier)
     if not binaire.is_file():
         print(msg("echec_binaire_absent", nom=binaire.name))
@@ -505,17 +457,17 @@ def _verifier(dossier: Path, attendue: str) -> bool:
     return True
 
 
-# Ce qui appartient au programme, et que la mise à jour remplace. Tout le reste
-# du dossier (clips, vidéos, registres, session Blink) appartient à
-# l'utilisateur et n'est jamais touché.
+# What belongs to the program, and what the update replaces. Everything else
+# in the folder (clips, videos, registries, Blink session) belongs to
+# the user and is never touched.
 CONTENU_DU_PROGRAMME = ("blink2video.exe", "blink2video", "_internal")
-# Noms historiques, gardés pour reconnaître l'état laissé par une version plus
-# ancienne : le commun ajoute « .lock » au nom de la réservation.
+# Historical names, kept to recognize state left by an older
+# version: the common package adds « .lock » to the reservation name.
 MARQUEUR_PERMUTATION = ".blink_maj_permutation.json"
 NOM_RESERVATION = ".blink_maj-installation"
 
-# Sans le commun (python -S), rien ne permute : la classe n'existe que pour que
-# les « except » de ce module restent valides.
+# Without the common package (python -S), nothing permutes: the class exists only so
+# this module's « except » clauses stay valid.
 RestaurationIncomplete = (maj_install.RestaurationIncomplete if maj_install
                           else type("RestaurationIncomplete", (RuntimeError,), {}))
 
@@ -526,7 +478,7 @@ def _langue() -> str:
 
 @contextlib.contextmanager
 def _reservation_installation(installe: Path):
-    """Sérialise nettoyage et permutation, indépendamment du stockage."""
+    """Serializes cleanup and permutation, independently of storage."""
     with maj_install.reservation(installe, NOM_RESERVATION, langue=_langue()):
         yield
 
@@ -536,7 +488,7 @@ def _poser(source: Path, cible: Path) -> None:
 
 
 def _permuter(neuf: Path, installe: Path) -> bool:
-    """Met les fichiers neufs à la place des anciens, ou remet tout en l'état
+    """Puts the new files in place of the old ones, or restores everything
     (maj_install.permuter)."""
     return maj_install.permuter(
         neuf, installe, CONTENU_DU_PROGRAMME, marqueur=MARQUEUR_PERMUTATION,
@@ -545,9 +497,9 @@ def _permuter(neuf: Path, installe: Path) -> bool:
 
 
 def _nettoyer_travail(installe: Path) -> None:
-    """Ce qui est propre à blink2video dans le ménage : le dossier de préparation
-    et les préparations créées à côté de l'installation par les versions
-    antérieures (elles portaient toutes ce préfixe réservé)."""
+    """What is specific to blink2video in the cleanup: the preparation folder
+    and preparations created next to the installation by earlier
+    versions (they all carried this reserved prefix)."""
     travail = installe / DOSSIER_TRAVAIL
     if (travail / MARQUEUR_TRAVAIL).is_file():
         shutil.rmtree(travail, ignore_errors=True)
@@ -556,36 +508,36 @@ def _nettoyer_travail(installe: Path) -> None:
 
 
 def _nettoyer(installe: Path) -> bool:
-    """Efface les restes d'une mise à jour précédente, au début de la suivante :
-    le programme qui permute tourne depuis ``update``, et sous Windows un
-    exécutable ne peut pas effacer le dossier dont il est issu. Rend vrai si une
-    permutation à l'ancienne a été interrompue : elle sera reprise par l'ancien
-    chemin, le seul qui sache la finir."""
+    """Erases leftovers from a previous update, at the start of the next one:
+    the program that permutes runs from ``update``, and under Windows an
+    executable cannot erase the folder it came from. Returns true if an
+    old-style permutation was interrupted: it will be resumed by the old
+    path, the only one that knows how to finish it."""
     return maj_install.nettoyer_restes(
         installe, CONTENU_DU_PROGRAMME, marqueur=MARQUEUR_PERMUTATION,
         nom_reservation=NOM_RESERVATION, apres=_nettoyer_travail, langue=_langue())
 
 
 def _relancer(installe: Path, verbes: list) -> None:
-    """Rend la machine dans l'état où la mise à jour l'a trouvée.
+    """Puts the machine back in the state the update found it in.
 
-    On relance ce qui tournait, verbe pour verbe, plutôt que la composition
-    recommandée : quelqu'un qui n'avait lancé que l'interface ne veut pas se
-    retrouver avec quatre boucles."""
+    We relaunch what was running, verb by verb, rather than the recommended
+    composition: someone who had only launched the interface does not want to
+    end up with four loops."""
     ligne = _ligne(installe, *[mot for groupe in verbes for mot in groupe])
     if not verbes:
         ligne.append("start")
     print(msg("relance", commande=" ".join(ligne)), flush=True)
     env = dict(os.environ)
     if env.pop("BLINK_UPDATE_AUTO_HOME", "") == "1":
-        # Le finaliseur seul avait besoin d'une racine de données forcée.
-        # Le programme installé doit de nouveau trouver seul son état.
+        # Only the finalizer needed a forced data root.
+        # The installed program must again find its state on its own.
         env.pop("BLINK_HOME", None)
-    # Même chose pour les fiches : seul le finaliseur devait les chercher là
-    # où la version remplacée les rangeait. Jusqu'à 0.13, c'était de toute
-    # façon la racine par défaut ; depuis 0.14, garder celle d'une version
-    # antérieure éloignerait l'instance relancée du dossier d'état, où stop
-    # la cherchera ensuite.
+    # Same for the fiches: only the finalizer had to look for them where
+    # the replaced version stored them. Until 0.13, that was anyway
+    # the default root; since 0.14, keeping one from an earlier
+    # version would put the relaunched instance away from the state folder, where stop
+    # will look for it next.
     env.pop("BLINK_CONTROL_HOME", None)
     maj_install.relancer_verbes(
         Path(ligne[0]), [ligne[1:]], cwd=installe, env=env,
@@ -594,22 +546,22 @@ def _relancer(installe: Path, verbes: list) -> None:
 
 
 def finaliser(cible: Path) -> int:
-    """Retrouve les fiches de la version à remplacer, où qu'elle les range.
+    """Finds the fiches of the version to replace, wherever it stored them.
 
-    Un lanceur récent fournit BLINK_CONTROL_HOME. Un ancien ne passe que
-    BLINK_HOME (données), même quand les fiches sont à l'installation, et
-    « update » depuis les sources ne passe rien. Candidats, donc : la racine
-    par défaut (le dossier d'état depuis 0.14, dont la reprise y déplace
-    aussi les fiches d'une instance plus ancienne encore en cours),
-    l'installation (≤ 0.13) et BLINK_HOME. Ne pas confondre une recherche
-    vide avec un arrêt réussi. Si plusieurs racines portent des fiches,
-    refuser de deviner quel ensemble arrêter.
+    A recent launcher provides BLINK_CONTROL_HOME. An older one only passes
+    BLINK_HOME (data), even when the fiches are at the installation, and
+    « update » from sources passes nothing. Candidates, therefore: the default
+    root (the state folder since 0.14, whose migration also moves
+    fiches of an older instance still running),
+    the installation (≤ 0.13) and BLINK_HOME. Do not confuse an empty search
+    with a successful stop. If several roots carry fiches,
+    refuse to guess which set to stop.
     """
-    # Sous le service systemd, ce processus fait partie de ce que « stop »
-    # va faire tomber : la suite se poursuit hors de l'unité (issue #35).
-    # Ici plutôt qu'au lancement du finaliseur, parce que c'est l'ancienne
-    # version qui le lance : une mise à jour depuis une version qui ne sait
-    # pas sortir du service en profite ainsi quand même.
+    # Under the systemd service, this process is part of what « stop »
+    # will bring down: the rest continues outside the unit (issue #35).
+    # Here rather than at finalizer launch, because it is the old
+    # version that launches it: an update from a version that does not know
+    # how to leave the service still benefits.
     import autostart
     if autostart.sortir_du_service(
             runtime.self_command("update", "--finaliser", str(cible))):
@@ -651,12 +603,12 @@ def finaliser(cible: Path) -> int:
 
 
 def _compositions_en_cours() -> list:
-    """Ce qui tourne, noté avant l'arrêt : c'est ce qu'il faudra relancer."""
+    """What is running, noted before the stop: that is what must be relaunched."""
     fiches = runtime.lire_instances()
-    # Les enfants d'un superviseur (start) ont aussi leur fiche, mais c'est
-    # lui qui les recrée : les relancer en plus doublait watch et download
-    # après chaque mise à jour. Un enfant orphelin, que ne liste aucune
-    # fiche, reste relancé.
+    # Children of a supervisor (start) also have their fiche, but it is
+    # the supervisor that recreates them: relaunching them as well doubled watch and download
+    # after every update. An orphan child, listed by no
+    # fiche, is still relaunched.
     enfants = {pid for fiche in fiches for pid in (fiche.get("enfants") or [])}
     compositions = []
     vues = set()
@@ -669,21 +621,21 @@ def _compositions_en_cours() -> list:
             vues.add(signature)
             compositions.append(verbes)
     if not compositions:
-        compositions.append([])  # Même repli sur start en l'absence d'instance.
+        compositions.append([])  # Same fallback to start when no instance.
     return compositions
 
 
 def _finaliser(cible: Path) -> int:
-    """Second temps, exécuté par la nouvelle version depuis son dossier
-    temporaire : arrêter, remplacer, relancer (maj_install.finaliser)."""
+    """Second stage, run by the new version from its temporary
+    folder: stop, replace, relaunch (maj_install.finaliser)."""
     installe = cible.resolve()
     neuf = Path(sys.executable).resolve().parent if runtime.frozen() \
         else Path(__file__).resolve().parent
 
     def arreter() -> bool:
-        # L'ancienne version de stop ne connaît pas BLINK_CONTROL_HOME. Lui
-        # transmettre aussi cette racine via BLINK_HOME évite qu'elle cherche
-        # les fiches dans les données redirigées, puis annonce « rien ne tourne ».
+        # The old version of stop does not know BLINK_CONTROL_HOME. Also
+        # passing this root via BLINK_HOME avoids it looking for
+        # fiches in redirected data, then announcing « nothing is running ».
         env_arret = dict(os.environ, BLINK_HOME=str(runtime._dossier_controle()))
         arret = runtime.lancer(_ligne(installe, "stop"), cwd=str(installe),
                                env=env_arret, stdin=subprocess.DEVNULL, check=False)
@@ -696,13 +648,13 @@ def _finaliser(cible: Path) -> int:
         else:
             print(texte, flush=True)
 
-    # Depuis les sources, « git pull » a déjà mis les fichiers en place : il n'y
-    # a rien à permuter, seulement à relancer (neuf == installe).
+    # From sources, « git pull » has already put the files in place: there is
+    # nothing to permute, only to relaunch (neuf == installe).
     return maj_install.finaliser(
         installe, neuf, CONTENU_DU_PROGRAMME,
         noter=_compositions_en_cours, arreter=arreter,
-        # lire_instances garde aussi les fiches dont seul un enfant ou un
-        # ffmpeg survit : la mort du superviseur ne suffit pas.
+        # lire_instances also keeps fiches where only a child or an
+        # ffmpeg survives: the supervisor's death is not enough.
         vivants=lambda: bool(runtime.lire_instances()),
         relancer=lambda compositions: _relancer_tout(installe, compositions),
         dire=dire, marqueur=MARQUEUR_PERMUTATION, nom_reservation=NOM_RESERVATION,
@@ -711,11 +663,11 @@ def _finaliser(cible: Path) -> int:
 
 
 def _relancer_tout(installe: Path, compositions: list) -> None:
-    """Relance ce qui tournait. Sorti d'une unité systemd pour survivre à
-    son arrêt (autostart.sortir_du_service), c'est elle qu'on relance :
-    blink2video retrouve la garde de son service, plutôt que de tourner
-    détaché dans le scope transitoire. Sinon, chaque composition, comme
-    avant."""
+    """Relaunches what was running. Having left a systemd unit to survive
+    its stop (autostart.sortir_du_service), that is what we relaunch:
+    blink2video returns under its service's guard, rather than running
+    detached in the transient scope. Otherwise, each composition, as
+    before."""
     import autostart
     unite = autostart.relancer_service()
     if unite:
@@ -726,11 +678,11 @@ def _relancer_tout(installe: Path, compositions: list) -> None:
 
 
 def _depuis_les_sources() -> int:
-    """Mise à jour d'une installation en clair : le dépôt fait office d'archive.
+    """Update of a plain-source installation: the repository acts as the archive.
 
-    Même déroulé que pour un bundle, avec « git pull » à la place du
-    téléchargement, et la même règle : on ne touche à rien tant que la nouvelle
-    version n'est pas là, et c'est elle qui arrête et relance."""
+    Same flow as for a bundle, with « git pull » instead of
+    download, and the same rule: touch nothing until the new
+    version is there, and it is the one that stops and relaunches."""
     dossier = Path(__file__).resolve().parent
     if not (dossier / ".git").exists():
         _conclure_sans_relance(msg("pas_un_depot_git"))
@@ -749,8 +701,8 @@ def _depuis_les_sources() -> int:
         _conclure_sans_relance(msg("git_pull_refuse"))
         return 1
 
-    # Notre propre VERSION est celle d'avant le tirage : c'est le fichier sur
-    # disque qui dit ce qui vient d'arriver.
+    # Our own VERSION is the one from before the pull: it is the file on
+    # disk that says what just arrived.
     obtenue = _version_locale()
     if obtenue != neuve["version"]:
         _conclure_sans_relance(
@@ -767,7 +719,7 @@ def _depuis_les_sources() -> int:
 
 
 def installer(force: bool = False) -> int:
-    """Premier temps : chercher, télécharger, vérifier, puis passer la main."""
+    """First stage: look up, download, verify, then hand over."""
     if runtime.build_windows7():
         print(msg("message_windows7"))
         return 0
@@ -781,13 +733,13 @@ def installer(force: bool = False) -> int:
         _conclure_sans_relance(str(erreur))
         return 1
 
-    # Depuis la 0.23, l'installateur commun (le même que lidar2map, gpxsolar et
-    # watch2notif : échange du dossier entier par un assistant externe, vérification de
-    # la nouvelle version après la relance, verrou entre processus). Deux cas gardent
-    # l'ancienne permutation élément par élément : une permutation interrompue, qu'elle
-    # seule sait reprendre, et une installation que le commun refuse de remplacer
-    # (dossier parent protégé en écriture, contenu inattendu) : la permutation n'a
-    # besoin que du dossier d'installation.
+    # Since 0.23, the common installer (the same as lidar2map, gpxsolar and
+    # watch2notif: whole-folder swap by an external assistant, verification of
+    # the new version after relaunch, inter-process lock). Two cases keep
+    # the old file-by-file permutation: an interrupted permutation, which it
+    # alone knows how to resume, and an installation the common installer refuses to replace
+    # (parent folder write-protected, unexpected contents): permutation only
+    # needs the installation folder.
     if not interrompue:
         possible, raison = _possible_commun()
         if possible:
@@ -830,17 +782,17 @@ def installer(force: bool = False) -> int:
         return 1
     runtime.fin_travail()
 
-    # La suite appartient à la nouvelle version : elle seule peut remplacer
-    # celle-ci sans se scier la branche. Détachée, car ce processus fait partie
-    # de ce qu'elle va arrêter.
+    # The rest belongs to the new version: it alone can replace
+    # this one without sawing off the branch. Detached, because this process is part
+    # of what it will stop.
     print(msg("passage_nouvelle_version"))
-    # Le finaliseur temporaire doit connaître séparément les données et les
-    # fiches de contrôle. Imposer les données via BLINK_HOME seul changeait
-    # aussi la recherche des processus et rendait l'ancienne instance invisible.
-    # Les nommer explicitement protège aussi d'un changement d'emplacement par
-    # défaut dans la version qui arrive (0.14 a déplacé l'état). Respecter un
-    # BLINK_HOME fourni par l'utilisateur, sinon retirer cette surcharge
-    # temporaire à la relance.
+    # The temporary finalizer must know data and control
+    # fiches separately. Forcing data via BLINK_HOME alone also changed
+    # process lookup and made the old instance invisible.
+    # Naming them explicitly also protects against a default location
+    # change in the arriving version (0.14 moved state). Honour a
+    # BLINK_HOME provided by the user, otherwise remove this temporary
+    # override on relaunch.
     env = dict(os.environ, BLINK_HOME=str(runtime.app_dir()),
                BLINK_CONTROL_HOME=str(runtime._dossier_controle()))
     if not os.environ.get("BLINK_HOME"):
@@ -854,14 +806,14 @@ def installer(force: bool = False) -> int:
     return 0
 
 
-# ------------------------------------------------- installateur commun (0.23)
+# ------------------------------------------------- common installer (0.23)
 
 def _application_commune():
-    """Ce que l'installateur commun doit savoir de blink2video. Ses données vivent hors
-    du dossier d'installation depuis la 0.14 : rien à recopier. Les noms tolérés sont les
-    restes possibles de l'ancien mécanisme. Le service systemd ou l'agent launchd sont
-    ceux sous lesquels CE processus tourne (le nom dépend de la composition lancée) :
-    l'assistant les relance alors par leur nom."""
+    """What the common installer must know about blink2video. Its data lives outside
+    the installation folder since 0.14: nothing to copy. Tolerated names are possible
+    leftovers of the old mechanism. The systemd service or launchd agent are
+    those under which THIS process runs (the name depends on the launched composition):
+    the assistant then relaunches them by name."""
     import autostart
     label = os.environ.get("XPC_SERVICE_NAME", "")
     return maj_install.Application(
@@ -873,9 +825,9 @@ def _application_commune():
 
 
 def _disposition_commune(app=None):
-    """Disposition de l'installation courante. Les noms d'archives suivent la convention
-    commune (blink2video-<système>-<arch>), mais leur dossier racine s'appelle
-    simplement « blink2video » sur tous les systèmes."""
+    """Layout of the current installation. Archive names follow the common
+    convention (blink2video-<system>-<arch>), but their root folder is called
+    simply « blink2video » on all systems."""
     app = app or _application_commune()
     fichier, genre, _racine = maj_install.archive_standard(
         "blink2video", racine_macos="blink2video")
@@ -884,17 +836,17 @@ def _disposition_commune(app=None):
 
 
 def _possible_commun() -> tuple:
-    """(vrai, "") si l'installateur commun peut remplacer cette installation."""
+    """(true, "") if the common installer can replace this installation."""
     if maj_install is None:
         return False, "source_mode"
     return maj_install.possible(_disposition_commune)
 
 
 def _lancer_installateur_commun() -> int:
-    """Premier temps : se relancer détaché, puis rendre la main aussitôt. Lancé par
-    « serve » (bouton de la page) ou par le menu de l'icône, ce processus fait partie de
-    l'arbre que « stop » va abattre (taskkill /T sous Windows) : le second temps, dont
-    le parent a déjà disparu, lui échappe et peut conduire l'arrêt jusqu'au bout."""
+    """First stage: relaunch detached, then return immediately. Launched by
+    « serve » (page button) or by the icon menu, this process is part of
+    the tree that « stop » will kill (taskkill /T under Windows): the second stage, whose
+    parent has already gone, escapes it and can drive the stop through."""
     runtime.demarrer(
         runtime.self_command("update", "--commun"), cwd=str(runtime.app_dir()),
         stdin=subprocess.DEVNULL,
@@ -904,8 +856,8 @@ def _lancer_installateur_commun() -> int:
 
 
 def _pids_en_cours() -> list:
-    """Tous les processus de blink2video notés dans les fiches (superviseurs et leurs
-    enfants) : l'assistant attend la fin de chacun avant d'échanger les dossiers."""
+    """All blink2video processes noted in the fiches (supervisors and their
+    children): the assistant waits for each to end before swapping folders."""
     pids = []
     for fiche in runtime.lire_instances():
         for pid in [fiche.get("pid"), *(fiche.get("enfants") or [])]:
@@ -914,43 +866,25 @@ def _pids_en_cours() -> list:
     return list(dict.fromkeys(pids))
 
 
-def _sans_hote_vide(groupe: list) -> list:
-    """Le groupe sans « --trusted-host "" », que serve retrouve par défaut.
-
-    L'assistant de mise à jour de nico579-commons 0.5.0 perd les arguments
-    vides : le mot suivant devenait la valeur de l'option (2026-10-17, voir
-    runtime._hote_vide_perdu). Ne lui en confier aucun."""
-    resultat = []
-    indice = 0
-    while indice < len(groupe):
-        if (groupe[indice] == "--trusted-host" and indice + 1 < len(groupe)
-                and groupe[indice + 1] == ""):
-            indice += 2
-            continue
-        resultat.append(groupe[indice])
-        indice += 1
-    return resultat
-
-
 def _verbes_a_relancer() -> list:
-    """Ce qui tournait, une ligne de commande par composition, comme _relancer() :
-    les verbes d'une composition à la suite, « start » si rien ne tournait."""
-    return [[mot for groupe in verbes for mot in _sans_hote_vide(groupe)] or ["start"]
+    """What was running, one command line per composition, like _relancer():
+    the verbs of a composition in sequence, « start » if nothing was running."""
+    return [[mot for groupe in verbes for mot in groupe] or ["start"]
             for verbes in _compositions_en_cours()]
 
 
 def _arreter_tout(installe: Path) -> None:
-    """Arrête toutes les instances, comme le finaliseur de l'ancien chemin."""
+    """Stops all instances, like the finalizer of the old path."""
     runtime.lancer(_ligne(installe, "stop"), cwd=str(installe), stdin=subprocess.DEVNULL,
                    check=False)
 
 
 def _installer_commun() -> int:
-    """Second temps : l'installateur commun conduit tout (verrou, droits, ménage,
-    téléchargement vérifié, auto-test de la nouvelle version, assistant externe), puis
-    blink2video s'arrête ; l'assistant attend la fin de chaque processus, échange les
-    dossiers, relance ce qui tournait et vérifie que la nouvelle version tient, sinon
-    remet l'ancienne."""
+    """Second stage: the common installer drives everything (lock, rights, cleanup,
+    verified download, new-version self-test, external assistant), then
+    blink2video stops; the assistant waits for each process to end, swaps the
+    folders, relaunches what was running and checks the new version holds, otherwise
+    restores the old one."""
     installe = Path(sys.executable).resolve().parent
     app = _application_commune()
     verificateur = _verificateur()
@@ -962,8 +896,8 @@ def _installer_commun() -> int:
         verbes_relance=_verbes_a_relancer, pids_a_attendre=_pids_en_cours)
     if not installateur.demarrer():
         return 1
-    # La page suit le même canal qu'avant : la barre de téléchargement, puis
-    # l'installation, puis la disparition et le retour du serveur.
+    # The page follows the same channel as before: the download bar, then
+    # installation, then the server disappearing and coming back.
     while installateur._fil is not None and installateur._fil.is_alive():
         etat = installateur.etat()
         if etat["etat"] == "telechargement" and etat["total"]:
@@ -990,14 +924,14 @@ def main() -> int:
         description=msg("aide_desc"))
     analyseur.add_argument("--check", action="store_true", help=msg("aide_check"))
     analyseur.add_argument("--finaliser", metavar="DOSSIER",
-                           help=argparse.SUPPRESS)  # usage interne
+                           help=argparse.SUPPRESS)  # internal use
     analyseur.add_argument("--commun", action="store_true",
-                           help=argparse.SUPPRESS)  # usage interne
+                           help=argparse.SUPPRESS)  # internal use
     arguments = analyseur.parse_args()
 
     if arguments.finaliser:
-        # Encore appelé par une version ≤ 0.22 qui installe celle-ci : elle télécharge,
-        # puis passe la main à la nouvelle avec « update --finaliser » (transition).
+        # Still called by a version ≤ 0.22 that installs this one: it downloads,
+        # then hands over to the new one with « update --finaliser » (transition).
         return finaliser(Path(arguments.finaliser))
     if arguments.commun:
         return _installer_commun()

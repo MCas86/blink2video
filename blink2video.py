@@ -1,27 +1,26 @@
-"""Point d'entrée : dispatch des verbes, rien d'autre.
+"""Entry point: verb dispatch only.
 
-Depuis l'étape 8 du plan de remédiation (AUDIT-2026-08-13.md, section 20),
-la logique métier vit dans cinq modules séparés :
+Since step 8 of the remediation plan (AUDIT-2026-08-13.md, section 20),
+business logic lives in five separate modules:
 
-- blink_auth.py     : session Blink, identifiants, 2FA (8.1) ;
-- blink_models.py   : clips USB/cloud, identité, chemins (8.2) ;
-- blink_registre.py : registre incrémental, corrélation, réparation (8.3) ;
-- blink_engine.py   : un passage de téléchargement, en boucle ou une fois (8.4) ;
-- blink_cli.py       : grammaire, verbes délégués, supervision (8.5).
+- blink_auth.py     : Blink session, credentials, 2FA (8.1) ;
+- blink_models.py   : USB/cloud clips, identity, paths (8.2) ;
+- blink_registre.py : incremental registry, correlation, repair (8.3) ;
+- blink_engine.py   : one download pass, looping or once (8.4) ;
+- blink_cli.py       : grammar, delegated verbs, supervision (8.5).
 
-Ce fichier ne fait plus que router (8.6). `runtime.bootstrap()` n'est plus
-appelé ici : blink_cli.py le fait, juste avant d'importer les modules qui ont
-réellement besoin d'aiohttp ou de blinkpy (main, la branche « start » de
-executer, accueillir) — jamais pour --help, --version, stop, open ou update
+This file only routes (8.6). `runtime.bootstrap()` is no longer
+called here: blink_cli.py does it, just before importing modules that
+actually need aiohttp or blinkpy (main, the "start" branch of
+executer, accueillir) — never for --help, --version, stop, open or update
 (O-06/8.7/8.8)."""
 
 import sys
 
-# asyncio/datetime/time ne servent à rien ici : ce sont des modules stdlib
-# partagés (Python les met en cache une seule fois), gardés importés pour que
-# les tests qui patchent `blink2video.time`/`.asyncio`/`.dt` continuent
-# d'atteindre le même objet que blink_engine.py/blink_cli.py, sans connaître
-# ces modules internes.
+# asyncio/datetime/time are unused here: they are shared stdlib modules
+# (Python caches them once), kept imported so that tests which patch
+# `blink2video.time`/`.asyncio`/`.dt` still reach the same object as
+# blink_engine.py/blink_cli.py, without knowing those internal modules.
 import asyncio  # noqa: F401
 import datetime as dt  # noqa: F401
 import time  # noqa: F401
@@ -29,18 +28,18 @@ import time  # noqa: F401
 import runtime
 
 if __name__ == "__main__" and sys.argv[1:2] == ["--self-test-version"]:
-    # La mise à jour commune (nico579_commons.maj_install) lance ainsi la version
-    # téléchargée, depuis son dossier de préparation, avant de l'installer : 0 si elle
-    # se reconnaît, 1 sinon. Tout en haut, avant preparer_etat() : ce lancement ne doit
-    # toucher à aucun dossier d'état ni de sorties.
+    # The shared updater (nico579_commons.maj_install) launches the downloaded
+    # version this way, from its staging folder, before installing it: 0 if it
+    # recognizes itself, 1 otherwise. Right at the top, before preparer_etat():
+    # this launch must not touch any state or output folders.
     attendue = (sys.argv[2] if len(sys.argv) > 2 else "").strip().lstrip("vV")
     raise SystemExit(0 if attendue == runtime.VERSION else 1)
 
 if __name__ == "__main__":
-    # Avant blink_cli : ses modules tirent des constantes du dossier d'état
-    # et de celui des sorties dès leur import. Reprend, une fois, l'état
-    # d'une version ≤ 0.13. Au lancement seulement : un test qui importe ce
-    # module ne doit jamais toucher au vrai dossier d'état.
+    # Before blink_cli: its modules pull constants from the state folder
+    # and the outputs folder as soon as they are imported. Once, migrates
+    # state from a version ≤ 0.13. At launch only: a test that imports this
+    # module must never touch the real state folder.
     runtime.preparer_etat()
 
 from blink_cli import msg, route  # noqa: E402

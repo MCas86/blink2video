@@ -1,11 +1,11 @@
-"""Authentification Blink : session enregistrée, identifiants, 2FA.
+"""Blink authentication: saved session, credentials, 2FA.
 
-Extrait de blink2video.py à l'étape 8 du plan de remédiation
-(AUDIT-2026-08-13.md, section 20, 8.1) : ce fichier ne connaît que la
-session, jamais les clips ni le registre. Il suppose que runtime.bootstrap()
-a déjà tourné (l'appelant décide quand : voir blink_cli.py et O-06/8.7)."""
+Extracted from blink2video.py at step 8 of the remediation plan
+(AUDIT-2026-08-13.md, section 20, 8.1): this file only knows the
+session, never clips or the registry. It assumes runtime.bootstrap()
+has already run (the caller decides when: see blink_cli.py and O-06/8.7)."""
 
-from __future__ import annotations  # Python 3.8 (build Windows 7) : les annotations "X | None" ne s'évaluent qu'à l'écriture des chaînes, jamais à l'exécution.
+from __future__ import annotations  # Python 3.8 (Windows 7 build): "X | None" annotations are only evaluated when writing strings, never at runtime.
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -26,39 +26,23 @@ from aiohttp import ClientSession, TCPConnector
 from blinkpy.auth import Auth, BlinkTwoFARequiredError
 from blinkpy.blinkpy import Blink
 
-# I-01 : merge_daily.py, serve.py et watch.py dérivent déjà leurs chemins par
-# défaut de runtime.app_dir() (BASE_DIR) ; blink2video.py était le seul des
-# quatre à utiliser des chemins relatifs, résolus au hasard du répertoire
-# courant du lancement plutôt que de la racine de données.
+# I-01: merge_daily.py, serve.py and watch.py already derive their default
+# paths from runtime.app_dir() (BASE_DIR); blink2video.py was the only one of
+# the four using relative paths, resolved by chance of the launch
+# working directory rather than the data root.
 BASE_DIR = runtime.app_dir()
 CONFIG = BASE_DIR / "blink_auth.json"
 
-# I-02/4.5 : liste blanche des champs persistés. blink.auth.login_attributes
-# renvoie self.data au complet, qui contient encore username/password tels
-# que passés à Auth() ; s'y fier sans filtrer laisserait fuir le mot de passe
-# dès qu'un champ de plus y apparaîtrait un jour côté blinkpy.
+# I-02/4.5: whitelist of persisted fields. blink.auth.login_attributes
+# returns self.data in full, which still contains username/password as
+# passed to Auth(); trusting it without filtering would leak the password
+# as soon as one more field appeared there someday on the blinkpy side.
 AUTH_FIELDS = (
     "username", "token", "expires_in", "expiration_date", "refresh_token",
     "host", "region_id", "client_id", "account_id", "user_id", "hardware_id",
 )
 
 LIBELLES = {
-    "fr": {
-        "session_illisible_fichier":
-            "Session illisible [fichier]. Une nouvelle connexion est nécessaire.",
-        "session_illisible_json":
-            "Session illisible [données JSON]. Une nouvelle connexion est nécessaire.",
-        "session_illisible_schema":
-            "Session illisible [schéma JSON]. Une nouvelle connexion est nécessaire.",
-        "connexion_titre": "\nConnexion au compte Blink",
-        "prompt_email": "Adresse e-mail : ",
-        "prompt_password": "Mot de passe (non affiché) : ",
-        "prompt_code": "Code Blink : ",
-        "code_envoye": "\nUn code de vérification Blink vient d'être envoyé.",
-        "code_refuse": "Code refusé. {remaining} tentative(s) restante(s).",
-        "session_reutilisee": "Réutilisation de la session enregistrée dans {config}...",
-        "session_invalide": "La session enregistrée n'est plus valide.",
-    },
     "en": {
         "session_illisible_fichier":
             "Session unreadable [file]. Signing in again is required.",
@@ -76,6 +60,8 @@ LIBELLES = {
         "session_invalide": "The saved session is no longer valid.",
     },
 }
+LIBELLES["fr"] = dict(LIBELLES["en"])
+
 
 
 def _(cle: str, **valeurs) -> str:
@@ -83,36 +69,36 @@ def _(cle: str, **valeurs) -> str:
 
 
 def contexte_tls() -> ssl.SSLContext:
-    """Étend les racines système avec le magasin Mozilla livré par certifi.
+    """Extends the system roots with the Mozilla store shipped by certifi.
 
-    Windows 7 ne reçoit plus forcément les nouvelles autorités racines. On
-    conserve son magasin (notamment utile derrière un proxy d'entreprise) et
-    on lui ajoute celui de certifi, sans jamais désactiver la validation TLS ni
-    le contrôle du nom d'hôte.
+    Windows 7 no longer necessarily receives new root authorities. We
+    keep its store (notably useful behind an enterprise proxy) and
+    add certifi's, without ever disabling TLS validation or
+    hostname checking.
     """
     return blink_tls.contexte_tls()
 
 
 def session_http() -> ClientSession:
-    """Crée une session aiohttp dont toutes les requêtes utilisent ce magasin."""
+    """Creates an aiohttp session whose every request uses this store."""
     return ClientSession(connector=TCPConnector(ssl=contexte_tls()))
 
 
 @asynccontextmanager
 async def session_http_temporaire():
-    """Ferme aussi le transport SSL avant que la boucle courte disparaisse."""
+    """Also closes the SSL transport before the short loop disappears."""
     session = session_http()
     try:
         yield session
     finally:
         await session.close()
-        # aiohttp recommande 250 ms pour laisser asyncio fermer ses transports
-        # SSL ; nécessaire notamment avec la ProactorEventLoop de Python 3.8.
+        # aiohttp recommends 250 ms to let asyncio close its SSL
+        # transports; needed especially with Python 3.8's ProactorEventLoop.
         await asyncio.sleep(0.250)
 
 
 def load_saved_session() -> dict | None:
-    """Charge une session Blink sans jamais réutiliser un mot de passe stocké."""
+    """Loads a Blink session without ever reusing a stored password."""
     if not CONFIG.exists():
         return None
 
@@ -132,15 +118,15 @@ def load_saved_session() -> dict | None:
     if not isinstance(data.get("refresh_token"), str) or not data["refresh_token"]:
         return None
 
-    # Auth.startup() exige ces clés, même lorsqu'un refresh_token est présent.
-    # Une chaîne vide évite de conserver le mot de passe sur disque.
+    # Auth.startup() requires these keys, even when a refresh_token is present.
+    # An empty string avoids keeping the password on disk.
     data["username"] = data.get("username", "")
     data["password"] = ""
     return data
 
 
 def ask_credentials() -> dict:
-    """Demande les identifiants dans le terminal."""
+    """Asks for credentials in the terminal."""
     print(_("connexion_titre"))
     username = input(_("prompt_email")).strip()
     password = getpass.getpass(_("prompt_password"))
@@ -148,13 +134,13 @@ def ask_credentials() -> dict:
 
 
 def make_blink(session: ClientSession, login_data: dict) -> Blink:
-    """Construit un client Blink avec un flux d'authentification explicite.
+    """Builds a Blink client with an explicit authentication flow.
 
-    I-03 : Auth rafraîchit son jeton en mémoire au fil des requêtes (voir
-    Auth.query dans blinkpy), sans jamais l'écrire sur disque de lui-même. Une
-    boucle de fond peut tourner des heures : sans persistance à chaque
-    rafraîchissement, un crash ou un simple redémarrage retombe sur un jeton
-    périmé. `callback` est le point d'extension prévu par blinkpy pour cela."""
+    I-03: Auth refreshes its token in memory across requests (see
+    Auth.query in blinkpy), without ever writing it to disk itself. A
+    background loop can run for hours: without persistence on every
+    refresh, a crash or simple restart falls back on a stale token.
+    `callback` is the extension point blinkpy provides for that."""
     blink = Blink(session=session)
     blink.auth = Auth(login_data, no_prompt=True, session=session,
                       callback=lambda: save_session(blink))
@@ -162,17 +148,17 @@ def make_blink(session: ClientSession, login_data: dict) -> Blink:
 
 
 async def prompt_2fa_code(attempt: int) -> str:
-    """Demande le code de vérification dans le terminal."""
+    """Asks for the verification code in the terminal."""
     return input(_("prompt_code")).strip()
 
 
 async def finish_login(blink: Blink, ask_code=None) -> bool:
-    """Démarre Blink et termine éventuellement la vérification en deux étapes.
+    """Starts Blink and optionally completes two-step verification.
 
-    `ask_code` permet de poser la question ailleurs que dans le terminal :
-    serve.py y branche un formulaire de navigateur. C'est une coroutine pour
-    que l'attente du code n'immobilise pas la boucle d'événements pendant que
-    la session Blink reste ouverte."""
+    `ask_code` lets the question be asked elsewhere than in the terminal:
+    serve.py wires a browser form there. It is a coroutine so
+    waiting for the code does not freeze the event loop while the
+    Blink session stays open."""
     try:
         connected = await blink.start()
     except BlinkTwoFARequiredError:
@@ -191,11 +177,11 @@ async def finish_login(blink: Blink, ask_code=None) -> bool:
 
 
 async def connect_saved(session: ClientSession):
-    """Ouvre une session Blink à partir du fichier enregistré, sans rien demander.
+    """Opens a Blink session from the saved file, without asking anything.
 
-    Distinct de `connect`, qui se rabat sur le terminal quand la session n'est
-    plus valable : derrière un serveur il n'y a personne pour répondre, mieux
-    vaut renvoyer None et laisser l'appelant proposer une reconnexion."""
+    Distinct from `connect`, which falls back to the terminal when the session is
+    no longer valid: behind a server there is nobody to answer, better
+    to return None and let the caller propose a reconnection."""
     saved = load_saved_session()
     if not saved:
         return None
@@ -207,15 +193,15 @@ async def connect_saved(session: ClientSession):
 
 
 async def _no_code(attempt: int) -> str:
-    """Refuse la vérification en deux étapes hors session interactive."""
+    """Refuses two-step verification outside an interactive session."""
     return ""
 
 
 async def login(session: ClientSession, username: str, password: str, ask_code=None):
-    """Ouvre une session Blink à partir d'identifiants déjà recueillis.
+    """Opens a Blink session from credentials already collected.
 
-    Voie d'entrée de serve.py, qui les collecte dans le navigateur. Le mot de
-    passe ne sert qu'ici : `save_session` ne l'écrit jamais sur disque."""
+    Entry point for serve.py, which collects them in the browser. The password
+    is only used here: `save_session` never writes it to disk."""
     blink = make_blink(session, {"username": username, "password": password})
     if not await finish_login(blink, ask_code):
         return None
@@ -224,22 +210,22 @@ async def login(session: ClientSession, username: str, password: str, ask_code=N
 
 
 def save_session(blink: Blink) -> None:
-    """Sauvegarde les jetons de session, jamais le mot de passe Blink.
+    """Saves session tokens, never the Blink password.
 
-    Deux à quatre processus peuvent se connecter en parallèle au démarrage
-    (download USB, download cloud, watch, serve), et ce callback est aussi
-    celui que l'auto-rafraîchissement de blinkpy déclenche en cours de route
-    (voir make_blink, I-03) : deux écritures peuvent donc se chevaucher sans
-    ordre garanti. Trois précautions : un temporaire propre à ce processus
-    (I-02, l'ancien `blink_auth.tmp` était partagé par tous), un horodatage
-    interne qui empêche une sauvegarde en retard d'écraser une plus récente
-    déjà sur disque, et - depuis la revue de code du 0eab463, bug #7 - un
-    verrou (`runtime.verrou`, déjà utilisé ailleurs pour le Sync Module et
-    l'assemblage) qui rend la lecture-puis-décision-puis-écriture atomique :
-    sans lui, deux processus pouvaient chacun lire l'ancien contenu, chacun
-    conclure « le mien est plus récent », puis écrire dans un ordre non
-    garanti - celui qui finit en second écrase le jeton le plus récent,
-    quel que soit l'horodatage qu'il portait."""
+    Two to four processes can connect in parallel at startup
+    (USB download, cloud download, watch, serve), and this callback is also
+    the one blinkpy's auto-refresh triggers along the way
+    (see make_blink, I-03): two writes can therefore overlap without
+    guaranteed order. Three precautions: a temporary unique to this process
+    (I-02, the old `blink_auth.tmp` was shared by all), an internal timestamp
+    that prevents a late save from overwriting a more recent one
+    already on disk, and - since the 0eab463 code review, bug #7 - a
+    lock (`runtime.verrou`, already used elsewhere for the Sync Module and
+    assembly) that makes the read-then-decide-then-write atomic:
+    without it, two processes could each read the old contents, each
+    conclude « mine is more recent », then write in unguaranteed
+    order - whichever finishes second overwrites the newest token,
+    whatever timestamp it carried."""
     complet = blink.auth.login_attributes
     data = {champ: complet[champ] for champ in AUTH_FIELDS if champ in complet}
     data["updated_at"] = time.time()
@@ -253,11 +239,11 @@ def save_session(blink: Blink) -> None:
                 except (OSError, json.JSONDecodeError):
                     precedent = None
             if isinstance(precedent, dict):
-                # Un updated_at mal formé (fichier trafiqué à la main, JSON
-                # partiellement écrit puis récupéré) ne doit pas empêcher la
-                # sauvegarde : traité comme aucune préférence connue (0),
-                # pas comme une exception qui remonte jusqu'au callback de
-                # rafraîchissement automatique de Blink (revue du 27/08,
+                # A malformed updated_at (hand-tampered file, partially
+                # written then recovered JSON) must not prevent the
+                # save: treated as no known preference (0),
+                # not as an exception that bubbles up to Blink's automatic
+                # refresh callback (review of 27/08,
                 # bug 7).
                 try:
                     precedent_updated_at = float(precedent.get("updated_at") or 0)
@@ -278,16 +264,16 @@ def save_session(blink: Blink) -> None:
             finally:
                 temporary.unlink(missing_ok=True)
     except runtime.BusyError:
-        # Un autre processus tient le verrou depuis plus de 5 s pour une
-        # simple écriture de jeton : plus probable qu'il vient de finir la
-        # sienne (déjà à jour) qu'un vrai blocage - abandonner ici plutôt que
-        # de faire attendre l'appelant plus longtemps pour une sauvegarde
-        # redondante.
+        # Another process has held the lock for more than 5 s for a
+        # simple token write: more likely it just finished its
+        # own (already up to date) than a real deadlock - abandon here rather than
+        # make the caller wait longer for a redundant
+        # save.
         pass
 
 
 async def connect(session: ClientSession) -> Blink | None:
-    """Ouvre une session Blink, avec reconnexion interactive en dernier recours."""
+    """Opens a Blink session, with interactive reconnection as last resort."""
     saved_session = load_saved_session()
 
     if saved_session:
@@ -310,12 +296,12 @@ async def connect(session: ClientSession) -> Blink | None:
 
 
 async def preflight() -> dict:
-    """Contrôle read-only de la session enregistrée (E-01, section 17.3).
+    """Read-only check of the saved session (E-01, section 17.3).
 
-    Strictement sans effet de bord : aucun armement, direct, manifeste USB,
-    téléchargement, assemblage ni notification. Sert uniquement à décider si
-    « start » peut continuer directement ou doit d'abord passer par
-    l'onboarding web."""
+    Strictly side-effect free: no arming, live view, USB manifest,
+    download, assembly or notification. Only used to decide whether
+    « start » can continue directly or must first go through
+    web onboarding."""
     etat = {"authenticated": False, "networks": 0, "sync_modules": 0,
             "cameras": 0, "cloud_only": False, "error": None}
     try:
@@ -334,6 +320,6 @@ async def preflight() -> dict:
                 if reseau is not None:
                     reseaux.add(reseau)
             etat["networks"] = len(reseaux)
-    except Exception as erreur:  # une panne réseau ne doit pas abattre « start »
+    except Exception as erreur:  # a network failure must not bring down « start »
         etat["error"] = f"{type(erreur).__name__}: {erreur}"
     return etat

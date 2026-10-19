@@ -6,8 +6,14 @@
   header { position:sticky; top:0; z-index:10; background:var(--bg);
            border-bottom:1px solid var(--line); padding:14px 20px;
            display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
-  h1 { font-size:17px; margin:0 10px 0 0; font-weight:600; }
-  h1 .v { font-size:11px; font-weight:400; color:var(--dim); vertical-align:super; margin-left:3px; }
+  h1.brand { font-size:17px; margin:0 10px 0 0; font-weight:600;
+             display:flex; flex-direction:row; align-items:center; gap:10px;
+             line-height:1.2; }
+  h1 .brand-icon { height:2.55em; width:2.55em; object-fit:contain;
+                   display:block; flex-shrink:0; border-radius:6px; }
+  h1 .brand-text { display:flex; flex-direction:column; min-width:0; }
+  h1 .v { font-size:11px; font-weight:400; color:var(--dim);
+          margin:2px 0 0 0; vertical-align:baseline; }
   select, button { font:inherit; color:var(--text); background:var(--card);
                    border:1px solid var(--line); border-radius:7px;
                    padding:7px 12px; cursor:pointer; }
@@ -92,6 +98,18 @@
   #phase { color:var(--dim); font-size:13px; white-space:nowrap; }
   h2 { display:flex; align-items:center; gap:12px; }
   h2 .act { margin-left:auto; font-size:13px; }
+  .rotation-stage { max-width:min(1100px, 100%); margin:0 auto; }
+  .rotation-banner { display:flex; justify-content:space-between; align-items:baseline;
+                     gap:12px; margin:0 0 10px; }
+  .rotation-title { display:inline-flex; align-items:baseline; gap:6px; }
+  .rotation-countdown { color:var(--in); font-variant-numeric:tabular-nums; }
+  .rotation-countdown.waiting { color:var(--out); }
+  body.role-guest .admin-only { display:none !important; }
+  .accessUsers { display:flex; flex-direction:column; gap:10px; margin-top:8px; }
+  .accessUser { border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+  .accessUser header { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; }
+  .accessUser .cams { display:flex; flex-wrap:wrap; gap:6px 12px; }
+  .rotation-stage .live { min-height:min(70vh, 620px); }
   .live { position:relative; aspect-ratio:16/9; background:#000; display:flex;
           align-items:center; justify-content:center; }
   /* Sans ce couple de règles, .live garde son 16/9 fixe en plein écran et se
@@ -115,27 +133,6 @@
      on la remonte au-dessus et on la rend transparente aux événements. */
   .live .hint.overlay { position:absolute; bottom:56px; left:0; right:0;
                          pointer-events:none; }
-  /* Ronde des directs : toute la fenêtre, au-dessus de l'en-tête collant,
-     plein écran ou non (l'iPhone ne l'accorde pas à un simple bloc). */
-  #ronde { position:fixed; inset:0; z-index:100; background:#000;
-           display:flex; flex-direction:column; }
-  .rondeBarre { position:absolute; top:0; left:0; right:0; z-index:1;
-                display:flex; align-items:center; gap:10px; padding:10px 14px;
-                background:linear-gradient(rgba(0,0,0,.7), transparent); }
-  #rondeTitre { margin-right:auto; font-weight:600; }
-  #rondeMessage { margin:auto; color:var(--dim); text-align:center; padding:0 20px;
-                  font-size:18px; }
-  #rondeScene { flex:1; min-height:0; display:flex; }
-  #rondeScene:empty { display:none; }
-  #rondeScene .live { flex:1; aspect-ratio:auto; }
-  /* Les boutons d'une carte n'agissent plus hors de la grille (les clics y
-     sont délégués à #list) : la ronde a les siens. */
-  #rondeScene .watch { display:none; }
-  /* La plage horaire tient sur une ligne : « Seulement de », deux heures, « à ». */
-  #rondeReglages { width:min(420px, 92vw); }
-  #rondeCameras label { margin-bottom:8px; }
-  #rondeReglages .champCadence input { width:80px; margin-bottom:0; text-align:right; }
-  #rondeReglages .champCadenceDouble input { width:110px; margin-bottom:0; flex:none; }
   dialog { background:var(--card); color:var(--text); border:1px solid var(--line);
            border-radius:12px; padding:24px; width:min(380px, 92vw); position:relative; }
   dialog::backdrop { background:rgba(0,0,0,.6); }

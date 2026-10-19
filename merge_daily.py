@@ -1,21 +1,19 @@
-"""Fusionne les clips Blink en une vidéo par caméra et par journée locale.
+"""Merge Blink clips into one video per camera and local day.
 
-L'horodatage est désormais incrusté directement dans l'image (hardsub, via le
-filtre drawtext) plutôt qu'ajouté comme piste de sous-titres "soft" (mov_text).
-Ce choix corrige les échecs d'envoi WhatsApp : WhatsApp n'affiche jamais les
-pistes de sous-titres embarquées, et l'ancienne piste (une entrée par seconde)
-gonflait l'atome moov au point de faire échouer la validation du média côté
-mobile sur certains fichiers longs.
+Timestamps are now burned directly into the image (hardsub, via the drawtext
+filter) rather than added as a "soft" subtitle track (mov_text). This fixes
+WhatsApp send failures: WhatsApp never shows embedded subtitle tracks, and the
+old track (one entry per second) inflated the moov atom enough to fail mobile
+media validation on some long files.
 
-Conséquence : chaque groupe est maintenant ré-encodé (plus de -c:v copy), et
-la conversion de fuseau horaire reste entièrement gérée côté Python
-(zoneinfo) pour rester fiable sur toutes les plateformes. ffmpeg ne reçoit
-que des epochs déjà convertis en « horloge murale locale déguisée en UTC »
-et tourne avec TZ=UTC0, ce qui évite toute dépendance à une base de fuseaux
-horaires IANA côté ffmpeg/OS (peu fiable sous Windows).
+As a result, each group is now re-encoded (no more -c:v copy), and timezone
+conversion remains entirely handled in Python (zoneinfo) for reliability on all
+platforms. ffmpeg only receives epochs already converted to "local wall clock
+disguised as UTC" and runs with TZ=UTC0, avoiding any dependency on an IANA
+timezone database in ffmpeg/OS (unreliable on Windows).
 """
 
-from __future__ import annotations  # Python 3.8 (build Windows 7) : les annotations "X | None" ne s'évaluent qu'à l'écriture des chaînes, jamais à l'exécution.
+from __future__ import annotations  # Python 3.8 (Windows 7 build): "X | None" annotations are only evaluated when building strings, never at runtime.
 
 import argparse
 import datetime as dt
@@ -34,7 +32,7 @@ from collections import defaultdict, namedtuple
 from pathlib import Path
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-except ImportError:  # Python 3.8 (build Windows 7, voir build-win7.yml) : pas de zoneinfo en stdlib.
+except ImportError:  # Python 3.8 (Windows 7 build, see build-win7.yml): no zoneinfo in stdlib.
     from backports.zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -43,109 +41,6 @@ from nico579_commons import atomique
 import runtime
 
 LIBELLES = {
-    "fr": {
-        "aide_desc":
-            "Fusion incrémentale des clips Blink par caméra : une vidéo par "
-            "jour, puis agrégats par semaine ISO et par mois.",
-        "aide_normalized":
-            "stock des clips normalisés et horodatés, dont toutes les vidéos "
-            "assemblées sont issues",
-        "aide_no_weekly": "ne pas (re)construire les agrégats hebdomadaires",
-        "aide_no_monthly": "ne pas (re)construire les agrégats mensuels",
-        "aide_no_timestamp": "ne pas incruster la date et l'heure dans l'image",
-        "aide_excluded_output": "dossier où sont mis de côté les clips écartés",
-        "aide_exclude":
-            "écarter des clips (chemin sous Blink_Clips, Blink_Normalized ou "
-            "Blink_Excluded) : le brut part dans Blink_Excluded, le segment "
-            "est effacé, le clip n'est plus retéléchargé ni assemblé",
-        "aide_include":
-            "annuler une exclusion : le brut revient de Blink_Excluded et le "
-            "clip est re-normalisé",
-        "aide_date": "limiter à une date locale YYYY-MM-DD",
-        "aide_camera": "limiter à une caméra",
-        "aide_force": "reconstruire même si rien n'a changé",
-        "aide_font": "chemin vers une police .ttf pour l'horodatage incrusté",
-        "aide_font_size":
-            "taille en pixels de l'horodatage incrusté, 8 à 500 "
-            "(défaut : proportionnelle à la hauteur de la vidéo)",
-        "aide_font_color":
-            "couleur de l'horodatage incrusté : nom (white, yellow...) ou "
-            "hexadécimal (#RRGGBB, 0xRRGGBB), éventuellement @opacité "
-            "(ex. white@0.8), défaut white",
-        "aide_box_opacity":
-            "opacité du bandeau derrière l'horodatage, 0.0 (invisible) à "
-            "1.0 (opaque), défaut 0.55",
-        "aide_preset": "preset libx264 (ultrafast..veryslow), défaut veryfast",
-        "aide_crf": "qualité libx264 (0-51, plus bas = meilleure qualité), défaut 21",
-        "registre_inconnu": "  Inconnu du registre, ignoré : {identity}",
-        "clip_exclu": "  Exclu : {identity}",
-        "clip_reintegre": "  Réintégré : {identity}",
-        "clip_reintegre_brut_absent":
-            "  Réintégré : {identity} (brut absent, relancer blink2video.py)",
-        "ffmpeg_introuvable":
-            "FFmpeg est introuvable. Installez imageio-ffmpeg ou ajoutez ffmpeg au PATH.",
-        "drawtext_absent":
-            "Le binaire ffmpeg utilisé n'inclut pas le filtre drawtext "
-            "(compilation sans libfreetype). Utilisez un build ffmpeg complet "
-            "(ex. gyan.dev sous Windows, ou 'apt install ffmpeg' sous Linux).",
-        "horodatage_echec_police":
-            "L'incrustation de l'horodatage échoue avec la police {police} :\n{detail}",
-        "horodatage_echec_sans_message": "échec sans message",
-        "horodatage_vide":
-            "L'incrustation de l'horodatage ne dessine rien avec la police "
-            "{police} (image de test entièrement noire). Police illisible "
-            "par drawtext, ou format de date non supporté par la libc.",
-        "police_introuvable": "Police introuvable : {chemin}",
-        "police_absente":
-            "Aucune police TrueType trouvée pour l'incrustation de l'horodatage. "
-            "Placez un fichier .ttf (ex. DejaVuSans-Bold.ttf) à côté de "
-            "{fichier}, ou passez --font /chemin/vers/police.ttf.",
-        "registre_illisible": "Registre de téléchargement illisible : {chemin}",
-        "duree_introuvable": "durée introuvable pour {nom}",
-        "duree_invalide": "durée invalide pour {nom}",
-        "flux_video_introuvable": "flux vidéo introuvable pour {nom}",
-        "resolution_introuvable": "résolution introuvable pour {nom}",
-        "chemin_hors_racines": "Chemin situé hors de {racines} : {valeur}",
-        "ffmpeg_silencieux":
-            "FFmpeg silencieux plus de {secondes} s, processus tué "
-            "(reprise au prochain passage)",
-        "mp4_invalide": "FFmpeg n'a pas produit un MP4 valide",
-        "copie_refusee": "  Copie de flux refusée, ré-encodage de la période",
-        "periode_deja_a_jour": "Déjà à jour : {nom} ({jours} jour(s))",
-        "periode_assemblage": "Assemblage : {label} / {camera} / {jours} jour(s)",
-        "echec_generique": "  Échec : {erreur}",
-        "cree": "  Créé : {destination}",
-        "periode_supprimee": "Supprimé (période vide) : {periode}",
-        "periode_protegee":
-            "Conservé tel quel : {periode} (une journée a perdu sa source et sa journalière)",
-        "assemblage_deja_en_cours": "Assemblage déjà en cours ({erreur}). Rien à faire.",
-        "normalisation_titre": "Normalisation : {total} clip(s) à encoder",
-        "echec_normalisation": "    Échec : {erreur}",
-        "normalisation_resume": "Normalisation : {encoded} clip(s) encodé(s), {reused} réutilisé(s).",
-        "erreur_generique": "Erreur : {erreur}",
-        "aucun_groupe": "Aucun groupe de clips à fusionner.",
-        "cache_supprime": "Ancien cache supprimé : {chemin}",
-        "jour_reportee_source":
-            "  Reportée (source absente ou invalide) : {nom}",
-        "jour_supprimee": "Supprimée (plus aucun clip) : {nom}",
-        "jour_reportee_partielle": "  Reportée (encodage partiel) : {nom}",
-        "jour_deja_a_jour": "Déjà à jour : {nom} ({clips} clip(s))",
-        "jour_assemblage": "  [{index}/{total}] Assemblage : {jour} / {camera} / {clips} clip(s)",
-        "stock_normalise": "Stock normalisé : {n} segment(s) obsolète(s) supprimé(s)",
-        "journalieres_resume": "Journalières : {built} créée(s), {skipped} déjà à jour, {failed} échec(s).",
-        "agregats_reportes":
-            "Agrégats reportés : au moins une journée sélectionnée a une source indisponible.",
-        "label_hebdomadaires": "Hebdomadaires",
-        "label_mensuelles": "Mensuelles",
-        "periode_titre": "\n{label} :",
-        "periode_resume": "{label} : {built} créée(s), {skipped} déjà à jour, {failed} échec(s).",
-        "couleur_invalide":
-            "Couleur invalide : {valeur!r}. Un nom (white, yellow...) ou un "
-            "code hexadécimal (#RRGGBB, 0xRRGGBB), éventuellement suivi de "
-            "@opacité (ex. white@0.8).",
-        "taille_police_invalide": "Taille de police invalide : {valeur!r} (8 à 500).",
-        "opacite_invalide": "Opacité invalide : {valeur!r} (0.0 à 1.0).",
-    },
     "en": {
         "aide_desc":
             "Incremental merge of Blink clips per camera: one video per day, "
@@ -250,13 +145,15 @@ LIBELLES = {
         "opacite_invalide": "Invalid opacity: {valeur!r} (0.0 to 1.0).",
     },
 }
+LIBELLES["fr"] = dict(LIBELLES["en"])
+
 
 
 def msg(cle: str, **valeurs) -> str:
     return runtime.traduire(LIBELLES, cle, **valeurs)
 
 
-# Les sorties, visibles ; l'état (merge.log) reste dans runtime.app_dir().
+# Visible output folders; state (merge.log) stays in runtime.app_dir().
 BASE_DIR = runtime.dossier_sorties()
 DEFAULT_INPUT = BASE_DIR / "Blink_Clips"
 DEFAULT_OUTPUT = BASE_DIR / "Blink_Daily"
@@ -271,30 +168,27 @@ NORMALIZE_VERSION = "normalized-v1-hardsub"
 RENDER_VERSION = "daily-v7-normalized"
 PERIOD_VERSION = "period-v2-copy-first"
 
-# Partagé par run_ffmpeg_batch et concat_copy : un ffmpeg bloqué (constaté en
-# réel, AUDIT-2026-08-13 28.82) ne doit jamais laisser l'assemblage figé en
-# silence indéfiniment.
-SILENCE_MAX = 300.0  # 5 min : au-delà, ffmpeg est considéré bloqué.
+# Shared by run_ffmpeg_batch and concat_copy: a stuck ffmpeg (seen in production,
+# AUDIT-2026-08-13 28.82) must never leave assembly frozen in silence forever.
+SILENCE_MAX = 300.0  # 5 min: beyond this, ffmpeg is considered stuck.
 
-# Nom d'une vidéo journalière : 2026-08-10_jardin.mp4. Les agrégats hebdo et
-# mensuel sont construits à partir de ces fichiers (déjà horodatés et
-# normalisés), pas à partir des clips bruts.
+# Daily video name: 2026-08-10_jardin.mp4. Weekly and monthly aggregates are
+# built from these files (already timestamped and normalized), not from raw clips.
 DAILY_NAME = re.compile(r"^(?P<day>\d{4}-\d{2}-\d{2})_(?P<camera>.+)\.mp4$")
 
-# Ancien cache de segments, remplacé par Blink_Normalized. Supprimé au premier
-# passage : c'était un dossier caché de fichiers jetables, le stock normalisé
-# est maintenant une couche nommée du pipeline.
+# Legacy segment cache, replaced by Blink_Normalized. Removed on first run: it
+# was a hidden folder of disposable files; normalized storage is now a named
+# pipeline layer.
 LEGACY_SEGMENT_DIR = ".blink_segments"
 
 ClipInfo = namedtuple(
     "ClipInfo", ["created", "source", "duration", "width", "height", "fps", "has_audio"]
 )
 
-# Apparence de l'horodatage incrusté (issue GitHub #7 : le fichier de police
-# seul, via --font, ne suffisait pas à qui voulait aussi ajuster taille,
-# couleur ou transparence du bandeau). size=None conserve l'ancien calcul
-# automatique (proportionnel à la hauteur vidéo) plutôt que d'imposer une
-# valeur fixe qui rendrait mal sur une autre résolution.
+# Burned-in timestamp appearance (GitHub #7: font file alone via --font was not
+# enough for users who also wanted size, color, or banner opacity). size=None
+# keeps the old automatic sizing (proportional to video height) rather than a
+# fixed value that would look wrong at another resolution.
 TimestampStyle = namedtuple("TimestampStyle", ["size", "color", "box_opacity"])
 STYLE_PAR_DEFAUT = TimestampStyle(size=None, color="white", box_opacity=0.55)
 
@@ -305,25 +199,23 @@ def _tronquer_utf8(value: str, maximum: int) -> str:
 
 
 def safe_name(value: str) -> str:
-    """Produit un composant de chemin sûr à partir d'un nom libre (caméra).
+    """Build a safe path component from a free-form name (camera).
 
-    Seule version conservée (revue de code du 0eab463, bug #5) : trois
-    copies quasi identiques de ce même nettoyage avaient dérivé, chacune
-    avec une partie du traitement mais pas toutes - celle-ci, la plus
-    complète (déjà dans blink_models.py), reste ici parce que blink_models
-    importe déjà ce module (l'inverse créerait un import circulaire), et
-    serve.py l'importait aussi. blink_models.safe_name et serve.safe_file
-    n'existent plus qu'en alias vers celle-ci.
+    Only version kept (code review 0eab463, bug #5): three nearly identical
+    copies of this sanitization had drifted, each with part of the logic but
+    not all - this one, the most complete (already in blink_models.py), stays
+    here because blink_models already imports this module (the reverse would
+    create a circular import), and serve.py imported it too. blink_models.safe_name
+    and serve.safe_file now exist only as aliases to this function.
 
-    Ne rend PAS deux noms distincts garantis différents : "A/B" et "A_B"
-    produisent le même résultat, un compromis assumé (voir I-16,
-    test_T_I16_A_slash_B_et_A_underscore_B_restent_distincts) - l'identité
-    réelle d'un clip ne repose jamais sur cette chaîne (state_key(),
-    target_path() y ajoutent chacun leur propre distinction), seul le
-    regroupement journalier/hebdo/mensuel de merge_daily.py peut donc
-    encore confondre deux caméras dont le nom brut diffère mais se
-    nettoie pareil - cas assez rare pour rester documenté plutôt que
-    corrigé dans l'immédiat (voir BACKLOG.md)."""
+    Does NOT guarantee two distinct names map to different results: "A/B" and
+    "A_B" yield the same output, an accepted trade-off (see I-16,
+    test_T_I16_A_slash_B_et_A_underscore_B_restent_distincts) - a clip's real
+    identity never relies on this string (state_key(), target_path() each add
+    their own distinction), so only merge_daily.py's daily/weekly/monthly
+    grouping can still confuse two cameras whose raw names differ but sanitize
+    the same - rare enough to document rather than fix immediately (see
+    BACKLOG.md)."""
     cleaned = re.sub(r"[^\w.-]+", "_", value, flags=re.UNICODE).strip("._")
     cleaned = _tronquer_utf8(cleaned, 32).rstrip(". ") or "camera"
     racine = cleaned.split(".", 1)[0].casefold()
@@ -335,19 +227,18 @@ def safe_name(value: str) -> str:
 
 
 def valid_mp4(path: Path) -> bool:
-    """Valide rapidement la structure externe d'un MP4/MP4 fragmenté.
+    """Quickly validate the outer structure of an MP4/fragmented MP4.
 
-    On parcourt uniquement les en-têtes des boîtes ISO-BMFF, en sautant leurs
-    contenus. C'est suffisamment peu coûteux pour les inventaires récurrents,
-    mais bien plus strict que la simple recherche de ``ftyp`` : chaque boîte
-    doit tenir entièrement dans le fichier et un média autonome doit contenir
-    ``ftyp``, ``moov`` et ``mdat``. La validation approfondie d'un nouveau
-    téléchargement est assurée par :func:`valid_mp4_complet`.
+    Only ISO-BMFF box headers are walked, skipping their payloads. Cheap enough
+    for repeated inventory scans, but stricter than merely finding ``ftyp``:
+    each box must fit entirely in the file and a standalone media file must
+    contain ``ftyp``, ``moov``, and ``mdat``. Deep validation of a new download
+    is handled by :func:`valid_mp4_complet`.
     """
     try:
         taille_fichier = path.stat().st_size
-        # Trois en-têtes de boîte au minimum ; ftyp requiert en outre les
-        # champs major_brand et minor_version (16 octets boîte comprise).
+        # At least three box headers; ftyp also needs major_brand and
+        # minor_version fields (16 bytes including the box).
         if taille_fichier < 32:
             return False
 
@@ -373,8 +264,8 @@ def valid_mp4(path: Path) -> bool:
                     taille_boite = int.from_bytes(extension, "big")
                     taille_entete = 16
                 elif taille_boite == 0:
-                    # Une boîte de taille nulle s'étend, par définition,
-                    # jusqu'à EOF et doit donc nécessairement être la dernière.
+                    # A zero-size box extends, by definition, to EOF and must
+                    # therefore be the last one.
                     taille_boite = restant
 
                 if taille_boite < taille_entete or taille_boite > restant:
@@ -392,7 +283,7 @@ def valid_mp4(path: Path) -> bool:
 
 @functools.lru_cache(maxsize=1)
 def _outil_validation_media() -> tuple[str, str] | None:
-    """Trouve une sonde média une fois, hors du chemin des simples listings."""
+    """Find a media probe tool once, off the hot path of simple listings."""
     candidats_ffprobe = []
     for motif in ("ffprobe*.exe", "ffprobe-*", "ffprobe"):
         candidats_ffprobe.extend(
@@ -412,27 +303,26 @@ def _outil_validation_media() -> tuple[str, str] | None:
         return None
 
 
-# Lignes que ffprobe écrit sur des clips pourtant intacts. Issue #49 : chaque
-# clip enregistré sur la clé USB d'un Sync Module contient une unité d'accès
-# H.264 sans image, que l'analyseur H.264 signale (« missing picture in access
-# unit with size 9 »), alors que la vidéo est complète ; les clips du cloud
-# n'en ont pas. Refusée comme une erreur, cette ligne faisait rejeter en
-# silence tous les clips USB partout où ffprobe est présent (paquet Linux
-# depuis la 0.12.29, image Docker, ffprobe installé sur le système). Mesuré
-# le 2026-09-30 sur 104 clips réels et 15 copies tronquées, avec le ffprobe du
-# paquet 0.15.4 et FFmpeg stable 8.1.3 : aucune coupure ne se signalait par
-# cette seule ligne, toujours accompagnée d'un « Invalid NAL unit size » ou
-# d'une erreur du conteneur, qui restent des motifs de refus.
+# Lines ffprobe prints on clips that are still intact. Issue #49: each clip
+# recorded on a Sync Module USB key contains an H.264 access unit with no
+# picture, which the H.264 parser reports ("missing picture in access unit
+# with size 9"), while the video is complete; cloud clips do not. Treated as
+# an error, this line silently rejected all USB clips wherever ffprobe is
+# present (Linux package since 0.12.29, Docker image, system ffprobe). Measured
+# 2026-09-30 on 104 real clips and 15 truncated copies, with ffprobe from
+# package 0.15.4 and FFmpeg stable 8.1.3: no truncation was signaled by this
+# line alone, always accompanied by "Invalid NAL unit size" or a container
+# error, which remain rejection reasons.
 _BRUITS_FFPROBE = ("missing picture in access unit",)
 
 
 def _erreurs_ffprobe(stderr: str) -> list:
-    """Lignes d'erreur de ffprobe qui comptent, sans le bruit connu ci-dessus."""
+    """ffprobe error lines that count, excluding the known noise above."""
     erreurs = []
     for ligne in (stderr or "").splitlines():
         ligne = ligne.strip()
-        # « Last message repeated N times » répète la ligne précédente, déjà
-        # jugée pour elle-même : erreur si elle l'était, bruit sinon.
+        # "Last message repeated N times" repeats the previous line, already
+        # judged on its own: error if it was one, noise otherwise.
         if not ligne or ligne.startswith("Last message repeated"):
             continue
         if any(bruit in ligne for bruit in _BRUITS_FFPROBE):
@@ -442,11 +332,11 @@ def _erreurs_ffprobe(stderr: str) -> list:
 
 
 def _ligne_sans_donnee_privee(ligne: str, path: Path) -> str:
-    """Une ligne d'erreur de la sonde, sans chemin, nom de fichier ni adresse.
+    """A probe error line with no path, file name, or address.
 
-    ffprobe cite parfois le fichier (« /chemin/clip.mp4: Invalid data ... ») ;
-    la raison d'un refus est imprimée dans le journal, que les utilisateurs
-    collent dans les issues publiques : jamais de chemin ni de nom de clip."""
+    ffprobe sometimes quotes the file ("/path/clip.mp4: Invalid data ...");
+    rejection reasons are printed to the log and users paste them in public
+    issues: never include a path or clip name."""
     for morceau in sorted({str(path), path.name, str(path.parent)}, key=len, reverse=True):
         if morceau:
             ligne = ligne.replace(morceau, "<fichier>")
@@ -456,16 +346,16 @@ def _ligne_sans_donnee_privee(ligne: str, path: Path) -> str:
 
 
 def _motif_refus_mp4_complet(path: Path) -> str:
-    """Pourquoi ce téléchargement est refusé ; chaîne vide s'il est valide.
+    """Why this download is rejected; empty string if valid.
 
-    Source unique de la décision : ``valid_mp4_complet`` n'en garde que le
-    booléen, ``raison_refus_mp4`` rend le texte. Les motifs sont des mots-clés
-    stables plus, quand la sonde s'est exprimée, sa première ligne utile."""
+    Single source of truth: ``valid_mp4_complet`` keeps only the boolean,
+    ``raison_refus_mp4`` returns the text. Reasons are stable keywords plus,
+    when the probe spoke, its first useful line."""
     if not valid_mp4(path):
-        return "structure=boite MP4 absente, tronquee ou pas une video"
+        return "structure=MP4 box missing, truncated or not a video"
     outil = _outil_validation_media()
     if outil is None:
-        return "outil=aucun ffprobe ni ffmpeg disponible"
+        return "tool=neither ffprobe nor ffmpeg available"
     genre, executable = outil
     if genre == "ffprobe":
         commande = [
@@ -501,76 +391,70 @@ def _motif_refus_mp4_complet(path: Path) -> str:
         nombres = [ligne.strip() for ligne in (resultat.stdout or "").splitlines()]
         try:
             if not any(int(nombre) > 0 for nombre in nombres if nombre):
-                return f"outil={genre} paquets-video=0"
+                return f"outil={genre} video-packets=0"
         except ValueError:
-            return f"outil={genre} sortie=illisible"
+            return f"outil={genre} output=unreadable"
     return ""
 
 
 def valid_mp4_complet(path: Path) -> bool:
-    """Vérifie un téléchargement entier avant de le publier ou le supprimer.
+    """Verify a full download before publishing or deleting it.
 
-    La vérification structurelle élimine les réponses HTML et les fichiers
-    tronqués au niveau d'une boîte. Une sonde parcourt ensuite tous les paquets
-    vidéo : elle détecte notamment un ``mdat`` écourté malgré un ``ftyp`` et un
-    ``moov`` encore lisibles. Faute de sonde, on échoue fermé afin qu'aucune
-    source distante ne soit supprimée sur la foi d'un contrôle incomplet.
-    Toute ligne d'erreur de ffprobe fait refuser le fichier, sauf le bruit
-    connu des clips intacts (_BRUITS_FFPROBE).
+    Structural checks eliminate HTML responses and box-level truncated files. A
+    probe then walks all video packets: it catches a shortened ``mdat`` despite
+    readable ``ftyp`` and ``moov``. Without a probe, fail closed so no remote
+    source is deleted based on an incomplete check. Any ffprobe error line
+    rejects the file except known noise from intact clips (_BRUITS_FFPROBE).
     """
     return not _motif_refus_mp4_complet(path)
 
 
 def raison_refus_mp4(path: Path) -> str:
-    """La raison du refus de ``valid_mp4_complet`` pour ce fichier, sans chemin
-    ni nom de clip, prête à être imprimée. Ne lève jamais : un diagnostic ne
-    doit pas transformer un échec en plantage. Relance le contrôle, donc à ne
-    demander qu'après un refus."""
+    """``valid_mp4_complet`` rejection reason for this file, with no path or
+    clip name, ready to print. Never raises: diagnostics must not turn a
+    failure into a crash. Re-runs the check, so only call after a rejection."""
     try:
-        return _motif_refus_mp4_complet(path) or "aucune (le fichier est valide)"
+        return _motif_refus_mp4_complet(path) or "none (the file is valid)"
     except Exception as erreur:
-        return f"diagnostic impossible ({type(erreur).__name__})"
+        return f"diagnosis impossible ({type(erreur).__name__})"
 
 
 def load_json(path: Path, default: dict) -> dict:
-    """Lit un objet JSON, ou ``default`` s'il est absent, corrompu ou d'un
-    autre type que dict.
+    """Read a JSON object, or ``default`` if missing, corrupt, or not a dict.
 
-    La lecture elle-même (refus passager de Windows face à un remplacement
-    concurrent, antivirus, indexeur) est nico579_commons.atomique.lire_json :
-    un refus qui persiste lève au lieu de rendre ``default``, qui ferait
-    réécrire un contenu vidé à toute lecture-modification-écriture."""
+    The read itself (transient Windows denial on concurrent replace, antivirus,
+    indexer) is nico579_commons.atomique.lire_json: persistent denial raises
+    instead of returning ``default``, which would rewrite empty content on every
+    read-modify-write."""
     value = atomique.lire_json(path, default)
     return value if isinstance(value, dict) else default
 
 
 def save_json(path: Path, value: dict) -> None:
-    """Remplace ``path`` atomiquement (nico579_commons.atomique.ecrire_json).
+    """Replace ``path`` atomically (nico579_commons.atomique.ecrire_json).
 
-    Temporaire propre à chaque appel : un nom fixe était partagé par tous les
-    écrivains, et serve.py tourne sur un ThreadingHTTPServer dont deux routes
-    réécrivent ASSEMBLED_DURATIONS en parallèle (FileNotFoundError, reproduit
-    197 fois sur 600 écritures concurrentes, audit du 2026-09-24). Les refus
-    passagers de Windows (162 sur 600 en CI) sont retentés."""
+    A unique temp file per call: a fixed name was shared by all writers, and
+    serve.py runs on a ThreadingHTTPServer where two routes rewrite
+    ASSEMBLED_DURATIONS in parallel (FileNotFoundError, reproduced 197 times
+    over 600 concurrent writes, audit 2026-09-24). Transient Windows denials (162
+    of 600 in CI) are retried."""
     atomique.ecrire_json(path, value)
 
 
 def find_ffmpeg() -> str:
-    """Choisit un ffmpeg capable d'incruster du texte.
+    """Pick an ffmpeg that can burn in text.
 
-    Le premier trouvé ne convient pas forcément : les binaires livrés par
-    imageio-ffmpeg pour Linux sont compilés sans libfreetype, donc sans le
-    filtre drawtext, alors que ceux de Windows et de macOS l'ont. Un outil dont
-    la raison d'être est d'inscrire l'heure dans l'image ne peut pas se
-    contenter du premier venu : on essaie les candidats dans l'ordre et on
-    retient le premier qui sait le faire.
+    The first found may not work: imageio-ffmpeg Linux binaries are built without
+    libfreetype, hence no drawtext filter, while Windows and macOS builds have
+    it. A tool whose purpose is writing time into the image cannot settle for
+    the first candidate: try them in order and keep the first that can.
 
-    À défaut, on renvoie quand même le premier candidat : check_drawtext_available
-    produira ensuite un message clair, plutôt qu'un « ffmpeg introuvable »
-    trompeur alors qu'il y en a un."""
+    If none qualify, still return the first candidate: check_drawtext_available
+    will then emit a clear message rather than a misleading "ffmpeg not found"
+    when one exists."""
     candidats = []
-    # En bundle, ffmpeg voyage avec l'exécutable : on le prend là en premier,
-    # pour ne pas dépendre de ce qui traîne sur la machine cible.
+    # Bundled ffmpeg ships with the executable: prefer it first so we do not
+    # depend on whatever is on the target machine.
     for motif in ("ffmpeg*.exe", "ffmpeg-*", "ffmpeg"):
         candidats += [str(c) for c in sorted(runtime.resource_dir().glob(motif))
                       if c.is_file()]
@@ -597,17 +481,16 @@ def find_ffmpeg() -> str:
 
 
 def extraire_vignette(ffmpeg: str, source: Path, pending: Path, timeout=None) -> bool:
-    """Extrait la vignette d'un clip dans `pending` ; vrai si le fichier existe.
+    """Extract a clip thumbnail into `pending`; true if the file exists.
 
-    Prise un peu après le début, jamais sur la première image : une caméra qui
-    vient de se déclencher livre souvent une ou deux images noires ou
-    surexposées, le temps que l'exposition s'ajuste. Un clip plus court que la
-    position demandée se rabat sur sa toute première image. Partagée par
-    serve.py (à la demande) et le téléchargeur (à l'arrivée du clip) : une seule
-    manière de fabriquer la vignette, donc un seul aspect."""
+    Grab slightly after the start, never the first frame: a camera that just
+    triggered often delivers one or two black or overexposed frames while
+    exposure settles. A clip shorter than the requested position falls back to
+    its very first frame. Shared by serve.py (on demand) and the downloader
+    (when the clip arrives): one way to build thumbnails, one look."""
     for entree in (["-ss", "1.5", "-i", str(source)], ["-i", str(source)]):
-        # -ss avant -i : ffmpeg saute directement à la position demandée au
-        # lieu de décoder tout ce qui précède.
+        # -ss before -i: ffmpeg seeks directly to the requested position
+        # instead of decoding everything before it.
         runtime.lancer(
             [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *entree,
              "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", str(pending)],
@@ -633,9 +516,9 @@ def has_drawtext(ffmpeg: str) -> bool:
 
 
 def check_drawtext_available(ffmpeg: str) -> None:
-    """Certains builds ffmpeg minimalistes (dont certains binaires portables)
-    omettent libfreetype et donc le filtre drawtext. On le détecte tôt avec
-    un message clair plutôt que de laisser échouer chaque fusion."""
+    """Some minimal ffmpeg builds (including some portable binaries) omit
+    libfreetype and thus the drawtext filter. Detect early with a clear message
+    rather than failing every merge."""
     result = runtime.lancer(
         [ffmpeg, "-hide_banner", "-filters"],
         stdin=subprocess.DEVNULL,
@@ -652,19 +535,16 @@ def check_drawtext_available(ffmpeg: str) -> None:
 
 def check_timestamp_rendering(ffmpeg: str, font_path: Path,
                               style: TimestampStyle = STYLE_PAR_DEFAUT) -> None:
-    """Incruste un horodatage de test sur une image noire et vérifie qu'il en
-    reste quelque chose.
+    """Burn a test timestamp on a black frame and verify something remains.
 
-    C'est un garde-fou de bout en bout : drawtext ne signale ni un chemin de
-    police mal encodé dans le filtergraph (fontconfig prend le relais en
-    silence), ni un format strftime que la libc locale ignore (le texte rendu
-    est alors simplement vide). Sans ce test, ces deux pannes ne se voient
-    qu'en regardant la vidéo finale.
+    End-to-end guard: drawtext does not report a badly encoded font path in the
+    filtergraph (fontconfig takes over silently) or a strftime format the locale
+    libc ignores (rendered text is then simply empty). Without this test, both
+    failures only show up on the final video.
 
-    La couleur de style est reprise ici, pas seulement la police : un texte
-    choisi noir sur ce fond noir de test échouerait sinon à tort ce garde-fou
-    (image entièrement noire par construction, cause confondue avec une
-    police illisible)."""
+    Style color is applied here, not just the font: black text on this black
+    test background would otherwise wrongly fail the guard (all-black image by
+    construction, confused with an unreadable font)."""
     graph = (
         "color=c=black:s=640x120:d=0.1,"
         + drawtext_chain(quote_filter_path(font_path), 40, 0, style.color)
@@ -695,8 +575,8 @@ def find_font(explicit: Path | None) -> Path:
             return explicit
         raise RuntimeError(msg("police_introuvable", chemin=explicit))
 
-    # À côté du programme, comme le dit le message police_absente (avant
-    # 0.14, c'était aussi le dossier des données par défaut).
+    # Next to the program, as police_absente says (before 0.14, also the default
+    # data folder).
     programme = runtime._dossier_ancre()
     candidates = [
         programme / "DejaVuSans-Bold.ttf",
@@ -731,15 +611,15 @@ def find_font(explicit: Path | None) -> Path:
 
 
 def quote_filter_path(path: Path) -> str:
-    """Encode un chemin pour une option de filtre ffmpeg (ex. drawtext:fontfile).
+    """Encode a path for an ffmpeg filter option (e.g. drawtext:fontfile).
 
-    Le texte d'un filtergraph subit DEUX passes de dé-échappement successives :
-    d'abord le découpage de la chaîne de filtres, puis celui des arguments d'un
-    filtre. Un chemin Windows ('C:\\Windows\\Fonts\\arialbd.ttf') doit donc :
-      - être entre quotes simples, ce qui le protège de la 1re passe ;
-      - avoir ses ':' échappés en '\\:', consommés par la 2e passe ;
-      - n'utiliser que des '/' comme séparateur, sinon les '\\' sont consommés
-        de façon incohérente entre les deux passes (Windows accepte '/').
+    Filtergraph text undergoes TWO successive unescape passes: first splitting
+    the filter chain, then splitting a filter's arguments. A Windows path
+    ('C:\\Windows\\Fonts\\arialbd.ttf') must therefore:
+      - be in single quotes, protecting it from the 1st pass;
+      - have ':' escaped as '\\:', consumed by the 2nd pass;
+      - use only '/' as separators, otherwise '\\' is consumed inconsistently
+        across the two passes (Windows accepts '/').
     """
     text = path.as_posix().replace("'", "'\\''").replace(":", "\\:")
     return f"'{text}'"
@@ -753,13 +633,12 @@ def parse_created_at(value: str) -> dt.datetime:
 
 
 def read_registry(state_path: Path) -> dict:
-    """Clips connus du téléchargeur, vide tant que rien n'a été récupéré.
+    """Clips known to the downloader; empty until something was fetched.
 
-    Un registre absent est l'état normal d'une installation neuve, pas une
-    panne : l'interface doit pouvoir s'ouvrir et l'assemblage se dire sans
-    matière avant le premier téléchargement. Un registre présent mais illisible
-    est autre chose, une corruption qu'il faut annoncer au lieu de la confondre
-    avec « rien à montrer »."""
+    A missing registry is normal for a fresh install, not a failure: the UI
+    should open and merge should report nothing to do before the first download.
+    A present but unreadable registry is corruption and must be reported instead
+    of conflating it with "nothing to show"."""
     if not state_path.exists():
         return {}
     state = load_json(state_path, None)
@@ -770,40 +649,35 @@ def read_registry(state_path: Path) -> dict:
 
 
 def _cles_camera_par_collision(entries: dict) -> dict:
-    """(nom, network_id) -> clé de regroupement, seulement pour les noms où
-    une vraie collision existe.
+    """(name, network_id) -> grouping key, only for names with a real collision.
 
-    Le registre distingue les appareils par network_id/device_id, mais le
-    regroupement journalier n'utilisait que le nom : deux caméras portant le
-    même nom sur deux hubs finissaient dans le même assemblage (reproduit
-    avec deux "jardin" sur des réseaux distincts, mélangées dans une seule
-    journalière).
+    The registry distinguishes devices by network_id/device_id, but daily
+    grouping used only the name: two cameras with the same name on two hubs
+    ended up in one assembly (reproduced with two "jardin" on distinct networks,
+    mixed into one daily video).
 
-    Le fix littéral (regrouper par identité stable partout) fragmenterait à
-    tort les données réelles : une même caméra physique peut avoir plusieurs
-    network_id/device_id incohérents dans le registre pour des raisons
-    historiques (vieilles entrées USB sans network_id, bug de rapprochement
-    déjà corrigé par ailleurs mais pas rétroactif sur l'existant) - vérifié
-    sur le registre réel, "jardin" et "Terrasse1" y ont chacun plusieurs
-    couples (network_id, device_id) mais un seul network_id CONNU (toujours
-    le même quand renseigné, jamais deux valeurs différentes). Ce n'est donc
-    pas un vrai homonyme, juste une incohérence, et ne doit rien changer.
+    The literal fix (group by stable identity everywhere) would wrongly split
+    real data: one physical camera can have several inconsistent network_id/
+    device_id pairs in the registry for historical reasons (old USB entries
+    without network_id, matching bug fixed elsewhere but not retroactive on
+    existing data) - verified on a real registry, "jardin" and "Terrasse1" each
+    have several (network_id, device_id) pairs but only one KNOWN network_id
+    (always the same when set, never two different values). That is not a true
+    homonym, just inconsistency, and must change nothing.
 
-    Ne sépare donc que les noms où au moins deux network_id NON VIDES et
-    DIFFÉRENTS coexistent (signal positif de deux hubs réels, même principe
-    que _hub_compatible() dans blink_registre.py) : ce cas ne s'est jamais
-    produit dans le registre réel, seulement dans la reproduction du bug.
-    Le network_id trié en premier garde le nom nu (n'invalide pas
-    l'historique déjà assemblé sous ce nom, quel qu'il soit) ; les autres
-    reçoivent un suffixe lisible, conservant le nom pour l'affichage comme
-    demandé plutôt qu'un identifiant opaque.
+    So only split names where at least two NON-EMPTY, DIFFERENT network_ids
+    coexist (positive signal of two real hubs, same idea as _hub_compatible() in
+    blink_registre.py): this never happened in a real registry, only in bug
+    reproduction. The first sorted network_id keeps the bare name (does not
+    invalidate history already assembled under that name); others get a readable
+    suffix, keeping the name for display rather than an opaque id.
 
-    Même règle pour deux noms DIFFÉRENTS qui se nettoient pareil (« Garage »
-    et « Garage! » donnent le même dossier par safe_name) : sans elle, leurs
-    journalières s'écrivaient au même chemin, l'une écrasant l'autre. Le nom
-    déjà propre garde son dossier (l'historique déjà assemblé n'est pas
-    déplacé), les autres reçoivent « (2) », « (3) »... ; la casse ne distingue
-    pas deux dossiers, Windows et macOS les confondant."""
+    Same rule for two DIFFERENT names that sanitize the same ("Garage" and
+    "Garage!" map to the same folder via safe_name): without it, their dailies
+    wrote to the same path, one overwriting the other. The name that already
+    fits keeps its folder (assembled history is not moved); others get "(2)",
+    "(3)"...; case does not distinguish folders because Windows and macOS
+    treat them as the same."""
     reseaux_par_nom = defaultdict(set)
     paires = set()
     for entry in entries.values():
@@ -848,15 +722,14 @@ def _camera_key(cles_collision: dict, entry: dict, camera: str) -> str:
 
 
 def load_groups(input_dir: Path, timezone: ZoneInfo) -> dict:
-    """Regroupe les fichiers enregistrés par le téléchargeur incrémental.
+    """Group files recorded by the incremental downloader.
 
-    Une journée sans aucun clip survivant (tous écartés, ou plus aucun
-    valide) reste présente dans le résultat, avec une liste vide, plutôt que
-    de disparaître : sans cette entrée, la journée n'était plus jamais revue
-    une fois son dernier clip écarté, ni reconstruite (elle devrait se vider)
-    ni supprimée - sa vidéo déjà assemblée restait sur disque indéfiniment et
-    continuait d'être agrégée dans l'hebdomadaire et la mensuelle (bug #2,
-    revue de code du 0eab463, voir AUDIT-2026-08-13.md 28.61)."""
+    A day with no surviving clips (all excluded, or none left valid) stays in
+    the result with an empty list rather than disappearing: without that entry,
+    once the last clip was excluded the day was never revisited, neither rebuilt
+    (it should empty) nor deleted - its already assembled video stayed on disk
+    forever and kept being aggregated into weekly and monthly (bug #2, code
+    review 0eab463, see AUDIT-2026-08-13.md 28.61)."""
     entries = read_registry(input_dir / DOWNLOAD_STATE)
     cles_collision = _cles_camera_par_collision(entries)
 
@@ -888,25 +761,21 @@ def load_groups(input_dir: Path, timezone: ZoneInfo) -> dict:
 
 
 def journees_a_source_indisponible(input_dir: Path, timezone: ZoneInfo) -> tuple[set, set]:
-    """(jours, identités) pour les clips NON écartés dont le fichier brut est
-    absent ou invalide.
+    """(days, identities) for NON-excluded clips whose raw file is missing or invalid.
 
-    load_groups() traite un clip manquant/invalide exactement comme un clip
-    explicitement écarté : les deux disparaissent de sa liste, sans laisser
-    de trace de la raison. Nécessaire pour ne PAS confondre en aval « tous
-    les clips de cette journée ont été écartés par choix » (la journalière
-    déjà assemblée, et les segments normalisés associés, doivent disparaître)
-    et « au moins un clip existe encore dans le registre mais son fichier a
-    disparu » (l'un et les autres doivent au contraire être préservés, bug
-    constaté en réel : source USB débranchée pendant un passage, dossier
-    déplacé).
+    load_groups() treats a missing/invalid clip exactly like an explicitly
+    excluded one: both vanish from its list with no trace of why. Needed so
+    downstream does NOT confuse "all clips for this day were excluded by choice"
+    (assembled daily and associated normalized segments must go away) with "at
+    least one clip still exists in the registry but its file is gone" (both must
+    be preserved instead, seen in production: USB source unplugged during a run,
+    folder moved).
 
-    jours : (caméra, jour local) ayant au moins un tel clip, à exempter de la
-    suppression de journalière dans _executer(). identités : clip_identity()
-    de chacun (calculable sans que le fichier existe, c'est un chemin relatif
-    - voir clip_identity()), à ajouter à used_segments avant prune_normalized()
-    pour ne pas effacer un segment déjà encodé et toujours valide du seul
-    fait que son brut source a disparu."""
+    days: (camera, local day) with at least one such clip, exempt from daily
+    deletion in _executer(). identities: clip_identity() for each (computable
+    without the file existing - a relative path; see clip_identity()), to add to
+    used_segments before prune_normalized() so an already encoded still-valid
+    segment is not erased just because its raw source disappeared."""
     entries = read_registry(input_dir / DOWNLOAD_STATE)
     cles_collision = _cles_camera_par_collision(entries)
     root = input_dir.resolve()
@@ -924,7 +793,7 @@ def journees_a_source_indisponible(input_dir: Path, timezone: ZoneInfo) -> tuple
         try:
             source = (root / entry["path"]).resolve()
             if runtime.est_relatif_a(source, root) and valid_mp4(source):
-                continue  # chargé normalement par load_groups, rien à signaler
+                continue  # loaded normally by load_groups, nothing to report
         except (KeyError, TypeError, OSError):
             jours.add((camera, local_day))
             continue
@@ -937,9 +806,9 @@ def journees_a_source_indisponible(input_dir: Path, timezone: ZoneInfo) -> tuple
 
 
 def group_fingerprint(keys: list) -> str:
-    """Empreinte d'une journée : la liste ordonnée des clés de rendu de ses
-    segments normalisés. La journalière n'étant qu'une concaténation de ces
-    segments, elle est à jour exactement quand cette liste n'a pas bougé."""
+    """Fingerprint of a day: ordered list of render keys of its normalized segments.
+    The daily video is only a concatenation of those segments, so it is up to
+    date exactly when this list has not changed."""
     digest = hashlib.sha256()
     digest.update((RENDER_VERSION + "\n").encode("utf-8"))
     for key in keys:
@@ -948,7 +817,7 @@ def group_fingerprint(keys: list) -> str:
 
 
 def probe_clip_info(ffmpeg: str, source: Path) -> tuple[float, int, int, float, bool]:
-    """Lit durée, résolution, fps et présence d'audio depuis l'en-tête du MP4."""
+    """Read duration, resolution, fps, and audio presence from the MP4 header."""
     result = runtime.lancer(
         [ffmpeg, "-hide_banner", "-i", str(source)],
         stdin=subprocess.DEVNULL,
@@ -990,14 +859,13 @@ def probe_clip_info(ffmpeg: str, source: Path) -> tuple[float, int, int, float, 
 def resolve_identity(
     input_dir: Path, normalized_dir: Path, excluded_dir: Path, value: str
 ) -> str:
-    """Retrouve l'identité d'un clip à partir d'un chemin donné à la main.
+    """Resolve a clip identity from a hand-supplied path.
 
-    On accepte le brut, le normalisé ou l'écarté indifféremment : les trois
-    arborescences sont des miroirs, la partie relative est la même. En pratique
-    on désigne le clip qu'on vient de regarder."""
-    # Espaces et fins de ligne rognés : un chemin arrive souvent d'un
-    # copier-coller ou d'une liste, et un « \r » traînant est invisible à
-    # l'affichage tout en faisant échouer la correspondance.
+    Raw, normalized, or excluded paths are accepted equally: the three trees are
+    mirrors with the same relative part. In practice this names the clip you
+    just viewed."""
+    # Strip spaces and line endings: paths often come from copy-paste or a list,
+    # and a trailing "\\r" is invisible yet breaks matching.
     path = Path(value.strip()).resolve()
     roots = (input_dir.resolve(), normalized_dir.resolve(), excluded_dir.resolve())
     for root in roots:
@@ -1010,7 +878,7 @@ def resolve_identity(
 
 
 def move_aside(source: Path, destination: Path) -> None:
-    """Déplace un fichier en créant l'arborescence, sans jamais écraser."""
+    """Move a file, creating directories, never overwriting."""
     if not source.exists():
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1027,28 +895,25 @@ def set_excluded(
     values: list,
     excluded: bool,
 ) -> int:
-    """Écarte des clips, ou les réintègre.
+    """Exclude clips, or reinstate them.
 
-    Exclure ne détruit rien : le brut est déplacé dans Blink_Excluded, sa
-    version normalisée est effacée (elle se refabrique à partir du brut), et
-    une pierre tombale est posée dans le registre de téléchargement pour que
-    blink2video.py ne le rapatrie plus. La journalière concernée voit alors sa liste
-    de segments changer, donc son empreinte, donc elle est réassemblée au
-    passage suivant, et les agrégats avec elle.
+    Excluding destroys nothing: the raw file moves to Blink_Excluded, its
+    normalized version is deleted (rebuilt from raw on demand), and a tombstone
+    is set in the download registry so blink2video.py will not fetch it again.
+    The affected daily then changes segment list and fingerprint, so it is
+    reassembled on the next pass, aggregates included.
 
-    Réintégrer fait le chemin inverse et ramène le brut à sa place : le clip
-    est re-normalisé au même passage, sans dépendre de la rétention du hub.
-    Vider Blink_Excluded reste un geste séparé et explicite."""
+    Reinstating reverses the move and puts the raw file back: the clip is
+    re-normalized in the same pass without depending on hub retention. Clearing
+    Blink_Excluded remains a separate explicit action."""
     state_path = input_dir / DOWNLOAD_STATE
 
     changed = 0
-    # Même verrou que le téléchargement (runtime.verrou ne distingue les
-    # ressources que par ce premier nom, "exclusion" n'est qu'une étiquette).
-    # Lecture, décision et écriture doivent se tenir sous un seul verrou tenu
-    # en continu : lire puis écrire séparément laissait une fenêtre où un
-    # téléchargement concurrent pouvait ajouter un clip entre les deux, que
-    # notre propre copie, déjà périmée, effaçait ensuite en écrasant toute la
-    # table des clips.
+    # Same lock as download (runtime.verrou distinguishes resources only by this
+    # first name; "exclusion" is just a label). Read, decide, and write must
+    # run under one lock held continuously: read then write separately left a
+    # window where a concurrent download could add a clip between them, which
+    # our stale copy then wiped by overwriting the whole clips table.
     with runtime.verrou("registre", "exclusion", stale_after=60, attente=10):
         clips = read_registry(state_path)
         for value in values:
@@ -1069,11 +934,11 @@ def set_excluded(
                     (normalized_dir / identity).unlink(missing_ok=True)
                     print(msg("clip_exclu", identity=identity))
                 else:
-                    # Un horodatage plutôt qu'un simple retrait du champ :
-                    # _ecrire_registre() (blink_registre.py) s'en sert pour
-                    # savoir que CETTE décision de réintégration est plus
-                    # récente qu'un excluded=True qu'un downloader périmé
-                    # tenterait de réécrire après coup (revue du 27/08, bug 2).
+                    # A timestamp rather than simply removing the field:
+                    # _ecrire_registre() (blink_registre.py) uses it to know
+                    # THIS reinstate decision is newer than an excluded=True a
+                    # stale downloader would rewrite afterward (review 27/08,
+                    # bug 2).
                     clips[key]["excluded"] = False
                     clips[key]["excluded_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
                     move_aside(excluded_dir / identity, input_dir / identity)
@@ -1084,11 +949,10 @@ def set_excluded(
                 changed += 1
 
         if changed:
-            # Le registre porte aussi sa version, et un jour d'autres champs,
-            # que read_registry() ne renvoie pas : on repart de l'état complet
-            # pour n'en remplacer que la table des clips. Cet état est garanti
-            # inchangé depuis notre lecture ci-dessus, le verrou étant resté
-            # tenu sans interruption entre les deux.
+            # The registry also carries version and someday other fields that
+            # read_registry() does not return: start from full state and replace
+            # only the clips table. That state is unchanged since our read above,
+            # the lock having stayed held without a gap.
             state = load_json(state_path, {})
             state["clips"] = clips
             save_json(state_path, state)
@@ -1096,10 +960,9 @@ def set_excluded(
 
 
 def clip_identity(input_dir: Path, source: Path) -> str:
-    """Identité stable d'un clip : son chemin relatif au dossier de
-    téléchargement. C'est aussi le chemin de sa version normalisée, les deux
-    arborescences étant des miroirs : la correspondance entre un brut et son
-    segment se lit à l'œil, sans consulter de registre."""
+    """Stable clip identity: path relative to the download folder. Same path for
+    its normalized version; the two trees are mirrors so raw-to-segment mapping
+    is obvious without consulting a registry."""
     return source.resolve().relative_to(input_dir.resolve()).as_posix()
 
 
@@ -1109,11 +972,11 @@ def stat_tag(source: Path) -> str:
 
 
 def clip_info(ffmpeg: str, registry: dict, identity: str, created, source: Path) -> ClipInfo:
-    """Caractéristiques d'un clip, mémorisées dans le registre.
+    """Clip characteristics cached in the registry.
 
-    Analyser un clip coûte un lancement de ffmpeg ; comme le résultat ne change
-    pas tant que le fichier ne change pas, on le garde. C'est aussi ce qui
-    permettra plus tard de raisonner sur un clip dont le brut a été effacé."""
+    Probing a clip costs an ffmpeg run; results are kept while the file is
+    unchanged. This will also support reasoning about a clip whose raw file was
+    deleted later."""
     entry = registry["clips"].get(identity) or {}
     tag = stat_tag(source)
     probe = entry.get("probe")
@@ -1137,23 +1000,21 @@ def clip_info(ffmpeg: str, registry: dict, identity: str, created, source: Path)
 
 
 def camera_target(registry: dict, camera: str, infos: list) -> tuple:
-    """Résolution et cadence cibles d'une caméra, mémorisées et monotones.
+    """Target resolution and frame rate for a camera, cached and monotonic.
 
-    Les calculer par journée les ferait osciller : un jour sans clip haute
-    définition ramènerait la cible vers le bas, ce qui invaliderait tous les
-    segments déjà encodés puis les ré-invaliderait au clip suivant. On les fixe
-    donc par caméra, et on ne les laisse que monter. Un clip de meilleure
-    définition relève la cible et provoque un ré-encodage complet de la caméra,
-    ce qui est le comportement voulu : mieux vaut letterboxer les anciens que
-    rétrécir les nouveaux."""
+    Computing per day would oscillate: a day without HD clips would lower the
+    target, invalidating all encoded segments then re-invalidating on the next
+    clip. Fix them per camera and only allow increases. A better clip raises
+    the target and triggers a full re-encode for that camera, which is intended:
+    letterbox old footage rather than shrink new."""
     stored = registry["cameras"].get(camera) or {}
     width = max([info.width for info in infos] + [int(stored.get("width", 0))])
     height = max([info.height for info in infos] + [int(stored.get("height", 0))])
-    # Cadence arrondie à l'image entière. Mesurée au millième, elle varie d'un
-    # clip à l'autre sans que rien ne change pour l'œil : un clip venu du cloud
-    # mesuré à 30,11 au lieu de 30,0 a suffi à relever la cible, donc à
-    # ré-encoder les trente-deux segments de la caméra. La montée doit répondre
-    # à une vraie différence, 15 contre 30, pas à un artefact de mesure.
+    # Frame rate rounded to whole frames. Measured to thousandths it varies clip
+    # to clip with no visible change: a cloud clip measured at 30.11 instead of
+    # 30.0 was enough to raise the target and re-encode all thirty-two segments
+    # for the camera. Increases must reflect real differences (15 vs 30), not
+    # measurement noise.
     fps = float(round(max([info.fps for info in infos]
                           + [float(stored.get("fps", 0))])))
     registry["cameras"][camera] = {"width": width, "height": height, "fps": fps}
@@ -1161,11 +1022,10 @@ def camera_target(registry: dict, camera: str, infos: list) -> tuple:
 
 
 def wall_clock_epoch(moment_utc: dt.datetime, timezone: ZoneInfo) -> int:
-    """Convertit un instant UTC en epoch « déguisé » : les chiffres de
-    l'heure locale (calculés correctement via zoneinfo côté Python) sont
-    réinterprétés comme si c'était de l'UTC. En lançant ensuite ffmpeg avec
-    TZ=UTC0, drawtext affiche exactement cette heure locale sans jamais
-    consulter de base de fuseaux horaires côté ffmpeg/OS."""
+    """Convert a UTC instant to a "disguised" epoch: local time digits (computed
+    correctly via zoneinfo in Python) are reinterpreted as if they were UTC. With
+    ffmpeg run under TZ=UTC0, drawtext shows exactly that local time without ever
+    consulting a timezone database in ffmpeg/OS."""
     local = moment_utc.astimezone(timezone)
     naive_as_utc = local.replace(tzinfo=dt.timezone.utc)
     return int(naive_as_utc.timestamp())
@@ -1173,17 +1033,16 @@ def wall_clock_epoch(moment_utc: dt.datetime, timezone: ZoneInfo) -> int:
 
 def drawtext_chain(font_value: str, fontsize: int, epoch: int,
                    color: str = "white", box_opacity: float = 0.55) -> str:
-    """Filtre drawtext affichant une horloge murale partant de `epoch`.
+    """drawtext filter showing wall clock starting at `epoch`.
 
-    %X (heure complète) plutôt que %T ou %H:%M:%S : d'une part le strftime de
-    MSVC ne connaît pas %T et rend alors une chaîne vide sans la moindre
-    erreur, d'autre part un ':' littéral ne survit pas aux dé-échappements
-    successifs du filtergraph. ffmpeg n'appelant pas setlocale, %X reste en
-    locale « C », soit HH:MM:SS partout.
+    %X (full time) rather than %T or %H:%M:%S: MSVC strftime does not know %T
+    and then renders an empty string with no error, and a literal ':' does not
+    survive successive filtergraph unescapes. ffmpeg does not call setlocale, so
+    %X stays in "C" locale, i.e. HH:MM:SS everywhere.
 
-    `color` a déjà été validé (_couleur_ffmpeg_valide, appelé par argparse) :
-    seuls alphanumériques, « # » et un éventuel « @opacité » peuvent
-    l'atteindre, aucun caractère qui romprait ce filtergraph."""
+    `color` was already validated (_couleur_ffmpeg_valide, called from argparse):
+    only alphanumerics, "#", and optional "@opacity" can reach it, nothing that
+    would break this filtergraph."""
     text_expr = f"'%{{pts\\:localtime\\:{epoch}\\:%d/%m/%Y %X}}'"
     return (
         f"drawtext=fontfile={font_value}:fontsize={fontsize}:fontcolor={color}:"
@@ -1200,17 +1059,15 @@ def build_batch_filter(
     font_value: str | None,
     style: TimestampStyle = STYLE_PAR_DEFAUT,
 ) -> str:
-    """Construit le filtergraph d'un lot : normalisation + horodatage incrusté
-    sur chaque clip, puis concaténation.
+    """Build a batch filtergraph: normalize + burned timestamp on each clip, then concat.
 
-    Avec font_value=None l'horodatage est omis : c'est le mode utilisé pour
-    recoller des vidéos déjà horodatées (agrégats hebdo / mensuel) dont les
-    paramètres diffèrent et qui doivent donc être ré-encodées.
+    With font_value=None the timestamp is omitted: used when joining already
+    timestamped videos (weekly/monthly aggregates) whose parameters differ and
+    must be re-encoded.
 
-    Les clips sans piste audio reçoivent un silence généré *dans* le graphe par
-    une source anullsrc dédiée. Une entrée lavfi partagée ne conviendrait pas :
-    une sortie de filtre ne peut être branchée qu'une seule fois, donc deux
-    clips muets dans le même lot rendraient le graphe invalide.
+    Clips without audio get silence generated *inside* the graph via a dedicated
+    anullsrc. A shared lavfi input would not work: a filter output can connect
+    only once, so two silent clips in one batch would make the graph invalid.
     """
     fontsize = style.size if style.size is not None else max(18, target_h // 18)
     chains = []
@@ -1278,10 +1135,10 @@ def run_ffmpeg_batch(
         "-ar", "48000",
         "-movflags", "+faststart",
         "-max_muxing_queue_size", "9999",
-        # -progress écrit un flux clé=valeur lisible par un programme, sans
-        # rien changer au reste. C'est l'option prévue pour ça depuis 2012 ;
-        # analyser la ligne d'état habituelle serait fragile (elle change de
-        # forme selon la version et n'est pas faite pour être relue).
+        # -progress writes a key=value stream for programs, without changing
+        # anything else. The option meant for this since 2012; parsing the usual
+        # status line would be fragile (shape varies by version, not meant to be
+        # parsed).
         "-progress", "pipe:1", "-nostats",
         str(output_path),
     ]
@@ -1294,45 +1151,42 @@ def run_ffmpeg_batch(
         text=True,
         encoding="utf-8",
         errors="replace",
-        # bufsize=1 : lecture ligne par ligne. Sans lui Python remplit un
-        # tampon avant de rendre la main, et l'avancement arrive par paquets.
+        # bufsize=1: line-by-line reads. Without it Python buffers before yielding
+        # and progress arrives in bursts.
         bufsize=1,
         env=env,
-        # Sa propre session hors Windows, comme les verbes lancés côte à côte
-        # (voir blink_cli.executer) : avec_descendance=True sur ce PID fera
-        # os.killpg(getpgid(pid)) (runtime.arreter_processus), qui viserait
-        # sinon le groupe entier du terminal ayant lancé le parent.
+        # Own session off Windows, like side-by-side launched verbs (see
+        # blink_cli.executer): avec_descendance=True on this PID makes
+        # os.killpg(getpgid(pid)) (runtime.arreter_processus), which would
+        # otherwise hit the whole terminal group that launched the parent.
         start_new_session=(sys.platform != "win32"),
     )
-    # Inscrit pour qu'un « stop » ailleurs le tue directement : le PID
-    # principal qui nous a lancés n'a lui-même jamais droit au taskkill /T
-    # (protection du navigateur, voir arreter_processus), donc sans ça cet
-    # ffmpeg resterait orphelin et tournerait jusqu'à sa fin.
+    # Register so a "stop" elsewhere kills it directly: the main PID that launched
+    # us never gets taskkill /T (browser protection, see arreter_processus), so
+    # without this ffmpeg would orphan and run until it finishes.
     runtime.inscrire_travailleur(process.pid)
 
-    # stderr est vidé par un fil dédié : s'il se remplit pendant qu'on lit
-    # stdout, ffmpeg se bloque sur son écriture et le tout s'immobilise.
+    # stderr is drained on a dedicated thread: if it fills while reading stdout,
+    # ffmpeg blocks on write and everything stalls.
     captured = []
     drain = threading.Thread(target=lambda: captured.append(process.stderr.read()))
     drain.start()
 
     total = sum(clip.duration for clip in batch) or 1.0
 
-    # Chien de garde : un ffmpeg qui se bloque (constaté en réel, AUDIT-2026-
-    # 08-13 28.82) laissait sinon `process.wait()` - et la lecture de
-    # `process.stdout` avant lui - attendre indéfiniment. La boucle merge
-    # entière restait alors figée en silence, sans erreur ni log, jusqu'à un
-    # arrêt manuel.
+    # Watchdog: a stuck ffmpeg (seen in production, AUDIT-2026-08-13 28.82)
+    # would otherwise leave `process.wait()` - and reading `process.stdout`
+    # before it - waiting forever. The whole merge loop then froze silently,
+    # with no error or log, until manual stop.
     #
-    # Le seuil porte sur l'ABSENCE de progression, pas sur une durée totale
-    # fixe : `-progress pipe:1` écrit plusieurs lignes par seconde tant que
-    # l'encodage avance, quelle que soit la vitesse de la machine ou sa
-    # charge du moment. Un délai fixe proportionnel à la durée du lot aurait
-    # fallu deviner un facteur de vitesse (PC lent, machine chargée par
-    # ailleurs...) forcément arbitraire ; ici, peu importe que ce lot prenne
-    # 10 secondes ou 2 heures du moment que ça continue d'avancer, seul un
-    # silence prolongé est suspect. SILENCE_MAX (module) : même seuil que
-    # concat_copy, qui n'a pas de -progress à observer.
+    # Threshold is on LACK of progress, not a fixed total duration: `-progress
+    # pipe:1` writes several lines per second while encoding advances, regardless
+    # of machine speed or load. A fixed delay proportional to batch duration
+    # would require guessing a speed factor (slow PC, busy machine...) that is
+    # necessarily arbitrary; here it does not matter if the batch takes 10 seconds
+    # or 2 hours as long as it keeps moving; only prolonged silence is suspect.
+    # SILENCE_MAX (module): same threshold as concat_copy, which has no -progress
+    # to watch.
     dernier_signe = time.monotonic()
     signe_verrou = threading.Lock()
     termine = threading.Event()
@@ -1357,8 +1211,8 @@ def run_ffmpeg_batch(
             if on_progress is None:
                 continue
             name, _, value = line.strip().partition("=")
-            # out_time_us et out_time_ms sont tous deux en microsecondes ; le
-            # second est mal nommé et conservé par compatibilité.
+            # out_time_us and out_time_ms are both in microseconds; the latter
+            # is misnamed and kept for compatibility.
             if name in ("out_time_us", "out_time_ms") and value.isdigit():
                 on_progress(min(int(value) / 1_000_000 / total, 1.0))
         process.wait()
@@ -1376,8 +1230,8 @@ def run_ffmpeg_batch(
 
 
 def concat_copy(ffmpeg: str, parts: list, destination: Path) -> tuple[bool, str]:
-    """Recolle des lots déjà ré-encodés (même codec/résolution/fps) par
-    simple copie de flux : rapide, sans perte."""
+    """Join already re-encoded batches (same codec/resolution/fps) by stream copy:
+    fast, lossless."""
     list_path = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -1408,28 +1262,27 @@ def concat_copy(ffmpeg: str, parts: list, destination: Path) -> tuple[bool, str]
             text=True,
             encoding="utf-8",
             errors="replace",
-            # Même raison que run_ffmpeg_batch : sans session propre hors
-            # Windows, le killpg de arreter_processus viserait le groupe du
-            # terminal ayant lancé le parent plutôt que ce seul processus.
+            # Same reason as run_ffmpeg_batch: without a separate session off
+            # Windows, arreter_processus killpg would hit the terminal group
+            # that launched the parent rather than this process alone.
             start_new_session=(sys.platform != "win32"),
         )
-        # Même inscription que run_ffmpeg_batch, même raison : ce concat final
-        # est un vrai enfant du processus courant, mais taskkill /T ne
-        # s'applique jamais au PID principal (protection du navigateur).
+        # Same registration as run_ffmpeg_batch, same reason: this final concat
+        # is a real child of the current process, but taskkill /T never applies
+        # to the main PID (browser protection).
         runtime.inscrire_travailleur(process.pid)
         try:
             try:
                 _, stderr = process.communicate(timeout=SILENCE_MAX)
             except subprocess.TimeoutExpired:
-                # Même risque documenté que run_ffmpeg_batch (AUDIT-2026-08-13
-                # 28.82) : un ffmpeg bloqué laisserait sinon communicate()
-                # attendre indéfiniment, gelant l'assemblage hebdomadaire ou
-                # mensuel en silence. Pas de -progress ici (simple copie de
-                # flux, rien à observer) : un délai fixe fait donc office de
-                # chien de garde, faute de mieux. kill() puis un second
-                # communicate() sans timeout : la doc subprocess prévient que
-                # TimeoutExpired ne tue pas l'enfant, sans quoi ses tubes
-                # restent ouverts et un futur wait() peut se bloquer à son tour.
+                # Same documented risk as run_ffmpeg_batch (AUDIT-2026-08-13
+                # 28.82): a stuck ffmpeg would leave communicate() waiting
+                # forever, freezing weekly or monthly assembly silently. No
+                # -progress here (stream copy, nothing to watch): a fixed timeout
+                # acts as watchdog instead. kill() then a second communicate()
+                # without timeout: subprocess docs warn TimeoutExpired does not
+                # kill the child, or pipes stay open and a later wait() may block
+                # too.
                 process.kill()
                 process.communicate()
                 return False, msg("ffmpeg_silencieux", secondes=int(SILENCE_MAX))
@@ -1445,22 +1298,19 @@ def concat_copy(ffmpeg: str, parts: list, destination: Path) -> tuple[bool, str]
 
 
 def progress_printer(label: str):
-    """Fabrique un rapporteur d'avancement pour un encodage.
+    """Build a progress reporter for an encode.
 
-    Sur un terminal la ligne est réécrite en place, comme n'importe quel outil
-    en ligne de commande. Dans un tube (serve.py qui relit la sortie), un
-    simple retour chariot n'émettrait aucune ligne et rien n'arriverait avant
-    la fin : on écrit alors des lignes complètes, que le lecteur reconnaît à
-    leur forme et n'ajoute pas au journal.
+    On a terminal the line is rewritten in place like any CLI tool. In a pipe
+    (serve.py reading output), a bare carriage return emits no line and nothing
+    arrives until the end: write full lines then, which the reader recognizes
+    by shape and does not add to the log.
 
-    Sous pythonw.exe (raccourcis de démarrage automatique, voir
-    autostart.py), sys.stdout vaut None : chaque fusion y échouait dès le
-    premier lot, avant même d'encoder quoi que ce soit, `sys.stdout.isatty()`
-    levant une AttributeError aussitôt rattrapée par la boucle --loop puis
-    retentée sans jamais aboutir (repéré en réel le 27 août 2026 : « tour
-    interrompu par une erreur » toutes les 5 min pendant des heures). Aucun
-    flux vers lequel écrire : le rapporteur ne fait rien plutôt que de
-    retenter un print() tout aussi voué à échouer."""
+    Under pythonw.exe (autostart shortcuts, see autostart.py), sys.stdout is
+    None: every merge failed on the first batch before encoding anything,
+    `sys.stdout.isatty()` raising AttributeError, caught by the --loop loop and
+    retried forever (seen in production 27 Aug 2026: "run interrupted by error"
+    every 5 min for hours). No stream to write to: the reporter no-ops rather
+    than retrying a doomed print()."""
     if sys.stdout is None:
         return lambda fraction: None
     interactive = sys.stdout.isatty()
@@ -1496,16 +1346,15 @@ def render_key(
     crf: int,
     style: TimestampStyle = STYLE_PAR_DEFAUT,
 ) -> str:
-    """Empreinte de rendu d'un segment normalisé : tout ce qui change son
-    contenu doit figurer ici, sinon un segment périmé serait réutilisé
-    silencieusement. Bascule avec/sans horodatage comprise : sans elle, un
-    segment déjà encodé horodaté resterait tel quel après désactivation du
-    réglage, l'horodatage figé dedans plutôt que réellement retiré.
+    """Render fingerprint of a normalized segment: anything that changes content
+    must appear here, or a stale segment would be reused silently. Toggle with/
+    without timestamp included: without it, an already timestamped segment would
+    stay as-is after disabling the setting, timestamp baked in rather than
+    truly removed.
 
-    Le style (taille/couleur/opacité, issue GitHub #7) ne compte que si un
-    horodatage est effectivement dessiné : sans ça, changer de couleur alors
-    que --no-timestamp est actif réencoderait tout pour rien, la valeur
-    n'ayant jamais atteint l'image."""
+    Style (size/color/opacity, GitHub #7) counts only when a timestamp is
+    actually drawn: otherwise changing color with --no-timestamp active would
+    re-encode everything for nothing, the value never reaching the image."""
     target_w, target_h, target_fps = target
     style_tag = (
         f"{style.size}/{style.color}/{style.box_opacity}"
@@ -1543,20 +1392,19 @@ def normalize_clip(
     on_progress=None,
     style: TimestampStyle = STYLE_PAR_DEFAUT,
 ) -> tuple[bool, str, bool]:
-    """Produit la version normalisée (et horodatée si `font_path` est donné)
-    d'un clip, si nécessaire.
+    """Produce the normalized (and timestamped if `font_path` is set) version of
+    a clip when needed.
 
-    Renvoie (ok, erreur, ré-encodé). Un segment déjà présent dont la clé de
-    rendu correspond est laissé tel quel : c'est ce qui rend la fusion
-    réellement incrémentale."""
+    Returns (ok, error, re-encoded). An existing segment whose render key
+    matches is left alone: that makes merge truly incremental."""
     destination = normalized_dir / identity
     entry = registry["clips"].get(identity) or {}
     if not force and entry.get("key") == key and valid_mp4(destination):
         return True, "", False
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    # Extension .mp4 conservée : ffmpeg choisit son format de sortie d'après
-    # elle, un simple suffixe .tmp le laisserait sans muxer.
+    # Keep .mp4 extension: ffmpeg picks output format from it; a bare .tmp suffix
+    # would leave it without muxing.
     pending = destination.with_name(destination.stem + ".tmp.mp4")
     pending.unlink(missing_ok=True)
     target_w, target_h, target_fps = target
@@ -1581,11 +1429,11 @@ def merge_group(
     segments: list,
     destination: Path,
 ) -> tuple[bool, str]:
-    """Assemble la vidéo d'une journée à partir de ses segments normalisés.
+    """Assemble a day's video from its normalized segments.
 
-    Il n'y a plus rien à encoder ici : les segments partagent codec, résolution
-    et cadence, donc une simple copie de flux suffit. La journalière est une
-    vue du stock normalisé, au même titre que l'hebdomadaire et la mensuelle."""
+    Nothing left to encode: segments share codec, resolution, and frame rate, so
+    stream copy is enough. The daily is a view of normalized storage, like weekly
+    and monthly."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary_video = destination.with_name(destination.stem + ".tmp.mp4")
     temporary_video.unlink(missing_ok=True)
@@ -1602,12 +1450,10 @@ def merge_group(
 
 
 def prune_normalized(normalized_dir: Path, registry: dict, keep: set) -> int:
-    """Supprime les segments qu'aucun clip connu ne revendique plus, ainsi que
-    les entrées de registre correspondantes.
+    """Delete segments no known clip claims anymore, and matching registry entries.
 
-    On ne le fait qu'après un passage complet : avec un filtrage --camera ou
-    --date, les groupes non traités n'auraient pas déclaré leurs segments et
-    seraient effacés à tort."""
+    Only after a full pass: with --camera or --date filtering, untreated groups
+    would not have declared their segments and would be wrongly erased."""
     if not normalized_dir.is_dir():
         return 0
     removed = 0
@@ -1634,11 +1480,10 @@ def prune_normalized(normalized_dir: Path, registry: dict, keep: set) -> int:
 
 
 def collect_dailies(output_dir: Path) -> dict:
-    """Inventorie les vidéos journalières déjà produites, par caméra.
+    """Inventory already produced daily videos, per camera.
 
-    On lit le disque plutôt que le registre de fusion : les agrégats restent
-    ainsi corrects même si les journalières ont été construites par plusieurs
-    exécutions filtrées (--date, --camera)."""
+    Read disk rather than merge registry so aggregates stay correct even if
+    dailies were built across several filtered runs (--date, --camera)."""
     dailies = defaultdict(list)
     if not output_dir.is_dir():
         return {}
@@ -1658,11 +1503,10 @@ def collect_dailies(output_dir: Path) -> dict:
 
 
 def period_label(day: dt.date, period: str) -> str:
-    """Étiquette de la période contenant `day`.
+    """Label of the period containing `day`.
 
-    Semaine ISO 8601 (lundi-dimanche, format YYYY-Www) : c'est la convention
-    des dates ISO déjà utilisée partout ailleurs dans le projet, et elle évite
-    l'ambiguïté du « début de semaine » selon les pays."""
+    ISO 8601 week (Monday-Sunday, YYYY-Www): same ISO date convention used
+    elsewhere in the project, avoiding "start of week" ambiguity by country."""
     if period == "weekly":
         year, week, _ = day.isocalendar()
         return f"{year}-W{week:02d}"
@@ -1686,26 +1530,24 @@ def concat_videos(
     preset: str,
     crf: int,
 ) -> tuple[bool, str]:
-    """Recolle des vidéos déjà horodatées.
+    """Join already timestamped videos.
 
-    Chemin rapide : si toutes partagent résolution et cadence, une simple copie
-    de flux suffit (pas de perte, quelques secondes). Sinon on ré-encode via le
-    filtre concat, seule façon fiable d'assembler des sources hétérogènes."""
+    Fast path: if all share resolution and frame rate, stream copy is enough (no
+    loss, seconds). Otherwise re-encode via the concat filter, the reliable way
+    to assemble heterogeneous sources."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.stem + ".tmp.mp4")
     temporary.unlink(missing_ok=True)
 
     try:
-        # On tente la copie de flux d'abord, sans rien mesurer : les
-        # journalières d'une caméra sortent toutes du même stock normalisé,
-        # donc du même codec, de la même résolution et de la même cadence.
+        # Try stream copy first without measuring: one camera's dailies all come
+        # from the same normalized store, hence same codec, resolution, and fps.
         #
-        # Surtout, ne pas décider d'après les cadences mesurées : la cadence
-        # moyenne d'un fichier concaténé vaut images / durée, et elle varie de
-        # quelques centièmes d'une journée à l'autre (30.00, 30.03, 30.04 ici)
-        # parce qu'une caméra Blink ne livre pas un flux parfaitement régulier.
-        # Ce test déclarait donc « hétérogène » un stock parfaitement homogène,
-        # et ré-encodait la semaine et le mois entiers à chaque passage.
+        # Do not decide from measured fps: average fps of a concatenated file is
+        # frames/duration and varies by hundredths day to day (30.00, 30.03,
+        # 30.04 here) because Blink cameras are not perfectly regular. That test
+        # labeled a homogeneous store "heterogeneous" and re-encoded whole weeks
+        # and months every pass.
         ok, error = concat_copy(ffmpeg, parts, temporary)
         if not ok:
             print(msg("copie_refusee"))
@@ -1746,28 +1588,25 @@ def build_periods(
     crf: int,
     proteges=frozenset(),
 ) -> tuple[int, int, int]:
-    """Assemble les vidéos journalières en agrégats hebdomadaires ou mensuels.
+    """Assemble daily videos into weekly or monthly aggregates.
 
-    ``proteges`` : clés « caméra|période » dont une journée a perdu à la fois
-    ses clips bruts et sa journalière (voir periodes_a_proteger()). Leur
-    agrégat déjà assemblé la contient peut-être encore : il n'est ni
-    reconstruit à partir des autres jours, ni supprimé comme période vide."""
+    ``proteges``: "camera|period" keys where a day lost both raw clips and its
+    daily (see periodes_a_proteger()). Their assembled aggregate may still
+    contain that day: do not rebuild from other days or delete as empty period."""
     dailies = collect_dailies(output_dir)
-    # Pas de retour anticipé si dailies est vide : une caméra qui n'a plus
-    # aucune journalière (tout exclu) doit quand même atteindre le nettoyage
-    # des périodes obsolètes en bas de fonction, sans quoi ses anciennes
-    # hebdomadaires/mensuelles ne seraient jamais revisitées ni supprimées.
+    # No early return if dailies is empty: a camera with no dailies left (all
+    # excluded) must still reach obsolete period cleanup at the bottom, or old
+    # weekly/monthly files would never be revisited or deleted.
 
     state_path = period_dir / MERGE_STATE
     state = load_json(state_path, {"version": 1, "groups": {}})
     state.setdefault("groups", {})
 
     built = skipped = failed = 0
-    # Clés (camera|label) encore couvertes par au moins une journalière : le
-    # reste de state["groups"] correspond à des périodes devenues vides
-    # (tous leurs jours exclus ou disparus), jamais revisitées par la boucle
-    # ci-dessous puisqu'elle ne parcourt que collect_dailies() - sans ce
-    # suivi, leur agrégat déjà assemblé restait sur disque indéfiniment.
+    # (camera|label) keys still covered by at least one daily: the rest of
+    # state["groups"] are periods that became empty (all days excluded or gone),
+    # never revisited by the loop below since it only walks collect_dailies() -
+    # without this tracking, their assembled aggregate stayed on disk forever.
     labels_attendus = set()
     for camera, entries in sorted(dailies.items()):
         buckets = defaultdict(list)
@@ -1827,16 +1666,14 @@ def build_periods(
 
 
 def periodes_a_proteger(indisponibles: set, output_dir: Path, period: str) -> set:
-    """Clés « caméra|période » que build_periods() ne doit ni reconstruire ni
-    supprimer : celles d'une journée dont un clip brut est indisponible ET
-    dont la journalière manque (audit du 26/09/2026, B02). La reconstruire à
-    partir des autres jours raccourcirait un agrégat qui contient peut-être
-    encore cette journée, parfois devenu sa seule copie.
+    """camera|period keys build_periods() must not rebuild or delete: days
+    where a raw clip is unavailable AND the daily is missing (audit 26/09/2026,
+    B02). Rebuilding from other days would shorten an aggregate that may still
+    contain that day, sometimes its only copy.
 
-    Calculées sur toutes les journées, pas seulement celles d'un filtre
-    --date ou --camera : build_periods() reconstruit toutes les périodes,
-    quel que soit ce filtre. Une journée indisponible dont la journalière
-    existe encore ne protège rien, l'agrégat la reprend telle quelle."""
+    Computed over all days, not only --date or --camera filter: build_periods()
+    rebuilds all periods regardless of filter. An unavailable day whose daily
+    still exists protects nothing; the aggregate keeps it as-is."""
     presentes = {
         (dossier, jour)
         for dossier, entrees in collect_dailies(output_dir).items()
@@ -1858,10 +1695,10 @@ COULEUR_FFMPEG_RE = re.compile(r"^#?[A-Za-z0-9]+(@(0(\.[0-9]+)?|1(\.0+)?))?$")
 
 
 def _couleur_ffmpeg_valide(valeur: str) -> str:
-    """N'admet qu'un nom de couleur ou un code hexadécimal, avec un éventuel
-    @opacité (0.0-1.0) : la syntaxe complète que sait lire fontcolor= dans
-    drawtext_chain(). Rejette tout le reste, en particulier « : » et « , »
-    qui romprait ce filtergraph (une nouvelle option, ou un nouveau filtre)."""
+    """Accept only a color name or hex code, with optional @opacity (0.0-1.0):
+    full syntax fontcolor= in drawtext_chain() understands. Reject everything
+    else, especially ":" and "," which would break this filtergraph (new option
+    or new filter)."""
     if not COULEUR_FFMPEG_RE.match(valeur):
         raise argparse.ArgumentTypeError(msg("couleur_invalide", valeur=valeur))
     return valeur
@@ -1937,8 +1774,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def journal(ligne: str) -> None:
-    """Trace horodatée : lancé par le planificateur, le script n'a pas de
-    console (AUDIT-2026-08-23, blocage silencieux de la boucle merge)."""
+    """Timestamped trace: launched by the scheduler, the script has no console
+    (AUDIT-2026-08-23, silent merge loop stall)."""
     moment = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         with (runtime.app_dir() / "merge.log").open("a", encoding="utf-8") as fichier:
@@ -1956,14 +1793,14 @@ def main() -> int:
                 try:
                     code = _executer(args)
                 finally:
-                    # Toujours retirer la marque d'avancement, même après une
-                    # erreur : l'interface croirait sinon qu'un calcul dure.
+                    # Always clear progress marker, even after error: otherwise
+                    # the UI would think work is still running.
                     runtime.fin_travail()
         except runtime.BusyError as erreur:
-            # Un assemblage déjà en cours fait le même travail : le doubler
-            # réencoderait les mêmes clips et brouillerait le registre.
+            # Assembly already in progress does the same work: doubling it would
+            # re-encode the same clips and corrupt the registry.
             print(msg("assemblage_deja_en_cours", erreur=erreur))
-            journal(f"assemblage deja en cours : {erreur}")
+            journal(f"assembly already in progress: {erreur}")
             return 0
         runtime.marquer("merge")
         return code
@@ -1973,7 +1810,7 @@ def main() -> int:
 
 def _calculer_cibles_encodage(groups: dict, registry: dict, input_dir: Path,
                              ffmpeg: str) -> dict:
-    """Calcule un format par caméra sur tous ses clips, indépendamment des filtres."""
+    """Compute one format per camera across all its clips, regardless of filters."""
     targets = {}
     for camera in sorted({key[0] for key in groups}):
         infos = [
@@ -1991,7 +1828,7 @@ def _planifier_normalisation(args, groups: dict, selected: dict, targets: dict,
                             input_dir: Path, normalized_dir: Path,
                             font_path: Path | None,
                             style: TimestampStyle = STYLE_PAR_DEFAUT) -> tuple:
-    """Liste les journées à traiter, les segments à garder et les clips à encoder."""
+    """List days to process, segments to keep, and clips to encode."""
     plan: dict = {}
     used_segments: set = set()
     pending: set = set()
@@ -2005,7 +1842,7 @@ def _planifier_normalisation(args, groups: dict, selected: dict, targets: dict,
                 identity, info, target, wall_clock_epoch(created, timezone),
                 font_path, args.preset, args.crf, style=style,
             )
-            # Déclaré même hors sélection, pour échapper au nettoyage.
+            # Declared even when not selected, to survive cleanup.
             used_segments.add(normalized_dir / identity)
             if (camera, day) not in selected:
                 continue
@@ -2022,7 +1859,7 @@ def _normaliser_plan(args, plan: dict, pending: set, registry: dict,
                     registry_path: Path, *, ffmpeg: str, timezone: ZoneInfo,
                     normalized_dir: Path, font_path: Path | None,
                     style: TimestampStyle = STYLE_PAR_DEFAUT) -> tuple:
-    """Encode le plan et rend les journées préparées ainsi que le nombre d'échecs."""
+    """Encode the plan; return prepared days and failure count."""
     normalized: dict = {}
     encoded = reused = failed = 0
     position, total = 0, len(pending)
@@ -2037,7 +1874,7 @@ def _normaliser_plan(args, plan: dict, pending: set, registry: dict,
                 position += 1
                 print(f"  [{position}/{total}] {identity}", flush=True)
                 report = progress_printer(f"[{position}/{total}]")
-                runtime.travail("Préparation des clips", position - 1, total,
+                runtime.travail("Preparing clips", position - 1, total,
                                 cle="phase.prepare_clips")
             ok, error, did_encode = normalize_clip(
                 ffmpeg, timezone, registry, normalized_dir, identity, info,
@@ -2047,11 +1884,10 @@ def _normaliser_plan(args, plan: dict, pending: set, registry: dict,
             if not ok:
                 print(msg("echec_normalisation", erreur=error))
                 failed += 1
-                # Une journée dont un seul clip échoue à normaliser ne doit
-                # pas voir sa liste de segments amputée servir quand même à
-                # l'assemblage (étape 3) : ça remplacerait une journalière
-                # complète par une version partielle, silencieusement plus
-                # courte. journee_incomplete bloque cet assemblage.
+                # A day where one clip fails to normalize must not have its
+                # truncated segment list used for assembly (step 3): that would
+                # replace a complete daily with a partial, silently shorter one.
+                # journee_incomplete blocks that assembly.
                 journee_incomplete = True
                 continue
             encoded += did_encode
@@ -2059,17 +1895,13 @@ def _normaliser_plan(args, plan: dict, pending: set, registry: dict,
             keys.append(key)
             segments.append(normalized_dir / identity)
             if did_encode:
-                # Sauvegarde par clip fraîchement encodé, pas seulement en
-                # fin de journée : un arrêt en cours de route (redémarrage,
-                # plantage) ne doit perdre que le clip en train d'être
-                # encodé, pas tout le progrès déjà acquis sur les
-                # précédents du même jour. Sans ça, une journée de
-                # plusieurs dizaines de clips recommençait entièrement à
-                # chaque interruption, même après avoir déjà correctement
-                # encodé la plupart d'entre eux - vécu en réel : plusieurs
-                # redémarrages consécutifs sur une même journée d'environ
-                # trente clips, qui relançait ffmpeg sur la totalité à
-                # chaque fois.
+                # Save after each freshly encoded clip, not only at end of day:
+                # a mid-run stop (restart, crash) should lose only the clip being
+                # encoded, not progress on earlier clips the same day. Without
+                # this, a day of dozens of clips restarted entirely on every
+                # interruption even after most were encoded - seen in production:
+                # several consecutive restarts on one ~thirty-clip day, relaunching
+                # ffmpeg on all clips each time.
                 save_json(registry_path, registry)
 
         normalized[(camera, day)] = (keys, segments, journee_incomplete)
@@ -2085,8 +1917,8 @@ def _executer(args) -> int:
     normalized_dir = args.normalized_output.resolve()
     excluded_dir = args.excluded_output.resolve()
 
-    # Les exclusions s'appliquent avant tout le reste : la suite du passage
-    # reconstruit alors naturellement ce qui en dépend.
+    # Exclusions run before everything else; the rest of the pass then rebuilds
+    # what depends on them naturally.
     if args.exclude or args.include:
         try:
             if args.exclude:
@@ -2139,9 +1971,9 @@ def _executer(args) -> int:
         shutil.rmtree(legacy, ignore_errors=True)
         print(msg("cache_supprime", chemin=legacy))
 
-    # Étape 1 : cibles d'encodage. Elles se calculent sur l'ensemble des clips
-    # d'une caméra, y compris ceux qu'un filtre --date ou --camera exclut de la
-    # construction, sinon la cible dépendrait du filtre employé.
+    # Step 1: encoding targets. Computed over all clips for a camera, including
+    # those a --date or --camera filter excludes from building, or the target
+    # would depend on the filter used.
     try:
         targets = _calculer_cibles_encodage(groups, registry, input_dir, ffmpeg)
     except RuntimeError as error:
@@ -2149,10 +1981,9 @@ def _executer(args) -> int:
         return 1
     save_json(registry_path, registry)
 
-    # Étape 2 : plan de normalisation. On établit la liste complète avant
-    # d'encoder quoi que ce soit, pour pouvoir annoncer « [3/24] » : un
-    # compteur sans total connu n'apprend rien sur le temps restant, et c'est
-    # ce total qui alimente la barre de progression de serve.py.
+    # Step 2: normalization plan. Build the full list before encoding anything
+    # so we can show "[3/24]": a counter without a known total says nothing about
+    # time left, and that total feeds serve.py's progress bar.
     plan, used_segments, pending = _planifier_normalisation(
         args, groups, selected, targets, registry, ffmpeg=ffmpeg,
         timezone=timezone, input_dir=input_dir, normalized_dir=normalized_dir,
@@ -2160,14 +1991,14 @@ def _executer(args) -> int:
     )
     save_json(registry_path, registry)
 
-    # Étape 2 bis : encodage des seuls segments manquants ou périmés.
+    # Step 2b: encode only missing or stale segments.
     normalized, failed = _normaliser_plan(
         args, plan, pending, registry, registry_path, ffmpeg=ffmpeg,
         timezone=timezone, normalized_dir=normalized_dir, font_path=font_path,
         style=style,
     )
 
-    # Étape 3 : assemblage des journalières, par simple copie de flux.
+    # Step 3: assemble dailies by stream copy.
     built = skipped = 0
     todo = sorted(normalized.items(), key=lambda item: item[0])
     for index, ((camera, day), (keys, segments, journee_incomplete)) in enumerate(todo, start=1):
@@ -2175,25 +2006,23 @@ def _executer(args) -> int:
         destination = output_dir / camera_path / f"{day}_{camera_path}.mp4"
         state_key = f"{camera}|{day}"
         if (camera, day) in indisponibles:
-            # load_groups() omet les bruts absents/invalides. La liste peut
-            # donc être non vide ET incomplète : ne jamais remplacer une
-            # journalière complète par les seuls clips encore accessibles.
+            # load_groups() omits missing/invalid raw files. The list can be
+            # non-empty AND incomplete: never replace a complete daily with
+            # only still-accessible clips.
             print(msg("jour_reportee_source", nom=destination.name))
             failed += 1
             continue
         if not segments:
-            # Rien à assembler : soit la journée n'a plus aucun clip valide
-            # (tout écarté), soit l'encodage a échoué pour ceux qui
-            # existaient. Seul le premier cas doit faire disparaître une
-            # vidéo déjà assemblée - le second ne doit surtout pas l'effacer
-            # sur un échec passager (réseau, ffmpeg) : elle reste à jour et
-            # sera retentée au prochain passage.
+            # Nothing to assemble: either the day has no valid clips left (all
+            # excluded), or encoding failed for those that existed. Only the
+            # first case should remove an already assembled video - the second
+            # must not delete it on a transient failure (network, ffmpeg): it
+            # stays valid and will be retried next pass.
             _, entries = plan.get((camera, day), (None, ()))
-            # (camera, day) dans indisponibles : un clip de cette journée
-            # existe encore dans le registre mais son fichier a disparu -
-            # à distinguer d'un choix d'exclusion (voir
-            # journees_a_source_indisponible()). Préserver la journalière
-            # déjà assemblée plutôt que la supprimer sur cette seule absence.
+            # (camera, day) in indisponibles: a clip for this day still exists
+            # in the registry but its file is gone - distinct from exclusion by
+            # choice (see journees_a_source_indisponible()). Keep the already
+            # assembled daily rather than deleting it for this absence alone.
             if not entries and (camera, day) not in indisponibles and destination.exists():
                 destination.unlink()
                 merge_state["groups"].pop(state_key, None)
@@ -2201,12 +2030,11 @@ def _executer(args) -> int:
                 print(msg("jour_supprimee", nom=destination.name))
             continue
         if journee_incomplete:
-            # Au moins un clip de cette journée a échoué à normaliser :
-            # segments est amputé par rapport aux clips réellement présents,
-            # l'assembler remplacerait une journalière complète par une
-            # version partielle plus courte, silencieusement. failed est déjà
-            # compté (étape 2) ; la journée reste à jour et sera retentée au
-            # prochain passage, comme un échec total (voir plus haut).
+            # At least one clip for this day failed normalization: segments is
+            # shorter than clips actually present; assembling would replace a
+            # complete daily with a shorter partial silently. failed already
+            # counted (step 2); the day stays as-is and will be retried next
+            # pass, like a total failure (see above).
             print(msg("jour_reportee_partielle", nom=destination.name))
             continue
         fingerprint = group_fingerprint(keys)
@@ -2223,7 +2051,7 @@ def _executer(args) -> int:
 
         print(msg("jour_assemblage", index=index, total=len(todo), jour=day,
                   camera=camera, clips=len(segments)))
-        runtime.travail("Assemblage des vidéos", index - 1, len(todo),
+        runtime.travail("Assembling videos", index - 1, len(todo),
                         cle="phase.assemble_videos")
         ok, error = merge_group(ffmpeg, segments, destination)
         if not ok:
@@ -2242,11 +2070,10 @@ def _executer(args) -> int:
         built += 1
 
     if not args.date and not args.camera and not failed:
-        # Un segment déjà encodé pour un clip dont le brut a depuis disparu
-        # (source USB débranchée, dossier déplacé) reste valide : le
-        # préserver malgré son absence de used_segments, sans quoi
-        # prune_normalized() l'effacerait comme un simple clip écarté par
-        # choix (voir journees_a_source_indisponible()).
+        # A segment already encoded for a clip whose raw file later disappeared
+        # (USB unplugged, folder moved) stays valid: preserve it despite not being
+        # in used_segments, or prune_normalized() would erase it like a clip
+        # excluded by choice (see journees_a_source_indisponible()).
         keep = used_segments | {normalized_dir / identity
                                 for identity in identites_indisponibles}
         removed = prune_normalized(normalized_dir, registry, keep)
@@ -2257,9 +2084,8 @@ def _executer(args) -> int:
     print(msg("journalieres_resume", built=built, skipped=skipped, failed=failed))
 
     if indisponibles & selected.keys():
-        # Une journalière reportée peut elle-même ne pas être présente.
-        # Reconstruire ses périodes à partir des seuls autres jours les
-        # raccourcirait aussi. Conserver les agrégats jusqu'à réparation.
+        # A postponed daily may itself be missing. Rebuilding its periods from
+        # other days only would shorten them too. Keep aggregates until fixed.
         print(msg("agregats_reportes"))
         return 1
 

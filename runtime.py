@@ -1,23 +1,23 @@
-"""Repères d'exécution, identiques que l'on tourne sur les sources ou en bundle.
+"""Runtime landmarks, the same whether running from sources or from a bundle.
 
-Trois questions changent de réponse une fois l'outil figé par PyInstaller, et
-chacune casse silencieusement si on ne la traite pas.
+Three questions change their answers once the tool is frozen by PyInstaller, and
+each fails silently if not handled.
 
-Où sont les données ? À côté des sources en développement, à côté de
-l'exécutable une fois distribué. Surtout pas dans le dossier temporaire
-d'extraction, qui disparaît à la fermeture : on y perdrait l'archive.
+Where is the data? Next to the sources in development, next to the executable
+once distributed. Never in the temporary extraction folder, which disappears on
+exit: the archive would be lost there.
 
-Où sont les ressources embarquées, ffmpeg en particulier ? Dans le dossier
-d'extraction justement, que PyInstaller désigne par sys._MEIPASS.
+Where are bundled resources, ffmpeg in particular? In that extraction folder,
+which PyInstaller exposes as sys._MEIPASS.
 
-Comment se relancer soi-même ? En développement on appelle l'interpréteur avec
-un script ; en bundle il n'y a plus de script, seulement l'exécutable et ses
-verbes. C'est le piège classique du motif « lanceur + bundle » : un programme
-qui se relance par sys.executable + chemin de script fonctionne parfaitement en
-développement et échoue une fois figé.
+How does the program relaunch itself? In development we invoke the interpreter
+with a script; in a bundle there is no script anymore, only the executable and
+its verbs. That is the classic pitfall of the "launcher + bundle" pattern: a
+program that relaunches via sys.executable + script path works perfectly in
+development and fails once frozen.
 """
 
-from __future__ import annotations  # Python 3.8 (build Windows 7) : les annotations "int | None" ne s'évaluent qu'à l'écriture des chaînes, jamais à l'exécution.
+from __future__ import annotations  # Python 3.8 (Windows 7 build): "int | None" annotations are only stored as strings, never evaluated at runtime.
 
 import argparse
 import contextlib
@@ -36,37 +36,34 @@ from typing import NamedTuple
 import _amorcage
 
 
-# Version de l'outil, et seule source de l'étiquette de publication : le
-# workflow de release refuse une étiquette qui ne lui correspond pas. Un binaire
-# doit pouvoir dire ce qu'il est, ne serait-ce que pour qu'un rapport de bogue
-# soit exploitable.
-VERSION = "0.24.2"
+# Tool version, and the sole source for the release tag: the release workflow
+# rejects a tag that does not match. A binary must be able to say what it is,
+# if only so a bug report is actionable.
+VERSION = "0.23.0"
 WINDOWS7_BUILD_MARKER = "windows7-build.txt"
 
 
-# Source unique des verbes : leur ordre d'apparition dans l'aide, le programme
-# qui les traite, et ce qu'ils font. Trois usages en découlent, l'aide affichée,
-# la délégation d'un verbe au bon programme, et la relance de l'outil sur un
-# autre verbe. Les tenir à trois endroits garantissait qu'ils divergent, ce qui
-# s'est produit : « autostart » manquait dans une description, « list » et
-# « login » n'apparaissaient nulle part dans la liste des verbes.
+# Single source of truth for verbs: their order in help, the program that runs
+# them, and what they do. Three uses follow: displayed help, delegating a verb
+# to the right program, and relaunching the tool on another verb. Keeping them
+# in three places guaranteed drift, which happened: "autostart" was missing from
+# one description, "list" and "login" did not appear in the verb list at all.
 #
-# Le programme « blink » désigne blink2video.py lui-même, qui traite ces verbes sans
-# déléguer : le verbe lui est alors passé en argument.
-# Chaque verbe porte ses deux libellés : l'aide en ligne prend le français,
-# docs.py prend l'un ou l'autre selon le README qu'il remplit. Le README anglais
-# a longtemps affiché la liste des verbes en français, faute de cette colonne.
-# Nom du point d'entrée, sans extension. Les verbes qu'il traite lui-même le
-# désignent par cette constante : le déduire d'un marqueur écrit à la main a
-# survécu au renommage du fichier et cassé toute relance, silencieusement.
+# The "blink" program is blink2video.py itself, which handles these verbs without
+# delegating: the verb is then passed as an argument.
+# Each verb carries two labels: CLI help uses French, docs.py picks one or the
+# other depending on which README it fills. The English README long showed the
+# verb list in French for lack of this column.
+# Entry point name, without extension. Verbs it handles itself refer to this
+# constant: inferring it from a hand-written marker survived a file rename and
+# broke every relaunch silently.
 ENTREE = "blink2video"
 
 
-# La configuration recommandée, en un seul endroit : « start » la lance,
-# « autostart on » la planifie. Chaque activité a sa cadence, parce qu'elles
-# n'ont pas le même coût : l'inventaire cloud est un appel de 0,13 s au compte,
-# le manifeste USB réveille le module de synchronisation, l'assemblage ne fait
-# rien quand rien n'a changé. Verbeux à lire, jamais à taper.
+# Recommended configuration in one place: "start" runs it, "autostart on" schedules
+# it. Each activity has its own cadence because costs differ: cloud inventory is
+# a 0.13 s account call, the USB manifest wakes the sync module, merging does
+# nothing when nothing changed. Verbose to read, never to type.
 REGLAGES = "blink_reglages.json"
 REGLAGES_DEFAUT = {"usb_minutes": 10, "cloud_minutes": 1, "port": 8765, "timestamp": False,
                    "timezone": "Europe/Paris", "merge_jour": True, "merge_semaine": False,
@@ -74,40 +71,35 @@ REGLAGES_DEFAUT = {"usb_minutes": 10, "cloud_minutes": 1, "port": 8765, "timesta
                    "font_size": None, "font_color": "white", "box_opacity": 0.55,
                    "trusted_host": "", "webhook_notif_url": "",
                    "live_auto_stop_seconds": 0,
-                   # Vide : dossier par défaut, voir dossier_sorties().
+                   # Empty: default folder, see dossier_sorties().
                    "dossier_sorties": ""}
-# Remplace la variable d'environnement BLINK_DIRECT_WEBRTC (experimentale,
-# BACKLOG.md 2026-09-03) une fois WebRTC valide en usage reel : un vrai
-# reglage, pas juste une variable a poser avant de lancer le serveur. "mse"
-# reste possible en repli volontaire (reglage cote page web) ; serve.py
-# retombe de toute facon sur MSE si aiortc n'est pas installe, quel que
-# soit ce choix. MJPEG deja compare a MSE une fois (audit 28.15) et son
-# code mort retire depuis (commit 7339f85) : pas reintroduit comme
-# troisieme option sans raison nouvelle.
+# Replaces BLINK_DIRECT_WEBRTC env var (experimental, BACKLOG.md 2026-09-03) once
+# WebRTC is valid in real use: a real setting, not just a variable to set before
+# launching the server. "mse" remains a deliberate fallback (web page setting);
+# serve.py falls back to MSE anyway if aiortc is not installed, regardless of
+# this choice. MJPEG was compared to MSE once (audit 28.15) and dead code removed
+# since (commit 7339f85): not reintroduced as a third option without new reason.
 PROTOCOLES_LIVE_VALIDES = ("webrtc", "mse")
-# Hebdo et mensuel réencodaient par défaut la même matière que le quotidien
-# (chaque assemblage ré-encode ses clips, jamais un simple regroupement de
-# fichiers) : sur une installation neuve, ce triplement silencieux de
-# l'espace et du temps CPU surprenait plus qu'il n'aidait. Quotidien reste
-# seul par défaut ; les deux autres restent un choix explicite dans les
-# réglages (signalé sur Reddit, 2026-08-26).
-# Nombre d'éléments du bloc fixe en tête de standard() : serve, --port,
-# valeur, --timezone, valeur, --trusted-host, valeur. blink_cli.route()
-# s'appuie sur cette longueur pour greffer le supplément de « start » juste
-# après (voir standard()).
+# Weekly and monthly used to re-encode by default the same material as daily
+# (each merge re-encodes its clips, never a simple file grouping): on a fresh
+# install, that silent tripling of space and CPU time surprised more than it
+# helped. Daily alone remains the default; the other two stay an explicit choice
+# in settings (reported on Reddit, 2026-08-26).
+# Number of elements in the fixed block at the head of standard(): serve, --port,
+# value, --timezone, value, --trusted-host, value. blink_cli.route() relies on
+# this length to graft the "start" extra right after (see standard()).
 LONGUEUR_BLOC_SERVE = 7
 
 
 def _entier_borne(valeurs: dict, champ: str, defaut: int, minimum: int,
                   maximum: int | None = None) -> int:
-    """Lit un entier borné dans le JSON des réglages, replie sur `defaut`
-    dès que la valeur est absente, du mauvais type, ou hors plage.
+    """Read a bounded integer from the settings JSON, fall back to `defaut`
+    when the value is missing, wrong type, or out of range.
 
-    Mêmes bornes que la validation déjà faite côté écriture (`/api/reglages`
-    dans serve.py) : ce plancher/plafond n'est pas nouveau, seule sa lecture
-    l'est - un fichier modifié à la main ou corrompu (revue de code du
-    0eab463, bug #10) ne pouvait jusqu'ici passer par aucun de ces deux
-    contrôles, contrairement au formulaire web."""
+    Same bounds as validation on write (`/api/reglages` in serve.py): these
+    min/max limits are not new, only reading them here is — a hand-edited or
+    corrupt file (code review 0eab463, bug #10) could bypass both checks unlike
+    the web form."""
     try:
         nombre = int(valeurs.get(champ, defaut))
     except (TypeError, ValueError):
@@ -118,24 +110,23 @@ def _entier_borne(valeurs: dict, champ: str, defaut: int, minimum: int,
 
 
 def _booleen(valeurs: dict, champ: str, defaut: bool) -> bool:
-    """Lit un booléen, replie sur `defaut` si ce n'en est pas un.
+    """Read a boolean, fall back to `defaut` if it is not one.
 
-    `bool(valeur)` seul rend presque tout vrai (seuls 0, "", None, [], {}
-    sont faux en Python) : une chaîne "false" - une erreur plausible en
-    éditant le JSON à la main, puisque JSON exige `false` sans guillemets -
-    y devenait donc `True`, l'inverse de l'intention (revue de code du
-    0eab463, bug #10). Seul un vrai booléen JSON (`true`/`false` sans
-    guillemets) est désormais accepté ; tout le reste retombe sur le
-    défaut plutôt que d'être mal interprété en silence."""
+    `bool(valeur)` alone makes almost everything true (only 0, "", None, [], {}
+    are false in Python): a "false" string — plausible when hand-editing JSON,
+    since JSON requires unquoted `false` — became `True`, the opposite of intent
+    (code review 0eab463, bug #10). Only a real JSON boolean (unquoted
+    `true`/`false`) is accepted now; everything else falls back to the default
+    rather than being misinterpreted silently."""
     valeur = valeurs.get(champ, defaut)
     return valeur if isinstance(valeur, bool) else defaut
 
 
 def _entier_optionnel_borne(valeurs: dict, champ: str, defaut: int | None,
                             minimum: int, maximum: int) -> int | None:
-    """Comme `_entier_borne`, mais `None` (absent ou explicite) est une
-    valeur valide à part entière : la taille de police auto-adaptée à la
-    hauteur de la vidéo (merge_daily.STYLE_PAR_DEFAUT), pas une erreur."""
+    """Like `_entier_borne`, but `None` (missing or explicit) is a valid value
+    on its own: font size auto-fit to video height (merge_daily.STYLE_PAR_DEFAUT),
+    not an error."""
     brut = valeurs.get(champ, defaut)
     if brut is None:
         return None
@@ -150,7 +141,7 @@ def _entier_optionnel_borne(valeurs: dict, champ: str, defaut: int | None,
 
 def _flottant_borne(valeurs: dict, champ: str, defaut: float,
                     minimum: float, maximum: float) -> float:
-    """Comme `_entier_borne`, pour un nombre à virgule (l'opacité du bandeau)."""
+    """Like `_entier_borne`, for a floating-point number (banner opacity)."""
     try:
         nombre = float(valeurs.get(champ, defaut))
     except (TypeError, ValueError):
@@ -161,20 +152,19 @@ def _flottant_borne(valeurs: dict, champ: str, defaut: float,
 
 
 def lire_reglages() -> dict:
-    """Cadences USB/cloud, port, horodatage et fuseau actuels, modifiables
-    depuis la page web.
+    """Current USB/cloud cadences, port, timestamping and timezone, editable from
+    the web page.
 
-    Fichier absent ou illisible : les valeurs par défaut, identiques à
-    celles qui étaient figées en dur ici avant que ce réglage existe."""
+    Missing or unreadable file: defaults, same as those hard-coded here before
+    this setting existed."""
     try:
         valeurs = json.loads((app_dir() / REGLAGES).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return dict(REGLAGES_DEFAUT)
     if not isinstance(valeurs, dict):
-        # JSON valide (`[]`, `"texte"`, `42`...) mais pas un objet : aussi
-        # inexploitable qu'illisible (revue de code du 0eab463, bug #10 -
-        # `.get()` sur autre chose qu'un dict levait AttributeError, jamais
-        # intercepté).
+        # Valid JSON (`[]`, `"texte"`, `42`...) but not an object: as unusable
+        # as unreadable (code review 0eab463, bug #10 — `.get()` on non-dict
+        # raised AttributeError, never caught).
         return dict(REGLAGES_DEFAUT)
     return {
         "usb_minutes": _entier_borne(valeurs, "usb_minutes",
@@ -201,8 +191,8 @@ def lire_reglages() -> dict:
             "trusted_host", REGLAGES_DEFAUT["trusted_host"])).strip(),
         "webhook_notif_url": str(valeurs.get(
             "webhook_notif_url", REGLAGES_DEFAUT["webhook_notif_url"])).strip(),
-        # 300 = LIVE_MAX_SECONDS (serve.py), le plafond dur qui coupe de
-        # toute façon chaque direct : au-delà, le réglage serait inopérant.
+        # 300 = LIVE_MAX_SECONDS (serve.py), the hard cap that ends every live
+        # stream anyway: beyond that, the setting would have no effect.
         "live_auto_stop_seconds": _entier_borne(
             valeurs, "live_auto_stop_seconds",
             REGLAGES_DEFAUT["live_auto_stop_seconds"], 0, 300),
@@ -211,15 +201,13 @@ def lire_reglages() -> dict:
 
 
 def _ecrire_texte_atomique(cible: Path, contenu: str) -> None:
-    """Remplace un petit fichier UTF-8 après écriture complète à côté de lui.
+    """Replace a small UTF-8 file after writing it completely alongside it.
 
-    Temporaire propre à chaque appel, y compris dans un même processus, et
-    remplacement qui retente un refus passager de Windows (antivirus,
-    indexeur) : nico579_commons.atomique, la même pour les quatre
-    applications. L'appelant conserve la création des dossiers, la
-    sérialisation et les verrous de transaction : un replace atomique ne
-    protège pas à lui seul une lecture-modification-écriture concurrente. Les
-    erreurs remontent.
+    Per-call temporary file, even within the same process, and replace that
+    retries transient Windows refusal (antivirus, indexer): nico579_commons.atomique,
+    shared across the four applications. The caller keeps folder creation,
+    serialization and transaction locks: atomic replace alone does not protect
+    a concurrent read-modify-write. Errors propagate.
     """
     from nico579_commons import atomique
 
@@ -242,8 +230,8 @@ def ecrire_reglages(usb_minutes: int, cloud_minutes: int, port: int, timestamp: 
                     dossier: Path | None = None) -> None:
     cible = (app_dir() if dossier is None else dossier) / REGLAGES
     if dossier_sorties is None:
-        # Absent de l'appel : garder celui déjà enregistré. Le remettre à vide
-        # renverrait en silence les clips suivants vers le dossier par défaut.
+        # Omitted from the call: keep what is already saved. Resetting to empty
+        # would silently send later clips to the default folder.
         try:
             actuel = json.loads(cible.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -269,52 +257,42 @@ LANGUE = "blink_langue.txt"
 
 
 def lire_langue() -> str:
-    """Langue de la dernière page web chargée, « fr » ou « en ».
+    """Language of the last loaded web page, "fr" or "en".
 
-    Fichier absent (rien encore chargé) ou illisible : « fr », le même
-    défaut que detectLang() côté navigateur quand la langue système n'est
-    pas reconnue. Sert au menu du systray (tray.py) pour hériter de la
-    langue de la page plutôt que de rester figé en français."""
+    Missing or unreadable file (nothing loaded yet): "en". Used by the
+    systray menu (tray.py) so it follows the page language."""
     try:
         contenu = (app_dir() / LANGUE).read_text(encoding="utf-8").strip()
     except OSError:
-        return "fr"
+        return "en"
     return "en" if contenu == "en" else "fr"
 
 
 def ecrire_langue(code: str) -> None:
-    """Mémorise la langue affichée par la page web (POST /api/lang), à
-    chaque chargement ou changement explicite - pas seulement le choix
-    manuel : sans ça, un premier lancement jamais retouché aux boutons
-    FR/EN laisserait le menu du systray dans le défaut, même si la page
-    s'affichait déjà en anglais (langue détectée du navigateur)."""
+    """Remember the language shown by the web page (POST /api/lang), on every
+    load or explicit change — not only manual choice: without this, a first run
+    never touched via FR/EN buttons would leave the systray menu at default even
+    if the page already showed English (browser-detected language)."""
     _ecrire_texte_atomique(app_dir() / LANGUE, "en" if code == "en" else "fr")
 
 
 def traduire(libelles: dict, cle: str, **valeurs) -> str:
-    """Rend libelles[langue][cle] dans la langue de la page (lire_langue()),
-    formatée avec valeurs au besoin.
+    """Return libelles[langue][cle] in the page language (lire_langue()), formatted
+    with valeurs when needed.
 
-    Même dictionnaire bilingue à deux clés "fr"/"en" que LIBELLES dans
-    tray.py, réutilisé ici pour les messages que les commandes (download,
-    login, merge...) impriment sur leur propre sortie standard : ces
-    processus n'ont pas de page web à qui déléguer la traduction, seulement
-    le fichier `blink_langue.txt` laissé par le dernier chargement de la
-    page (issue GitHub #6 : ces messages restaient tout en français)."""
+    Same bilingual dict with "fr"/"en" keys as LIBELLES in tray.py, reused here
+    for messages that commands (download, login, merge...) print to their own
+    stdout: those processes have no web page to delegate translation to, only
+    `blink_langue.txt` left by the last page load (GitHub issue #6: those
+    messages stayed all French)."""
     texte = libelles[lire_langue()][cle]
     return texte.format(**valeurs) if valeurs else texte
 
 
-# Messages que runtime.py imprime lui-même (bootstrap, boucle --loop).
-# Sûr dès le bootstrap, avant toute dépendance installée : lire_langue()
-# n'utilise que la stdlib et retombe sur « fr » si rien n'est encore écrit.
+# Messages that runtime.py prints itself (bootstrap, --loop loop).
+# Safe from bootstrap, before any dependency is installed: lire_langue() uses
+# only the stdlib and falls back to "fr" if nothing is written yet.
 _LIBELLES_RUNTIME = {
-    "fr": {
-        "repetition": "Répétition toutes les {minutes} min. Ctrl+C pour arrêter.",
-        "tour_interrompu": "Tour interrompu par une erreur, nouvel essai au prochain : {erreur}",
-        "arret": "\nArrêt.",
-        "aide_loop": "répéter toutes les N minutes au lieu d'agir une fois (défaut 10)",
-    },
     "en": {
         "repetition": "Repeating every {minutes} min. Ctrl+C to stop.",
         "tour_interrompu": "Run interrupted by an error, retrying next time: {erreur}",
@@ -322,6 +300,7 @@ _LIBELLES_RUNTIME = {
         "aide_loop": "repeat every N minutes instead of running once (default 10)",
     },
 }
+_LIBELLES_RUNTIME["fr"] = dict(_LIBELLES_RUNTIME["en"])
 
 
 def _msg(cle: str, **valeurs) -> str:
@@ -332,13 +311,12 @@ JETON_WEBHOOK = "blink_webhook_token.txt"
 
 
 def lire_jeton_webhook() -> str:
-    """Secret du webhook de snapshot (issue GitHub #9), généré une seule fois.
+    """Snapshot webhook secret (GitHub issue #9), generated once.
 
-    Contrairement au jeton de session (uuid4, un par processus, jamais
-    montré), celui-ci doit survivre aux redémarrages et être copiable dans
-    un système tiers (smarthome) : il vit dans un fichier, pas en mémoire.
-    secrets.token_urlsafe plutôt qu'uuid4 : c'est l'API dédiée à un secret
-    qui doit résister à une devinette, pas seulement désigner un processus."""
+    Unlike the session token (uuid4, one per process, never shown), this one must
+    survive restarts and be copyable into a third-party system (smarthome): it
+    lives in a file, not in memory. secrets.token_urlsafe rather than uuid4: the
+    API meant for a secret that must resist guessing, not just name a process."""
     chemin = app_dir() / JETON_WEBHOOK
     try:
         jeton = chemin.read_text(encoding="utf-8").strip()
@@ -350,9 +328,8 @@ def lire_jeton_webhook() -> str:
 
 
 def regenerer_jeton_webhook() -> str:
-    """Invalide l'ancien secret (tout système déjà configuré avec devra être
-    mis à jour) : sert autant à créer le premier jeton qu'à révoquer une
-    URL éventée."""
+    """Invalidate the old secret (any system already configured must be updated):
+    used both to create the first token and to revoke a leaked URL."""
     jeton = secrets.token_urlsafe(32)
     _ecrire_texte_atomique(app_dir() / JETON_WEBHOOK, jeton)
     return jeton
@@ -362,13 +339,13 @@ SUPPRESSION_AUTO = "blink_suppression_auto.json"
 
 
 def lire_suppression_auto() -> set:
-    """Caméras dont les clips USB sont supprimés du Sync Module une fois
-    téléchargés avec succès (issue GitHub #1 : libérer la mémoire tampon).
+    """Cameras whose USB clips are deleted from the Sync Module once downloaded
+    successfully (GitHub issue #1: free buffer memory).
 
-    Par caméra, pas globalement : une caméra encore incertaine (peu de recul
-    sur la fiabilité du téléchargement) doit pouvoir rester en conservation
-    pendant qu'une autre, déjà éprouvée, libère sa mémoire. Fichier absent ou
-    illisible : ensemble vide, personne n'est supprimé par défaut."""
+    Per camera, not globally: an uncertain camera (little track record on
+    download reliability) should stay in retention while another, proven one,
+    frees its memory. Missing or unreadable file: empty set, nothing deleted by
+    default."""
     import json
 
     try:
@@ -385,24 +362,24 @@ def lire_suppression_auto() -> set:
 
 
 def ecrire_suppression_auto(cameras: set) -> None:
-    """Enregistre l'ensemble des caméras en suppression automatique (USB)."""
+    """Save the set of cameras in automatic deletion (USB)."""
     _ecrire_texte_atomique(app_dir() / SUPPRESSION_AUTO,
                            json.dumps(sorted(cameras), ensure_ascii=False))
 
 
 def options_fusion(reglages: dict) -> list:
-    """Options communes aux fusions automatiques et demandées par la page.
+    """Options shared by automatic merges and those requested from the page.
 
-    L'appelant décide de lancer la fusion selon merge_jour. Une fois lancée,
-    elle conserve partout le même fuseau et les mêmes sorties activées.
+    The caller decides whether to run merge based on merge_jour. Once started,
+    it keeps the same timezone and enabled outputs everywhere.
     """
     options = ["--timezone", reglages["timezone"]]
     if not reglages["timestamp"]:
         options.append("--no-timestamp")
     else:
-        # Seulement quand ça s'écarte du défaut de merge_daily lui-même :
-        # une installation qui n'a jamais touché ces réglages doit lancer
-        # exactement la même ligne de commande qu'avant leur existence.
+        # Only when this differs from merge_daily's own defaults: an install that
+        # never touched these settings must run exactly the same command line as
+        # before they existed.
         if reglages["font_size"] is not None:
             options += ["--font-size", str(reglages["font_size"])]
         if reglages["font_color"] != "white":
@@ -417,28 +394,24 @@ def options_fusion(reglages: dict) -> list:
 
 
 def standard() -> tuple:
-    """Composition recommandée : mêmes verbes que l'ancienne constante
-    STANDARD, mais les cadences USB/cloud, le port, l'horodatage et le
-    fuseau viennent de `lire_reglages()` plutôt que d'être figés ici, pour
-    que le réglage depuis la page web prenne effet au prochain démarrage.
+    """Recommended composition: same verbs as the old STANDARD constant, but
+    USB/cloud cadences, port, timestamping and timezone come from `lire_reglages()`
+    rather than being fixed here, so web settings apply on the next start.
 
-    Les LONGUEUR_BLOC_SERVE premiers éléments (serve, --port, valeur,
-    --timezone, valeur, --trusted-host, valeur) sont un bloc fixe :
-    blink_cli.route() les traite comme la partie « verbe » sur laquelle un
-    supplément tapé à la main (« start --port 8899 ») se greffe, afin qu'un
-    --port, --timezone ou --trusted-host explicite l'emporte toujours sur la
-    valeur enregistrée (argparse retient la dernière occurrence d'une
-    option)."""
+    The first LONGUEUR_BLOC_SERVE elements (serve, --port, value, --timezone,
+    value, --trusted-host, value) are a fixed block: blink_cli.route() treats
+    them as the "verb" part that a hand-typed extra ("start --port 8899") grafts
+    onto, so an explicit --port, --timezone or --trusted-host always wins over
+    the saved value (argparse keeps the last occurrence of an option)."""
     c = lire_reglages()
     merge = []
     if c["merge_jour"]:
         merge = ["merge", "--loop", "5", *options_fusion(c)]
     download = []
     if c["download_auto"]:
-        # Un seul worker inventorie d'abord les deux sources : la barre connaît
-        # ainsi le nombre global de clips à rapatrier, notamment juste après un
-        # changement de dossier. Il conserve ensuite les deux cadences sans
-        # réveiller l'USB aussi souvent que le cloud.
+        # One worker inventories both sources first: the progress bar then knows
+        # the total clip count to fetch, especially right after a folder change.
+        # It then keeps both cadences without waking USB as often as cloud.
         download = ["download", "--from", "all",
                     "--usb-loop", str(c["usb_minutes"]),
                     "--cloud-loop", str(c["cloud_minutes"])]
@@ -449,12 +422,12 @@ def standard() -> tuple:
 
 
 class Verbe(NamedTuple):
-    """Un verbe : le programme qui l'exécute, et son libellé dans chaque langue.
+    """One verb: the program that runs it, and its label in each language.
 
-    Un tuple nommé plutôt qu'un tuple simple parce que la table est lue depuis
-    cinq endroits, dont un fichier .spec : le jour où une troisième colonne est
-    apparue, tous ceux qui déballaient « module, texte » ont cassé d'un coup.
-    Nommer les champs supprime la classe entière de ces pannes."""
+    A named tuple rather than a plain tuple because the table is read from five
+    places, including a .spec file: when a third column appeared, everyone
+    unpacking "module, text" broke at once. Naming fields removes that whole
+    class of failures."""
 
     module: str
     fr: str
@@ -503,23 +476,21 @@ VERBES = {
                   "check that the installation works on this machine"),
 }
 
-# Verbes confiés à un autre programme, déduits de la table ci-dessus.
+# Verbs delegated to another program, derived from the table above.
 DELEGUES = {nom: verbe.module for nom, verbe in VERBES.items()
             if verbe.module != ENTREE}
 
 
 def extraire_mode_bootstrap(argv: list) -> list:
-    """Retire --bootstrap=... de `argv` s'il y est, et reporte sa valeur dans
-    la variable d'environnement BLINK_BOOTSTRAP. Renvoie `argv` sans lui.
+    """Remove --bootstrap=... from `argv` if present, and store its value in
+    BLINK_BOOTSTRAP. Returns `argv` without it.
 
-    --bootstrap n'est déclaré par aucun parseur de verbe, seulement compris
-    par bootstrap() : laissé dans argv, il fait échouer argparse sur
-    "unrecognized arguments" avant même que bootstrap() ait pu le lire. À
-    appeler donc AVANT tout parse_args(), pas seulement au sein de
-    bootstrap() elle-même - route() (blink_cli.py) s'en sert tout en haut
-    pour couvrir aussi les verbes comme download, dont les arguments
-    n'étaient nettoyés par personne avant d'atteindre argparse (revue du
-    27/08, bug 4)."""
+    --bootstrap is not declared by any verb parser, only understood by
+    bootstrap(): left in argv, it makes argparse fail with "unrecognized
+    arguments" before bootstrap() could read it. Call BEFORE any parse_args(),
+    not only inside bootstrap() itself — route() (blink_cli.py) uses it at the
+    very top to cover verbs like download, whose arguments were not stripped
+    before reaching argparse (review 27/08, bug 4)."""
     nettoye = []
     for argument in argv:
         if argument.startswith("--bootstrap="):
@@ -530,29 +501,27 @@ def extraire_mode_bootstrap(argv: list) -> list:
 
 
 def bootstrap() -> None:
-    """Prépare un environnement Python isolé, puis s'y relance.
+    """Prepare an isolated Python environment, then relaunch into it.
 
-    À appeler tout en haut d'un point d'entrée, AVANT les imports de aiohttp ou
-    de blinkpy : c'est le problème de l'œuf et de la poule, on ne peut pas
-    vérifier des dépendances après avoir échoué à les importer.
+    Call at the very top of an entry point, BEFORE importing aiohttp or blinkpy:
+    chicken-and-egg — you cannot check dependencies after failing to import them.
 
-    Le moteur est _amorcage.py, copie octet pour octet de
-    nico579_commons.amorcage, commun aux quatre applications (il tourne avant
-    l'installation de la bibliothèque commune, qu'il ne peut donc pas importer :
-    test_amorcage_commun.py compare les deux). Les dépendances sont celles de
-    requirements.in, installées depuis le verrou requirements.txt ; il n'y a
-    plus de seconde liste ici. Sous Python 3.8 (édition Windows 7), le verrou,
-    compilé pour 3.11, ne s'applique pas : on installe requirements.in.
+    The engine is _amorcage.py, a byte-for-byte copy of nico579_commons.amorcage,
+    shared across the four applications (it runs before the common library is
+    installed, so it cannot import it: test_amorcage_commun.py compares the two).
+    Dependencies come from requirements.in, installed from lock file
+    requirements.txt; there is no second list here. On Python 3.8 (Windows 7
+    edition), the lock compiled for 3.11 does not apply: install requirements.in.
 
-    Quatre modes, choisis par --bootstrap= ou par la variable BLINK_BOOTSTRAP :
-      auto (défaut) : venv dans ~/.blink2video/venv, créé au besoin, puis relance ;
-                      si les dépendances sont déjà là et qu'aucun venv n'existe
-                      (une image Docker), l'environnement courant suffit
-      force         : comme auto, même si un autre environnement est actif
-      pip           : installation dans l'environnement courant
-      none          : aucune installation, on vérifie et on explique
+    Four modes, chosen by --bootstrap= or BLINK_BOOTSTRAP:
+      auto (default): venv in ~/.blink2video/venv, created as needed, then relaunch;
+                      if dependencies are already present and no venv exists
+                      (a Docker image), the current environment is enough
+      force         : like auto, even if another environment is active
+      pip           : install into the current environment
+      none          : no install, verify and explain
 
-    Sans effet dans un bundle, qui embarque déjà tout."""
+    No effect in a bundle, which already embeds everything."""
     if frozen():
         return
     sys.argv[1:] = extraire_mode_bootstrap(sys.argv[1:])
@@ -567,57 +536,52 @@ def amorcage() -> "_amorcage.Amorcage":
 
 
 def frozen() -> bool:
-    """Vrai lorsque le programme tourne depuis un bundle PyInstaller."""
+    """True when the program runs from a PyInstaller bundle."""
     return bool(getattr(sys, "frozen", False))
 
 
 POINTEUR_STOCKAGE = "blink_home.txt"
 MARQUEUR_CONFIGURATION_INITIALE = ".blink_configuration_initiale_effectuee"
 MARQUEUR_CONFIGURATION_EN_ATTENTE = ".blink_configuration_initiale_en_attente"
-# Compte rendu de la reprise de l'état d'une version ≤ 0.13 (voir
-# _migrer_etat_historique) : sa présence dit aussi qu'elle est faite.
+# Report of state migration from a version ≤ 0.13 (see _migrer_etat_historique):
+# its presence also means migration is done.
 MARQUEUR_MIGRATION = ".blink_etat_migre.json"
-# L'état que cette reprise copie. Noms littéraux pour ceux que définissent
-# d'autres modules, que runtime ne peut pas importer :
-# test_runtime_dossier_stockage.py vérifie qu'ils concordent.
+# State this migration copies. Literal names for those defined by other modules
+# that runtime cannot import: test_runtime_dossier_stockage.py checks they match.
 ETAT_HISTORIQUE = (REGLAGES, "blink_auth.json", LANGUE, JETON_WEBHOOK,
                    SUPPRESSION_AUTO, ".blink_passages.json",
                    ".blink_watch_state.json", ".blink_raccourci_cree",
                    ".blink_maj.json")
-# Ce que le programme produit, rangé sous dossier_sorties().
+# What the program produces, stored under dossier_sorties().
 DOSSIERS_SORTIES = ("Blink_Clips", "Blink_Daily", "Blink_Weekly", "Blink_Monthly",
                     "Blink_Normalized", "Blink_Excluded", "Blink_Direct",
                     "Blink_Snapshots")
 
 
 def _dossier_ancre() -> Path:
-    """Dossier du programme : à côté de l'exécutable (figé) ou des sources.
+    """Program directory: next to the executable (frozen) or the sources.
 
-    Jusqu'à 0.13, c'était aussi celui des données, sauf si
-    `POINTEUR_STOCKAGE`, posé ici, les redirigeait ailleurs. Il ne sert plus
-    qu'à retrouver ces données-là (migration, mise à jour depuis une de ces
-    versions) et à ce qui accompagne le programme lui-même."""
+    Until 0.13, this was also the data directory, unless `POINTEUR_STOCKAGE`,
+    written here, redirected elsewhere. It now only serves to find that data
+    (migration, update from those versions) and what ships with the program."""
     if frozen():
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
 
 
 def app_dir_depuis(ancre: Path) -> Path:
-    """Dossier des données d'une version ≤ 0.13 installée dans `ancre` : la
-    cible de son `blink_home.txt`, sinon l'ancre elle-même.
+    """Data directory of a version ≤ 0.13 installed in `ancre`: target of its
+    `blink_home.txt`, otherwise the anchor itself.
 
-    Sert à la reprise de leur état, et à maj.py, qui doit encore comprendre
-    les racines que lui transmettent les lanceurs de ces versions. Là, la
-    version fraîchement extraite tourne depuis un dossier
-    temporaire, dont l'ancre naturelle ne connaît pas `blink_home.txt` de
-    l'installation réelle. Elle a besoin d'annoncer le bon dossier à la
-    version relancée sans pour autant l'enfermer dans l'ancre elle-même si
-    l'utilisateur a redirigé son stockage : suivre le pointeur depuis l'ancre
-    fournie donne l'un ou l'autre correctement, contrairement à imposer
-    l'ancre elle-même sans le lire (BLINK_HOME l'écraserait alors, y compris
-    pour un stockage explicitement redirigé ailleurs - c'est ce qui, en
-    pratique, ramenait le dossier de données à celui de l'exécutable après
-    chaque mise à jour, signalé sur Reddit, 2026-08-26)."""
+    Used for state migration and by maj.py, which must still understand roots
+    passed by launchers of those versions. There, the freshly extracted version
+    runs from a temporary folder whose natural anchor does not know the real
+    install's `blink_home.txt`. It must tell the relaunched version the right
+    folder without locking it to the anchor if the user redirected storage:
+    following the pointer from the given anchor yields either correctly, unlike
+    forcing the anchor without reading it (BLINK_HOME would then overwrite it,
+    including explicitly redirected storage — in practice this reset the data
+    folder to the executable's after every update, reported on Reddit, 2026-08-26)."""
     pointeur = ancre / POINTEUR_STOCKAGE
     try:
         cible = pointeur.read_text(encoding="utf-8").strip()
@@ -629,13 +593,12 @@ def app_dir_depuis(ancre: Path) -> Path:
 
 
 def _dossier_etat_standard() -> Path:
-    """Dossier d'état standard de l'OS, celui que donne platformdirs.
+    """Standard OS state directory, the one platformdirs provides.
 
-    runtime.py doit rester importable avant que bootstrap() ait installé les
-    dépendances (sources lancées avec un Python qui ne les a pas encore). À
-    défaut de platformdirs, les mêmes règles que lui pour les trois systèmes
-    pris en charge : test_runtime_dossier_stockage.py compare les deux
-    résultats, et la CI le fait tourner sous chacun d'eux."""
+    runtime.py must stay importable before bootstrap() installs dependencies
+    (sources launched with Python that lacks them). Without platformdirs, the
+    same rules for the three supported systems: test_runtime_dossier_stockage.py
+    compares both results, and CI runs it on each."""
     try:
         from platformdirs import user_data_dir
     except ImportError:
@@ -651,22 +614,21 @@ def _dossier_etat_standard() -> Path:
     return Path(user_data_dir(ENTREE, appauthor=False)).resolve()
 
 
-# Dossiers d'état déjà créés par ce processus.
+# State directories already created by this process.
 _ETATS_CREES: set = set()
 
 
 def app_dir() -> Path:
-    """Dossier d'état : réglages, session Blink, préférences, journaux et
-    fichiers qui pilotent les processus. Jamais ce que le programme produit,
-    rangé dans dossier_sorties().
+    """State directory: settings, Blink session, preferences, logs and files
+    that drive processes. Never what the program produces, stored in
+    dossier_sorties().
 
-    La variable BLINK_HOME l'impose (tests, Docker, installation portable).
-    Sinon, le dossier standard de l'OS (LOCALAPPDATA sous Windows), même
-    convention que lidar2map et watch2notif. Il ne dépend plus de
-    l'emplacement du programme : sources et exécutable, ou deux copies de
-    l'exécutable, partagent le même état, et une mise à jour ne le touche
-    jamais. preparer_etat(), au démarrage, y reprend celui d'une version
-    ≤ 0.13."""
+    BLINK_HOME overrides it (tests, Docker, portable install). Otherwise the
+    standard OS folder (LOCALAPPDATA on Windows), same convention as lidar2map
+    and watch2notif. It no longer depends on program location: sources and
+    executable, or two copies of the executable, share the same state, and an
+    update never touches it. preparer_etat(), at startup, migrates state from
+    version ≤ 0.13."""
     force = os.environ.get("BLINK_HOME")
     if force:
         return Path(force).expanduser().resolve()
@@ -675,40 +637,39 @@ def app_dir() -> Path:
         try:
             etat.mkdir(parents=True, exist_ok=True)
         except OSError:
-            pass  # La première écriture dira pourquoi.
+            pass  # The first write will explain why.
         else:
             _ETATS_CREES.add(etat)
     return etat
 
 
 def preparer_etat() -> None:
-    """Reprend, une fois, l'état d'une version ≤ 0.13 (voir
-    _migrer_etat_historique). Sans effet avec BLINK_HOME.
+    """Migrate once from a version ≤ 0.13 (see _migrer_etat_historique). No-op
+    with BLINK_HOME.
 
-    Appelée au démarrage (blink2video.py), avant tout module qui tire des
-    constantes de app_dir() ou de dossier_sorties() à son import. Explicite,
-    comme migrer_donnees_existantes() de watch2notif, plutôt que cachée
-    dans app_dir() : un simple calcul de chemin, dans un test, ne doit
-    jamais copier un état ni déplacer les fiches d'une instance en cours.
-    Jamais bloquante : en cas d'échec, l'ancien état reste en place et la
-    reprise sera retentée au lancement suivant."""
+    Called at startup (blink2video.py), before any module reads constants from
+    app_dir() or dossier_sorties() at import. Explicit, like watch2notif's
+    migrer_donnees_existantes(), rather than hidden in app_dir(): a simple path
+    computation in a test must never copy state or move cards of a running
+    instance. Never blocking: on failure, old state stays and migration retries
+    on next launch."""
     if os.environ.get("BLINK_HOME"):
         return
     etat = app_dir()
     try:
         if (etat / MARQUEUR_MIGRATION).is_file():
             return
-        # start et ses verbes démarrent ensemble : un seul processus copie,
-        # les autres attendent son verrou puis trouvent le marqueur.
+        # start and its verbs start together: one process copies, others wait
+        # on its lock then find the marker.
         with verrou("migration-etat", "migration", attente=60, racine=etat):
             if not (etat / MARQUEUR_MIGRATION).is_file():
                 _migrer_etat_historique(etat)
     except (OSError, BusyError) as erreur:
-        ajouter_ligne("migration.log", f"Reprise de l'état reportée : {erreur}")
+        ajouter_ligne("migration.log", f"State migration deferred: {erreur}")
 
 
 def _copier_si_absent(source: Path, cible: Path) -> bool:
-    """Copie atomique d'un fichier, sans jamais écraser la cible."""
+    """Atomic file copy, never overwriting the target."""
     import uuid
 
     if cible.exists() or not source.is_file():
@@ -724,23 +685,21 @@ def _copier_si_absent(source: Path, cible: Path) -> bool:
 
 
 def _migrer_etat_historique(etat: Path) -> None:
-    """Reprend dans `etat` l'état d'une version ≤ 0.13, une seule fois.
+    """Migrate into `etat` from a version ≤ 0.13, once.
 
-    Ces versions rangeaient tout au même endroit : à côté du programme, ou
-    dans la cible de son blink_home.txt. Réglages, session Blink,
-    préférences et marqueurs sont copiés sans écraser ce que `etat` contient
-    déjà, jamais déplacés : revenir à 0.13 reste possible. Les fiches des
-    processus en cours sont en revanche déplacées, pour que stop les trouve
-    à un seul endroit, y compris celles d'une instance lancée avant la mise
-    à jour. Les clips ne bougent pas : si l'ancien dossier en contient, le
-    réglage dossier_sorties y pointe, rien ne change sur le disque.
+    Those versions kept everything in one place: next to the program, or in the
+    target of blink_home.txt. Settings, Blink session, preferences and markers
+    are copied without overwriting what `etat` already has, never moved: rolling
+    back to 0.13 stays possible. Running-process cards are moved instead so
+    stop finds them in one place, including from an instance started before the
+    update. Clips do not move: if the old folder has them, dossier_sorties
+    points there, nothing changes on disk.
 
-    Le marqueur n'est posé que si quelque chose a été repris. Sans rien à
-    reprendre, l'examen recommence au lancement suivant, pour quelques
-    accès disque : le finaliseur d'une mise à jour, lancé depuis un dossier
-    temporaire sans données, ne clôt pas la reprise avant que la version
-    installée ait pu la faire, et rien de ce qu'un essai aurait écrit dans
-    `etat` ne peut l'empêcher non plus."""
+    The marker is written only if something was migrated. With nothing to
+    migrate, the check runs again on next launch, for a few disk accesses: an
+    update finalizer launched from a temporary folder with no data must not
+    close migration before the installed version could run it, and nothing a
+    trial write put in `etat` can block that either."""
     import datetime as dt
 
     ancre = _dossier_ancre()
@@ -750,8 +709,8 @@ def _migrer_etat_historique(etat: Path) -> None:
         for nom in ETAT_HISTORIQUE:
             if _copier_si_absent(ancien / nom, etat / nom):
                 repris.append(nom)
-    # Fiches et marqueurs vivaient à côté du programme (l'ancienne racine de
-    # contrôle), même quand les données étaient redirigées.
+    # Cards and markers lived next to the program (old control root), even when
+    # data was redirected.
     if ancre != etat:
         for nom in (MARQUEUR_CONFIGURATION_INITIALE, MARQUEUR_CONFIGURATION_EN_ATTENTE):
             if _copier_si_absent(ancre / nom, etat / nom):
@@ -761,7 +720,7 @@ def _migrer_etat_historique(etat: Path) -> None:
             cible = etat / INSTANCES / fiche.name
             if not cible.exists():
                 cible.parent.mkdir(parents=True, exist_ok=True)
-                # move : copie puis suppression si l'état est sur un autre volume.
+                # move: copy then delete if state is on another volume.
                 shutil.move(str(fiche), str(cible))
                 repris.append(f"{INSTANCES.name}/{fiche.name}")
 
@@ -773,7 +732,7 @@ def _migrer_etat_historique(etat: Path) -> None:
         except FileNotFoundError:
             reglages = {}
         except (OSError, ValueError):
-            reglages = None  # Illisible : surtout ne pas l'écraser.
+            reglages = None  # Unreadable: do not overwrite.
         if isinstance(reglages, dict) and not str(reglages.get("dossier_sorties") or "").strip():
             reglages["dossier_sorties"] = sorties = str(ancien)
             _ecrire_texte_atomique(chemin, json.dumps(reglages))
@@ -790,15 +749,15 @@ def _migrer_etat_historique(etat: Path) -> None:
 
 
 def _sorties_par_defaut() -> Path:
-    """BLINK_HOME s'il est fourni, comme avant 0.14 ; sinon un dossier
-    visible, Documents/blink2video."""
+    """BLINK_HOME when set, as before 0.14; otherwise a visible folder,
+    Documents/blink2video."""
     force = os.environ.get("BLINK_HOME")
     if force:
         return Path(force).expanduser().resolve()
     try:
         from platformdirs import user_documents_dir
     except ImportError:
-        # Même repli que _dossier_etat_standard(), avant bootstrap().
+        # Same fallback as _dossier_etat_standard(), before bootstrap().
         documents = Path.home() / "Documents"
     else:
         documents = Path(user_documents_dir())
@@ -806,14 +765,13 @@ def _sorties_par_defaut() -> Path:
 
 
 def dossier_sorties() -> Path:
-    """Dossier de ce que le programme produit : clips, vidéos assemblées,
-    directs, captures (voir DOSSIERS_SORTIES), avec leurs registres et
-    vignettes.
+    """Folder for what the program produces: clips, assembled videos, live
+    streams, snapshots (see DOSSIERS_SORTIES), with their registries and
+    thumbnails.
 
-    Réglable depuis la page (réglage dossier_sorties) ; à défaut, BLINK_HOME
-    s'il est fourni, sinon Documents/blink2video. Les modules en tirent des
-    constantes à leur import : un changement s'applique au redémarrage que
-    la page déclenche après l'enregistrement."""
+    Configurable from the page (dossier_sorties setting); otherwise BLINK_HOME
+    when set, else Documents/blink2video. Modules read constants at import: a
+    change applies on restart triggered by the page after saving."""
     choisi = lire_reglages()["dossier_sorties"]
     if choisi:
         return Path(choisi).expanduser().resolve()
@@ -821,14 +779,13 @@ def dossier_sorties() -> Path:
 
 
 def ajouter_ligne(nom_fichier: str, ligne: str) -> None:
-    """Ajoute une ligne à un fichier de app_dir(), append-only, jamais fatal.
+    """Append one line to a file in app_dir(), append-only, never fatal.
 
-    Pour les traces qui doivent survivre même sans console : le lancement
-    normal se fait sous pythonw (autostart), qui n'a ni stdout ni stderr
-    observables. watch.py a son propre journal() pour la même raison ;
-    ceci en est l'équivalent partagé pour les autres appelants (le
-    timestamp reste au format choisi par l'appelant, pas ajouté ici, pour
-    ne pas le dupliquer avec un éventuel print() de la même ligne)."""
+    For traces that must survive without a console: normal launch uses pythonw
+    (autostart), which has no observable stdout or stderr. watch.py has its own
+    journal() for the same reason; this is the shared equivalent for other
+    callers (timestamp stays in the caller's format, not added here, to avoid
+    duplicating a possible print() of the same line)."""
     try:
         with (app_dir() / nom_fichier).open("a", encoding="utf-8") as fichier:
             fichier.write(ligne + "\n")
@@ -837,13 +794,13 @@ def ajouter_ligne(nom_fichier: str, ligne: str) -> None:
 
 
 def lire_dossier_stockage() -> str:
-    """Dossier des sorties tel qu'affiché dans le panneau de réglages : la
-    valeur effective, y compris quand c'est celle par défaut."""
+    """Output folder as shown in the settings panel: effective value, including
+    when it is the default."""
     return str(dossier_sorties())
 
 
 def _publier_octets(cible: Path, contenu: bytes | None) -> None:
-    """Publie atomiquement des octets, ou supprime le fichier si absent."""
+    """Publish bytes atomically, or delete the file if content is absent."""
     import uuid
 
     if contenu is None:
@@ -859,21 +816,19 @@ def _publier_octets(cible: Path, contenu: bytes | None) -> None:
 
 def ecrire_dossier_stockage(chemin: str, *, reglages: dict | None = None,
                             configuration_initiale: bool = False) -> None:
-    """Change le dossier des sorties ; un chemin vide revient au défaut.
+    """Change the output folder; an empty path reverts to default.
 
-    Rien n'est déplacé : les fichiers déjà produits restent où ils sont, les
-    suivants iront dans le nouveau dossier. L'état (session, réglages) ne le
-    suit plus, il reste dans app_dir(). Le dossier est créé d'abord : un
-    emplacement inutilisable (lecteur absent, droits) est refusé avant
-    d'être enregistré.
+    Nothing is moved: existing files stay where they are, new ones go to the new
+    folder. State (session, settings) no longer follows, it stays in app_dir().
+    The folder is created first: unusable locations (missing drive, permissions)
+    are rejected before saving.
     """
     chemin = chemin.strip()
     valeur = str(Path(chemin).expanduser().resolve()) if chemin else ""
     (Path(valeur) if valeur else _sorties_par_defaut()).mkdir(parents=True, exist_ok=True)
 
-    # Le parent start surveille le marqueur initial pour lancer les workers.
-    # Garder les réglages exacts permet de les rétablir si cette dernière
-    # écriture échoue.
+    # The start parent watches the initial marker to launch workers.
+    # Keeping exact settings allows restoring them if this last write fails.
     fichier = app_dir() / REGLAGES
     precedents = None
     if configuration_initiale:
@@ -892,32 +847,32 @@ def ecrire_dossier_stockage(chemin: str, *, reglages: dict | None = None,
                 _publier_octets(fichier, precedents)
             except OSError as restauration:
                 raise OSError(
-                    "Échec du marqueur initial et de la restauration des réglages : "
+                    "Failed to write initial marker and restore settings: "
                     f"{restauration}") from erreur
             raise
 
 
 def resource_dir() -> Path:
-    """Dossier des ressources embarquées dans le bundle."""
+    """Directory of resources bundled in the executable."""
     if frozen():
         return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)).resolve()
     return Path(__file__).resolve().parent
 
 
 def build_windows7() -> bool:
-    """Vrai uniquement dans le bundle legacy marqué au moment du build."""
+    """True only in the legacy bundle marked at build time."""
     return frozen() and (resource_dir() / WINDOWS7_BUILD_MARKER).is_file()
 
 
 def version_affichee() -> str:
-    """Version numérique stable, complétée par la saveur du bundle legacy."""
+    """Stable numeric version, plus legacy bundle flavor when applicable."""
     suffixe = " (Windows 7 legacy)" if build_windows7() else ""
     return VERSION + suffixe
 
 
 def est_relatif_a(chemin: Path, racine: Path) -> bool:
-    """Équivalent de Path.is_relative_to, absent avant Python 3.9 (build
-    Windows 7, Python 3.8 : voir build-win7.yml)."""
+    """Equivalent of Path.is_relative_to, missing before Python 3.9 (Windows 7
+    build, Python 3.8: see build-win7.yml)."""
     try:
         chemin.relative_to(racine)
     except ValueError:
@@ -925,29 +880,25 @@ def est_relatif_a(chemin: Path, racine: Path) -> bool:
     return True
 
 
-# Une fiche par instance en cours, nommée d'après le processus qui la tient.
-# Un fichier unique aurait suffi tant qu'une seule instance tourne, mais rien ne
-# l'interdit : celle du démarrage automatique et une autre lancée à la main
-# coexistent très bien, et « stop » doit pouvoir les arrêter toutes.
+# One card per running instance, named after the process that holds it.
+# A single file would suffice while only one instance runs, but nothing forbids
+# two: autostart and a manual launch coexist fine, and "stop" must stop all.
 INSTANCES = Path(".blink_run")
 INSTANCE_PID_ENV = "BLINK_INSTANCE_PID"
 
 
 def _dossier_controle() -> Path:
-    """Racine des fichiers qui pilotent les processus en cours : fiches
-    ``.blink_run``, demande d'arrêt, marqueurs du parcours initial.
+    """Root of files that drive running processes: ``.blink_run`` cards,
+    shutdown request, initial-setup markers.
 
-    Jusqu'à 0.13, l'ancre de l'installation : le dossier des données pouvait
-    changer depuis la page, et des fiches rangées avec lui devenaient
-    invisibles à ``stop`` au moment même du basculement. Depuis 0.14, seul
-    le dossier des sorties change, et l'état est commun à toutes les
-    installations de l'utilisateur, session Blink comprise : les fiches y
-    vivent aussi, pour qu'un seul serveur à la fois s'en serve, qu'il soit
-    lancé depuis les sources ou depuis l'exécutable.
+    Until 0.13, the install anchor: the data folder could change from the page,
+    and cards stored with it became invisible to ``stop`` at the switch. Since
+    0.14, only the output folder changes, and state is shared across all of the
+    user's installs, Blink session included: cards live there too so only one
+    server at a time uses them, whether launched from sources or the executable.
 
-    ``BLINK_CONTROL_HOME`` n'est posé que par la mise à jour : son
-    finaliseur doit retrouver les fiches de la version qu'il remplace, là où
-    elle les a rangées.
+    ``BLINK_CONTROL_HOME`` is set only by update: its finalizer must find cards
+    from the version it replaces, where that version stored them.
     """
     force = os.environ.get("BLINK_CONTROL_HOME") or os.environ.get("BLINK_HOME")
     if force:
@@ -956,11 +907,10 @@ def _dossier_controle() -> Path:
 
 
 def _ecrire_marqueur_configuration(nom: str) -> None:
-    """Écrit atomiquement un petit marqueur dans la racine de contrôle.
+    """Write a small marker atomically in the control root.
 
-    Changer le dossier des sorties vers une destination vide ne doit jamais
-    être confondu avec une nouvelle installation : le marqueur reste avec
-    l'état, qui ne suit pas les sorties.
+    Changing the output folder to an empty destination must never look like a
+    fresh install: the marker stays with state, which does not follow outputs.
     """
     dossier = _dossier_controle()
     dossier.mkdir(parents=True, exist_ok=True)
@@ -968,16 +918,14 @@ def _ecrire_marqueur_configuration(nom: str) -> None:
 
 
 def _traces_installation_existante() -> bool:
-    """Détecte une installation antérieure dépourvue de notre marqueur.
+    """Detect a prior install lacking our marker.
 
-    Le marqueur est nouveau ; sans migration, toute mise à jour ouvrirait le
-    parcours initial à des utilisateurs déjà installés. Une session, des
-    réglages, un pointeur de stockage ou un dossier de données non vide sont
-    des preuves suffisantes d'un usage antérieur. Cette détection ne sert
-    qu'une fois : elle est aussitôt matérialisée par le marqueur définitif.
-    Les sorties sont aussi cherchées dans l'ancien dossier d'une version
-    ≤ 0.13, au cas où sa reprise (voir preparer_etat()) n'aurait pas pu se
-    faire.
+    The marker is new; without migration, every update would open initial setup
+    for already-installed users. A session, settings, storage pointer or non-empty
+    data folder is enough proof of prior use. This detection runs once: it is
+    immediately materialized by the definitive marker. Outputs are also searched
+    in the old folder of a version ≤ 0.13, in case its migration (see
+    preparer_etat()) could not run.
     """
     racine = app_dir()
     if (racine / REGLAGES).is_file() or (racine / "blink_auth.json").is_file():
@@ -995,26 +943,24 @@ def _traces_installation_existante() -> bool:
                 if dossier.is_dir() and next(dossier.iterdir(), None) is not None:
                     return True
             except OSError:
-                # Une racine momentanément indisponible ne prouve ni une
-                # nouvelle installation ni une ancienne. Les autres traces
-                # peuvent encore trancher ; à défaut, le parcours initial
-                # reste le choix sûr.
+                # A temporarily unavailable root proves neither fresh nor old
+                # install. Other traces may still decide; otherwise initial setup
+                # remains the safe choice.
                 continue
     return False
 
 
 def configuration_initiale_effectuee() -> bool:
-    """Vrai après validation explicite du premier panneau de réglages."""
+    """True after explicit validation of the first settings panel."""
     return (_dossier_controle() / MARQUEUR_CONFIGURATION_INITIALE).is_file()
 
 
 def configuration_initiale_requise() -> bool:
-    """Vrai uniquement pour une installation réellement neuve.
+    """True only for a genuinely new install.
 
-    Un marqueur « en attente » est posé avant même la connexion Blink. Ainsi,
-    fermer la fenêtre après s'être connecté mais avant d'avoir appliqué les
-    réglages ne transforme pas cette session fraîche en fausse installation
-    historique au lancement suivant.
+    A "pending" marker is written before Blink login. Closing the window after
+    signing in but before applying settings then does not turn that fresh session
+    into a false historical install on next launch.
     """
     if configuration_initiale_effectuee():
         return False
@@ -1025,46 +971,43 @@ def configuration_initiale_requise() -> bool:
         try:
             marquer_configuration_initiale()
         except OSError:
-            # La migration est une optimisation de compatibilité. Les traces
-            # resteront présentes au prochain démarrage et éviteront toujours
-            # d'imposer le parcours initial, même si le marqueur est refusé.
+            # Migration is a compatibility optimization. Traces will remain on
+            # next startup and will still avoid forcing initial setup even if
+            # the marker write is refused.
             pass
         return False
     try:
         _ecrire_marqueur_configuration(MARQUEUR_CONFIGURATION_EN_ATTENTE)
     except OSError:
-        # Ne jamais lancer les téléchargements pour la seule raison qu'un
-        # marqueur n'a pas pu s'écrire : le panneau permettra d'expliquer le
-        # vrai problème de permissions lors de l'enregistrement.
+        # Never start downloads solely because a marker could not be written:
+        # the panel can explain the real permissions problem when saving.
         pass
     return True
 
 
 def marquer_configuration_initiale() -> None:
-    """Valide définitivement le parcours initial, indépendamment du stockage."""
+    """Finalize initial setup, regardless of storage location."""
     _ecrire_marqueur_configuration(MARQUEUR_CONFIGURATION_INITIALE)
     try:
         (_dossier_controle() / MARQUEUR_CONFIGURATION_EN_ATTENTE).unlink(missing_ok=True)
     except OSError:
-        # Le marqueur définitif est le commit et il est testé en premier. Un
-        # antivirus qui tient encore l'ancien petit fichier ne doit donc pas
-        # transformer une validation réussie en erreur ni bloquer le démarrage.
+        # The definitive marker is the commit and is checked first. Antivirus
+        # still holding the old small file must not turn success into error or
+        # block startup.
         pass
 
 
 def identite_processus(pid: int) -> str | None:
-    """Identité stable d'un processus vivant : sa vraie date de démarrage
-    aupres de l'OS, jamais réattribuée contrairement au pid seul.
+    """Stable identity of a live process: its real start time from the OS,
+    never reused unlike pid alone.
 
-    Un verrou ou une marque d'avancement (AUDIT-2026-08-13, 28.82/28.84)
-    n'enregistrait que le pid de son propriétaire : après un redémarrage,
-    Windows réattribue vite les numéros de pid à d'autres processus, sans
-    rapport avec le nôtre. `processus_vivant(pid)` répondait alors « oui »
-    à tort, pour toujours (aucun garde-fou sur l'âge, volontairement, pour
-    ne jamais voler le verrou d'un processus réellement vivant) : le verrou
-    restait bloqué indéfiniment, tenu par un fantôme. Comparer cette
-    identité à l'ouverture puis à chaque relecture distingue « même
-    processus, toujours vivant » de « pid recyclé par quelqu'un d'autre »."""
+    A lock or progress marker (AUDIT-2026-08-13, 28.82/28.84) recorded only the
+    owner's pid: after reboot, Windows quickly reassigns pids to unrelated
+    processes. `processus_vivant(pid)` then wrongly answered "yes" forever (no
+    age guard, intentionally, to never steal a live process's lock): the lock
+    stayed blocked indefinitely, held by a ghost. Comparing this identity at
+    open and on each re-read separates "same process, still alive" from "pid
+    recycled by someone else"."""
     if pid <= 0:
         return None
     if os.name == "nt":
@@ -1074,8 +1017,8 @@ def identite_processus(pid: int) -> str | None:
 
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
             kernel32 = ctypes.windll.kernel32
-            # ctypes suppose sinon qu'une fonction C renvoie un int 32 bits ;
-            # un HANDLE 64 bits pourrait être tronqué sur Windows x64.
+            # ctypes otherwise assumes a C function returns 32-bit int;
+            # a 64-bit HANDLE could be truncated on Windows x64.
             kernel32.OpenProcess.argtypes = (
                 wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
             kernel32.OpenProcess.restype = wintypes.HANDLE
@@ -1111,23 +1054,21 @@ def identite_processus(pid: int) -> str | None:
                           stderr=subprocess.DEVNULL, text=True, errors="replace",
                           check=False)
     except OSError:
-        # `ps` absent (constate en reel : l'image python:3.12-slim ne
-        # l'installe pas par defaut, contrairement a une distribution
-        # complete) : aucune comparaison possible, pas une raison de planter
-        # l'appli entiere. `verrou()` retombe alors sur l'ancien
-        # comportement (identite None = rien a comparer), moins protege
-        # contre un pid recycle mais fonctionnel.
+        # `ps` missing (seen in practice: python:3.12-slim image does not
+        # install it by default, unlike a full distro): no comparison possible,
+        # not a reason to crash the whole app. `verrou()` then falls back to
+        # old behavior (identite None = nothing to compare), less protected
+        # against recycled pid but functional.
         return None
     valeur = (resultat.stdout or "").strip()
     return valeur or None
 
 
 def processus_vivant(pid: int) -> bool:
-    """Vrai si ce numéro désigne un processus existant.
+    """True if this number refers to an existing process.
 
-    Un numéro est réattribué après un certain temps : la fiche porte donc aussi
-    l'heure de départ, et une fiche dont le processus a disparu est effacée à la
-    première lecture."""
+    Numbers get reused after a while: the card also stores start time, and a
+    card whose process is gone is removed on first read."""
     if pid <= 0:
         return False
     if os.name != "nt":
@@ -1137,30 +1078,26 @@ def processus_vivant(pid: int) -> bool:
             return False
         except PermissionError:
             return True
-        # Un processus tué reste « zombie » jusqu'à ce que son parent le
-        # récupère, et le signal zéro lui parvient encore : sans ce second
-        # examen, « stop » annonce que sa cible a survécu alors qu'elle est
-        # morte, ce qu'un runner a montré aussitôt.
+        # A killed process stays a "zombie" until its parent reaps it, and
+        # signal zero still reaches it: without this second check, "stop" would
+        # report the target survived when it is dead, as a runner showed immediately.
         try:
             etat = lancer(["ps", "-o", "state=", "-p", str(pid)],
                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           stderr=subprocess.DEVNULL, text=True, errors="replace",
                           check=False)
         except OSError:
-            # `ps` absent (ex. python:3.12-slim, constate en reel via
-            # identite_processus - AUDIT-2026-08-13, 28.85) : le signal 0 a
-            # deja confirme que le pid existe, on ne peut juste pas trancher
-            # zombie ou non. On le traite comme vivant, comme avant l'ajout
-            # de cette verification.
+            # `ps` missing (e.g. python:3.12-slim, seen via identite_processus
+            # - AUDIT-2026-08-13, 28.85): signal 0 already confirmed the pid
+            # exists, we just cannot tell zombie or not. Treat as alive, as before
+            # this check was added.
             return True
         return not (etat.stdout or "").strip().startswith("Z")
-    # Interroge l'OS directement via l'API Win32 (OpenProcess +
-    # GetExitCodeProcess), sans passer par un sous-processus tasklist : un
-    # lancement de processus coûte des dizaines à centaines de ms, ce qui
-    # s'accumule vite pendant l'attente d'arrêt (arreter() vérifie plusieurs
-    # membres chaque seconde) et rend le délai dépendant de la charge de la
-    # machine plutôt que de l'état réel des processus. Même API que
-    # identite_processus() ci-dessus.
+    # Query the OS directly via Win32 (OpenProcess + GetExitCodeProcess),
+    # without a tasklist subprocess: spawning costs tens to hundreds of ms,
+    # which adds up during shutdown wait (arreter() checks several members each
+    # second) and makes delay depend on machine load rather than real process
+    # state. Same API as identite_processus() above.
     try:
         import ctypes
         from ctypes import wintypes
@@ -1182,11 +1119,10 @@ def processus_vivant(pid: int) -> bool:
         if not handle:
             erreur = kernel32.GetLastError()
             if erreur == ERROR_ACCESS_DENIED:
-                # Le pid existe (sinon l'erreur serait "paramètre invalide"),
-                # mais son ouverture nous est refusée : ça ne prouve rien sur
-                # son état, seulement que la question n'a pas pu être posée.
-                # Trancher "mort" ici volerait le verrou d'un propriétaire
-                # pourtant vivant (même principe qu'avec tasklist avant lui).
+                # The pid exists (otherwise error would be "invalid parameter"),
+                # but opening it is denied: that proves nothing about state, only
+                # that the question could not be asked. Deciding "dead" here would
+                # steal a still-live owner's lock (same principle as tasklist before).
                 return True
             return False
         try:
@@ -1196,17 +1132,16 @@ def processus_vivant(pid: int) -> bool:
             kernel32.CloseHandle(handle)
         return (code_sortie.value == STILL_ACTIVE) if ok else True
     except OSError:
-        # kernel32 est le coeur de l'OS : ceci ne devrait jamais se produire,
-        # mais si ça arrivait, même principe que la branche POSIX ci-dessus.
+        # kernel32 is the OS core: this should never happen, but if it did,
+        # same principle as the POSIX branch above.
         return True
 
 
 def ligne_de_commande(pid: int) -> str:
-    """Ligne de commande du processus, ou chaîne vide si illisible.
+    """Process command line, or empty string if unreadable.
 
-    Un nom d'image seul ne suffit pas à confirmer une identité : deux
-    python.exe peuvent coexister sans aucun rapport entre eux. La ligne de
-    commande, elle, porte le chemin du script lancé."""
+    Image name alone cannot confirm identity: two python.exe can coexist with
+    no relation. The command line carries the launched script path."""
     if pid <= 0:
         return ""
     if os.name != "nt":
@@ -1215,12 +1150,11 @@ def ligne_de_commande(pid: int) -> str:
                           stderr=subprocess.DEVNULL, text=True, errors="replace",
                           check=False)
         return (resultat.stdout or "").strip()
-    # Les nouvelles fiches n'empruntent plus ce chemin : elles comparent
-    # l'heure de création native via GetProcessTimes. Il reste uniquement pour
-    # lire les fiches de l'ancienne version. Windows 7 est livré avec
-    # PowerShell 2, sans Get-CimInstance (apparu en PowerShell 3) : choisir
-    # dynamiquement Get-WmiObject sur cet ancien environnement évite que la
-    # migration conclue « processus absent » faute de cmdlet.
+    # New cards no longer use this path: they compare native creation time
+    # via GetProcessTimes. It remains only to read old-version cards. Windows 7
+    # ships with PowerShell 2, without Get-CimInstance (PowerShell 3+): picking
+    # Get-WmiObject dynamically on that environment avoids migration concluding
+    # "process absent" for lack of cmdlet.
     resultat = lancer(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command",
          f"if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {{ "
@@ -1235,16 +1169,15 @@ def ligne_de_commande(pid: int) -> str:
 
 
 def _empreintes_attendues() -> list:
-    """Ce qu'on doit retrouver dans la ligne de commande d'un vrai processus
-    de ce projet — le point d'entrée lui-même, ou l'un de ses sous-verbes
-    (serve.py, watch.py, merge_daily.py...).
+    """What must appear in the command line of a genuine process of this project
+    — the entry point itself, or one of its sub-verbs (serve.py, watch.py,
+    merge_daily.py...).
 
-    Deux marqueurs, pas un seul : le point d'entrée porte le nom du projet
-    dans sa ligne de commande quelle que soit la façon dont l'utilisateur l'a
-    tapée (chemin relatif, absolu, bundle), mais les sous-verbes lancés
-    depuis les sources sont des scripts différents (voir self_command) qui ne
-    portent pas ce nom ; seul leur dossier commun l'est, de façon fiable,
-    puisqu'ils se relancent eux-mêmes avec un chemin absolu."""
+    Two markers, not one: the entry point carries the project name in its command
+    line however the user typed it (relative, absolute, bundle), but sub-verbs
+    launched from sources are different scripts (see self_command) that do not
+    carry that name; only their shared folder does, reliably, since they
+    relaunch themselves with an absolute path."""
     if frozen():
         return ["blink2video"]
     return ["blink2video", str(Path(__file__).resolve().parent)]
@@ -1252,21 +1185,19 @@ def _empreintes_attendues() -> list:
 
 def processus_correspond(pid: int, marqueurs: list | None = None,
                          identite: str | None = None) -> bool:
-    """Vrai si ce PID désigne bien un processus de ce projet.
+    """True if this PID really refers to a process of this project.
 
-    Un numéro de processus fini par être réattribué à un logiciel sans
-    aucun rapport ; le confondre avec l'instance qu'on croit suivre a déjà
-    fait « arrêter » un service HP, un terminal et une messagerie sur la
-    machine d'un utilisateur, simplement parce qu'un numéro coïncidait.
-    Vérifier l'existence du PID ne suffit pas : il faut vérifier son
-    identité avant d'y toucher, *a fortiori* avant de le tuer."""
+    Pids eventually get reused by unrelated software; mistaking them for the
+    instance we think we track already made "stop" kill an HP service, a
+    terminal and a messenger on a user's machine because a number matched.
+    Checking pid existence is not enough: verify identity before touching it,
+    *a fortiori* before killing it."""
     if not processus_vivant(pid):
         return False
     if identite is not None:
-        # Pour toute fiche au nouveau format, PID + heure de création donnée
-        # par l'OS est l'identité. Aucun PowerShell/WMI, donc même comportement
-        # sur Windows 7 d'origine et sur Windows actuel. Si l'OS refuse de
-        # répondre, ne jamais tuer au jugé : False est le choix sûr.
+        # For any new-format card, PID + OS creation time is identity. No
+        # PowerShell/WMI, so same behavior on stock Windows 7 and current Windows.
+        # If the OS refuses to answer, never kill on guesswork: False is safe.
         actuelle = identite_processus(pid)
         return actuelle is not None and actuelle == identite
     ligne = ligne_de_commande(pid)
@@ -1274,53 +1205,47 @@ def processus_correspond(pid: int, marqueurs: list | None = None,
 
 
 def _ecrire_fiche(fiche: Path, donnees: dict) -> None:
-    """Écrit une fiche de processus (instance ou travailleurs), atomiquement.
+    """Write a process card (instance or workers) atomically.
 
-    Une écriture directe pouvait laisser une lecture concurrente voir du
-    JSON tronqué en cours d'écriture ; lire_instances() traitait alors ça
-    comme une fiche périmée et la supprimait, faisant perdre à stop la
-    trace d'un processus pourtant vivant (revue du 27/08, bug 8). Même
-    motif que _ecrire_registre() (blink_registre.py)."""
+    Direct write could let a concurrent read see truncated JSON mid-write;
+    lire_instances() then treated it as stale and deleted it, making stop lose
+    a still-live process (review 27/08, bug 8). Same pattern as _ecrire_registre()
+    (blink_registre.py)."""
     _ecrire_texte_atomique(fiche, json.dumps(donnees, ensure_ascii=False))
 
 
 def _verrou_fiche(fiche: Path, attente: int = 5):
-    """Sérialise les mises à jour parent/enfant d'une même fiche d'instance."""
+    """Serialize parent/child updates to the same instance card."""
     return verrou(f"instance-{fiche.stem}", f"fiche-{os.getpid()}",
                    stale_after=120, attente=attente, racine=_dossier_controle())
 
 
 def inscrire_instance(entrees: list, enfants=None) -> Path:
-    """Dépose la fiche de l'instance courante, et la retire à sa mort.
+    """Write the current instance card and remove it on exit.
 
-    Sans elle, arrêter une instance lancée sans console reviendrait à chercher
-    des numéros de processus à la main, puis à tuer un arbre en espérant
-    n'oublier personne. Purge aussi au passage les fiches d'instances mortes
-    sans passage par « stop »."""
+    Without it, stopping a console-less instance would mean hunting pids by hand
+    then killing a tree hoping not to miss anyone. Also purges dead instance
+    cards without going through "stop"."""
     import atexit
     import datetime as dt
 
-    # Écrase aussi une valeur héritée d'un éventuel ancien superviseur lors
-    # d'un redémarrage. Tous les enfants lancés ensuite sauront ainsi quelle
-    # fiche enrichir lorsqu'ils inscrivent un ffmpeg.
+    # Also overwrites a value inherited from an old supervisor on restart. All
+    # children launched afterward know which card to update when registering ffmpeg.
     os.environ[INSTANCE_PID_ENV] = str(os.getpid())
 
-    # Purge les fiches mortes sans passage par « stop » (kill externe,
-    # plantage, coupure de courant) : lire_instances() les nettoie déjà comme
-    # effet de bord de sa lecture, mais rien ne le lui demandait plus une fois
-    # une session lancée, qui peut ensuite tourner des jours sans jamais
-    # rappeler cette fonction (constaté en réel, 2026-09-01 : fiches vieilles
-    # de plusieurs jours toujours dans .blink_run). Chaque lancement est
-    # l'occasion de balayer les restes du précédent.
+    # Purge dead cards without "stop" (external kill, crash, power loss):
+    # lire_instances() already cleans them as a read side effect, but nothing
+    # called it again once a session ran for days (seen in practice, 2026-09-01:
+    # multi-day-old cards still in .blink_run). Each launch sweeps leftovers.
     instances_vivantes = lire_instances(journal=print)
 
-    # Ne jamais effacer la demande d'un arrêt réellement en cours. Une nouvelle
-    # instance lancée au même instant annulait sinon le signal sous les pieds
-    # des anciennes boucles. Seul un drapeau orphelin, sans aucune instance
-    # encore reconnue, appartient forcément à une session précédente.
+    # Never clear a shutdown request that is really in progress. A new instance
+    # launched at the same moment would otherwise cancel the signal under old
+    # loops. Only an orphan flag with no recognized instance belongs to a prior
+    # session.
     if arret_demande():
         if instances_vivantes:
-            raise BusyError("arrêt en cours")
+            raise BusyError("shutdown in progress")
         effacer_arret_demande()
 
     dossier = _dossier_controle() / INSTANCES
@@ -1333,9 +1258,9 @@ def inscrire_instance(entrees: list, enfants=None) -> Path:
         if identite is not None:
             identites[str(pid)] = identite
 
-    # Le second appel, juste après le lancement des enfants, complète la même
-    # fiche. Le verrou ferme la course avec un enfant très rapide qui inscrirait
-    # déjà ffmpeg : sans lui, les deux read-modify-replace pouvaient s'écraser.
+    # The second call, right after launching children, completes the same card.
+    # The lock closes the race with a fast child already registering ffmpeg:
+    # without it, two read-modify-replace could clobber each other.
     with _verrou_fiche(fiche):
         travailleurs = []
         try:
@@ -1353,14 +1278,14 @@ def inscrire_instance(entrees: list, enfants=None) -> Path:
             "pid": os.getpid(),
             "depuis": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
             "verbes": entrees,
-            # Les enfants sont notés pour pouvoir vérifier, après l'arrêt, qu'aucun
-            # n'a survécu : c'est précisément ce qui se produisait avant.
+            # Children are recorded to verify after shutdown that none survived:
+            # that is exactly what happened before.
             "enfants": list(enfants or []),
             "travailleurs": travailleurs,
             "identites": identites,
         })
     def nettoyer_fiche() -> None:
-        """Retire la fiche seulement si aucun enfant suivi ne lui survit."""
+        """Remove the card only if no tracked child outlives it."""
         try:
             donnees = json.loads(fiche.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -1388,39 +1313,33 @@ def inscrire_instance(entrees: list, enfants=None) -> Path:
 
 
 def lire_instances(journal=None) -> list:
-    """Fiches des instances réellement en cours, les périmées étant effacées.
+    """Cards of instances actually running, stale ones removed.
 
-    I-13 : un parent mort ne suffit pas à dire l'instance terminée. Un enfant
-    persistant peut lui survivre (le parent supervise, mais ne fait pas
-    partie du même groupe de processus que ses enfants sous POSIX), et
-    « stop » a besoin de la fiche pour retrouver ce survivant. On n'efface
-    donc que les fiches dont ni le parent, ni aucun enfant, ne vivent plus.
+    I-13: a dead parent does not mean the instance is done. A lingering child
+    can outlive it (parent supervises but is not in the same process group as
+    children on POSIX), and "stop" needs the card to find that survivor. We
+    only remove cards where neither parent nor any child is alive.
 
-    L'identité (PID + heure de création native, voir `identite_processus`)
-    décide seule qui est encore « nous » : plus fort qu'un rapprochement sur
-    la ligne de commande, déjà responsable d'avoir arrêté par erreur un
-    service HP, un terminal et une messagerie sur la machine d'un utilisateur
-    (voir `processus_correspond`). `journal`, optionnel, reçoit une ligne
-    lisible (PID et verbes d'origine) pour chaque fiche périmée retirée : de
-    quoi vérifier après coup *quelle* instance a été jugée morte, sans pour
-    autant fonder la décision elle-même sur ce texte."""
+    Identity (PID + native creation time, see `identite_processus`) alone
+    decides who is still "us": stronger than command-line matching, which
+    already wrongly stopped an HP service, terminal and messenger (see
+    `processus_correspond`). Optional `journal` gets a readable line (PID and
+    original verbs) for each removed stale card: to verify afterward *which*
+    instance was judged dead, without basing the decision on that text."""
     dossier = _dossier_controle() / INSTANCES
     vivantes = []
     for fiche in sorted(dossier.glob("*.json")) if dossier.is_dir() else []:
         try:
             donnees = json.loads(fiche.read_text(encoding="utf-8"))
         except OSError:
-            # Disparue entre le glob() et la lecture : un autre processus
-            # (son propre atexit, par exemple) l'a déjà nettoyée, rien à
-            # purger ici.
+            # Gone between glob() and read: another process (its own atexit, etc.)
+            # already cleaned it, nothing to purge here.
             continue
         except json.JSONDecodeError:
-            # Présente mais illisible. _ecrire_fiche() étant atomique
-            # (temp + replace), ce n'est plus une fenêtre d'écriture
-            # concurrente qu'on pourrait croiser ici, seulement une vraie
-            # corruption : la supprimer ferait perdre à stop la trace d'un
-            # processus peut-être toujours vivant (revue du 27/08, bug 8).
-            # On la laisse plutôt en l'état pour cette lecture.
+            # Present but unreadable. _ecrire_fiche() is atomic (temp + replace),
+            # so this is no longer a concurrent write window, only real corruption:
+            # deleting would make stop lose a possibly still-live process (review
+            # 27/08, bug 8). Leave it as-is for this read.
             continue
         membres = [donnees.get("pid"), *(donnees.get("enfants") or []),
                    *(donnees.get("travailleurs") or [])]
@@ -1432,13 +1351,13 @@ def lire_instances(journal=None) -> list:
             pid = int(membre or 0)
             attendue = identites.get(str(pid))
             if attendue is None:
-                # Ancienne fiche : repli temporaire sur la ligne de commande.
+                # Old card: temporary fallback to command line.
                 return processus_correspond(pid)
             actuelle = identite_processus(pid)
             if actuelle is None:
-                # Distinguer « mort » de « vivant mais impossible à interroger ».
-                # Dans le second cas, conserver la fiche : la supprimer ferait
-                # perdre la seule piste sans avoir prouvé qu'elle est périmée.
+                # Distinguish "dead" from "alive but impossible to query".
+                # In the second case, keep the card: removing it would lose the
+                # only clue without proving it stale.
                 return processus_vivant(pid)
             return actuelle == attendue
 
@@ -1455,28 +1374,25 @@ def lire_instances(journal=None) -> list:
 
 
 def _fiche_courante() -> Path:
-    # Les verbes tournent dans des processus enfants du superviseur qui porte
-    # la fiche. Celui-ci transmet son PID par l'environnement : sans cela un
-    # merge enfant cherchait « <son propre pid>.json », inexistant, et ffmpeg
-    # n'était jamais réellement inscrit malgré le code prévu à cet effet.
+    # Verbs run in child processes of the supervisor that holds the card. It
+    # passes its PID via environment: without that, a child merge looked for
+    # "<its own pid>.json", missing, and ffmpeg was never really registered
+    # despite the intended code.
     proprietaire = os.environ.get(INSTANCE_PID_ENV) or str(os.getpid())
     return _dossier_controle() / INSTANCES / f"{proprietaire}.json"
 
 
 def inscrire_travailleur(pid: int) -> None:
-    """Ajoute un PID de travailleur (ffmpeg en cours de fusion) à la fiche du
-    processus courant.
+    """Add a worker PID (ffmpeg during merge) to the current process card.
 
-    Un ffmpeg lancé en fusion est un vrai enfant de ce processus, mais
-    `arreter()` ne lui applique jamais taskkill /T sur son propre PID (voir
-    arreter_processus) : cette protection, ajoutée pour ne pas emporter un
-    navigateur adopté par erreur, laissait aussi ffmpeg orphelin et tournant
-    jusqu'à sa fin après un « stop ». L'inscrire ici lui donne une entrée que
-    « stop » sait tuer directement, sans dépendre du taskkill du parent.
+    ffmpeg launched in merge is a real child, but `arreter()` never applies
+    taskkill /T to its own PID (see arreter_processus): protection against
+    wrongly killing an adopted browser also left ffmpeg orphaned until finish
+    after "stop". Registering here gives "stop" an entry to kill directly,
+    without relying on the parent's taskkill.
 
-    Silencieux si la fiche n'existe pas encore : un appel direct aux
-    fonctions de fusion hors supervision de blink_cli (tests, script) n'a
-    simplement rien à enregistrer."""
+    Silent if the card does not exist yet: direct merge calls outside blink_cli
+    supervision (tests, script) simply have nothing to record."""
     fiche = _fiche_courante()
     try:
         with _verrou_fiche(fiche):
@@ -1494,14 +1410,14 @@ def inscrire_travailleur(pid: int) -> None:
                 donnees["identites"] = identites
             _ecrire_fiche(fiche, donnees)
     except BusyError:
-        # L'inscription est best-effort : le kill /T du processus merge reste
-        # le repli si sa fiche est exceptionnellement restée occupée 5 secondes.
+        # Registration is best-effort: merge process kill /T remains fallback if
+        # its card stayed busy for 5 seconds.
         return
 
 
 def retirer_travailleur(pid: int) -> None:
-    """Symétrique d'inscrire_travailleur : à appeler que le lot ait réussi,
-    échoué, ou ait été tué par le chien de garde silence de run_ffmpeg_batch."""
+    """Symmetric to inscrire_travailleur: call whether the batch succeeded,
+    failed, or was killed by run_ffmpeg_batch's silence watchdog."""
     fiche = _fiche_courante()
     try:
         with _verrou_fiche(fiche):
@@ -1521,22 +1437,19 @@ def retirer_travailleur(pid: int) -> None:
 
 
 def arreter_processus(pid: int, avec_descendance: bool = False) -> None:
-    """Arrête un processus, et sa descendance si on le demande.
+    """Stop a process, and its descendants if requested.
 
-    La distinction est vitale hors Windows : un verbe lancé côte à côte reçoit
-    sa propre session (voir flags_enfant), on peut donc tuer son groupe entier,
-    ffmpeg compris. Le parent, lui, partage le groupe du terminal qui l'a lancé
-    : lui appliquer le même traitement tuerait ce terminal. C'est arrivé, et la
-    victime a été la suite de tests elle-même, sur les runners.
+    The distinction matters off Windows: a side-by-side verb gets its own
+    session (see flags_enfant), so we can kill its whole group, ffmpeg included.
+    The parent shares the launching terminal's group: the same treatment would
+    kill that terminal. That happened to the test suite on runners.
 
-    Sous Windows la distinction compte tout autant : « taskkill /T » descend
-    l'arbre du PID donné tel que Windows le voit, ce qui inclut n'importe quel
-    processus qui s'est retrouvé enfant du nôtre sans être un de nos workers,
-    par exemple le navigateur ouvert par webbrowser.open() quand aucune
-    fenêtre n'existait encore. Un « stop »/« restart » sur le processus
-    principal (avec_descendance=False) a fermé Chrome en entier de cette
-    façon : /T ne doit s'appliquer qu'à un enfant qu'on sait être un des
-    nôtres (avec_descendance=True)."""
+    On Windows the distinction matters equally: "taskkill /T" walks the tree
+    Windows sees for the pid, including any process that became our child without
+    being our worker, e.g. browser opened by webbrowser.open() when no window
+    existed yet. "stop"/"restart" on the main process (avec_descendance=False)
+    closed all of Chrome that way: /T must apply only to a child known to be ours
+    (avec_descendance=True)."""
     if os.name == "nt":
         commande = ["taskkill", "/F", "/PID", str(pid)]
         if avec_descendance:
@@ -1565,18 +1478,16 @@ def arreter_processus(pid: int, avec_descendance: bool = False) -> None:
     envoyer(signal.SIGKILL)
 
 
-# Sous Windows, tout programme lancé depuis une application sans console en
-# ouvre une le temps de son exécution : une fenêtre noire qui apparaît et
-# disparaît à chaque vignette, à chaque analyse de vidéo, à chaque notification.
-# Ce drapeau l'en empêche. Ailleurs il n'existe pas et vaut zéro.
+# On Windows, any program launched from a console-less app opens one for its
+# run: a black window flashing for each thumbnail, video analysis, notification.
+# This flag prevents that. Elsewhere it does not exist and is zero.
 SANS_FENETRE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def console_disponible() -> bool:
-    """Vrai si ce processus a une console où écrire.
+    """True if this process has a console to write to.
 
-    Faux sous pythonw.exe, c'est-à-dire quand blink est lancé par l'entrée de
-    démarrage automatique."""
+    False under pythonw.exe, when blink is launched by autostart entry."""
     if os.name != "nt":
         return True
     import ctypes
@@ -1585,64 +1496,62 @@ def console_disponible() -> bool:
 
 
 def flags_enfant() -> int:
-    """Drapeaux pour un verbe lancé côte à côte avec d'autres.
+    """Flags for a verb launched alongside others.
 
-    Il doit parler dans la console de son parent quand il y en a une, sans quoi
-    ses erreurs se perdent : « serve » refusant un port déjà pris ne disait
-    rien, et l'échec restait incompréhensible. Quand il n'y en a pas, on garde
-    CREATE_NO_WINDOW, faute de quoi Windows en ouvre une par verbe, ces
-    fenêtres noires qui clignotent."""
+    It must use the parent's console when one exists, or errors vanish: "serve"
+    refusing a taken port said nothing and failure was opaque. When there is none,
+    keep CREATE_NO_WINDOW or Windows opens one per verb, those flashing black
+    windows."""
     return 0 if console_disponible() else SANS_FENETRE
 
 
 def debloquer_sigterm() -> None:
-    """Lève un blocage de SIGTERM hérité du processus qui nous a lancé.
+    """Clear inherited SIGTERM blocking from the process that launched us.
 
-    Le superviseur de « start » bloque SIGTERM pour l'attendre dans un fil
-    dédié (voir blink_cli._sortie_propre_sur_sigterm), et un masque de
-    signaux se transmet aux processus lancés : sans cette levée, un processus
-    né de lui, par exemple via le « Redémarrer » de l'icône, ignorerait le
-    SIGTERM de « stop » jusqu'au SIGKILL de repli. Sans effet sous Windows."""
+    The "start" supervisor blocks SIGTERM to wait in a dedicated thread (see
+    blink_cli._sortie_propre_sur_sigterm), and signal masks propagate to
+    children: without this unblock, a child born from it, e.g. via tray
+    "Restart", would ignore "stop"'s SIGTERM until fallback SIGKILL. No effect
+    on Windows."""
     if hasattr(signal, "pthread_sigmask"):
         signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
 
 
 if frozen():
-    # LD_LIBRARY_PATH rendu aux programmes du système (issue #23) : voir
-    # nico579_commons.environnement. Importé seulement ici : depuis les sources,
-    # le commun n'est installé qu'après ce module (bootstrap des dépendances),
-    # et la fonction ne fait de toute façon rien hors bundle.
+    # LD_LIBRARY_PATH restored for system programs (issue #23): see
+    # nico579_commons.environnement. Imported only here: from sources, common
+    # lib installs after this module (dependency bootstrap), and the function is
+    # a no-op outside a bundle anyway.
     from nico579_commons import environnement
     environnement.retablir_environnement_systeme()
 debloquer_sigterm()
 
 
 def lancer(commande, **options):
-    """subprocess.run, sans jamais faire clignoter de fenêtre sous Windows."""
+    """subprocess.run, never flashing a window on Windows."""
     options.setdefault("creationflags", SANS_FENETRE)
     return subprocess.run(commande, **options)
 
 
 def demarrer(commande, **options):
-    """subprocess.Popen, même précaution."""
+    """subprocess.Popen, same precaution."""
     options.setdefault("creationflags", SANS_FENETRE)
     return subprocess.Popen(commande, **options)
 
 
 def _applescript(texte: str) -> str:
-    """Encode une chaîne pour AppleScript, dont l'échappement n'est pas celui
-    d'un shell : seules les guillemets et la barre oblique inverse comptent."""
+    """Encode a string for AppleScript, whose escaping is not shell-like: only
+    quotes and backslashes matter."""
     return '"' + texte.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 
 def _declarer_identite() -> None:
-    """Déclare l'identité applicative auprès de Windows, une fois pour toutes.
+    """Declare application identity to Windows, once.
 
-    Sans elle, la notification est acceptée par l'API et jetée par le
-    système, sans erreur ni trace. La clé vit dans la ruche de
-    l'utilisateur, ne concerne que les notifications, et se retire en la
-    supprimant :
+    Without it, the API accepts the notification and the system drops it with
+    no error or trace. The key lives in the user hive, concerns notifications
+    only, and is removed by deleting it:
 
         HKCU\\SOFTWARE\\Classes\\AppUserModelId\\blink2video
     """
@@ -1663,21 +1572,20 @@ def _declarer_identite() -> None:
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, chemin) as cle:
             winreg.SetValueEx(cle, "DisplayName", 0, winreg.REG_SZ, APP_ID)
     except OSError:
-        # Registre en lecture seule : la notification échouera peut-être,
-        # ce n'est pas une raison d'interrompre le travail en cours.
+        # Read-only registry: notification may fail, not a reason to interrupt
+        # work in progress.
         pass
 
 
 def toast(titre: str, corps: str, url: str = "") -> None:
-    """Notification Windows non bloquante, sans rien installer.
+    """Non-blocking Windows notification without installing anything.
 
-    Distincte du popup à dessein : une coupure est rare et doit être vue, donc
-    elle bloque jusqu'à acquittement ; l'arrivée d'un clip est fréquente et
-    banale, une fenêtre modale à chaque fois serait insupportable.
+    Deliberately unlike the popup: outages are rare and must be seen, so they
+    block until acknowledged; new clips are frequent and mundane, a modal each
+    time would be unbearable.
 
-    Passe par PowerShell, qui expose l'API de notification de Windows 10. Ça
-    évite d'ajouter une dépendance pour une dizaine de lignes, et de réécrire
-    à la main un icône de zone de notification en Win32."""
+    Uses PowerShell, which exposes the Windows 10 notification API. Avoids a
+    dependency for a dozen lines and hand-writing a Win32 notification icon."""
     if sys.platform == "darwin":
         lancer(
             ["osascript", "-e",
@@ -1708,16 +1616,16 @@ def toast(titre: str, corps: str, url: str = "") -> None:
         "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom,"
         " ContentType = WindowsRuntime] | Out-Null;"
         "$x = [Windows.Data.Xml.Dom.XmlDocument]::new();"
-        # activationType=protocol : Windows ouvre l'URL au clic, sans qu'on ait
-        # à enregistrer un gestionnaire d'activation. C'est ce qui permet de
-        # passer directement du « nouveau clip » à la page qui l'affiche.
+        # activationType=protocol: Windows opens the URL on click without
+        # registering an activation handler. That jumps from "new clip" to the
+        # page that shows it.
         f"$x.LoadXml('<toast{lancement}><visual><binding template=\"ToastGeneric\">"
         f"<text>{echappe(titre)}</text><text>{echappe(corps)}</text>"
         "</binding></visual></toast>');"
         "$n = [Windows.UI.Notifications.ToastNotification]::new($x);"
-        # Une notification doit être émise au nom d'une application déclarée
-        # auprès de Windows. Plutôt que d'en enregistrer une, on emprunte
-        # l'identité de PowerShell, déjà déclarée sur toute installation.
+        # A notification must be sent on behalf of an app declared to Windows.
+        # Rather than register one, we borrow PowerShell's identity, already
+        # declared on every install.
         "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
         + repr(APP_ID) +
         ").Show($n)"
@@ -1730,20 +1638,17 @@ def toast(titre: str, corps: str, url: str = "") -> None:
 
 
 def notifier_nouveau_media(camera: str, chemin: Path, type_media: str) -> None:
-    """Webhook sortant (issue GitHub #11) : un POST JSON par clip ou photo
-    prêt, une fois le fichier réellement écrit, jamais avant.
+    """Outbound webhook (GitHub issue #11): one JSON POST per ready clip or photo,
+    once the file is actually written, never before.
 
-    Synchrone comme toast() ci-dessus, appelée telle quelle depuis le
-    téléchargement (async, mais un clip à la fois, jamais en parallèle) et
-    depuis serve.py (déjà synchrone) : un bref POST ne pèse rien face au
-    téléchargement qui vient de prendre plusieurs secondes, pas de quoi
-    justifier une passerelle vers l'event loop pour cette seule notification.
+    Synchronous like toast() above, called as-is from download (async but one clip
+    at a time, never parallel) and from serve.py (already synchronous): a brief
+    POST is negligible vs a multi-second download, not worth bridging to the
+    event loop for this notification alone.
 
-    Au mieux, sans nouvelle tentative, et n'importe quelle défaillance
-    absorbée ici plutôt que remontée : une URL mal configurée, un serveur
-    distant en panne ou une simple coupure réseau ne doivent jamais faire
-    échouer le téléchargement qui vient pourtant de réussir, ni empêcher le
-    fichier suivant d'être traité."""
+    Best effort, no retry, any failure absorbed here rather than raised: misconfigured
+    URL, dead remote server or network blip must never fail a download that just
+    succeeded, nor block the next file."""
     url = lire_reglages().get("webhook_notif_url", "")
     if not url:
         return
@@ -1755,26 +1660,24 @@ def notifier_nouveau_media(camera: str, chemin: Path, type_media: str) -> None:
         with urllib.request.urlopen(requete, timeout=10):
             pass
     except Exception:
-        # Volontairement large (voir docstring) : construire la requête peut
-        # lever pour une URL syntaxiquement acceptée par le validateur des
-        # réglages (schéma correct) mais malformée plus loin (hôte absent,
-        # caractère interdit) - un bug trouvé en audit avant tout incident
-        # réel, la première version ne protégeait que l'appel réseau
-        # lui-même, pas la construction de la requête juste avant.
+        # Deliberately broad (see docstring): building the request can raise for
+        # a URL accepted by settings validation (correct scheme) but malformed
+        # later (missing host, forbidden character) - found in audit before any
+        # real incident; first version only guarded the network call, not request
+        # construction right before.
         pass
 
 
 class BusyError(RuntimeError):
-    """La ressource est déjà réservée par une autre opération."""
+    """The resource is already held by another operation."""
 
 
 def _lire_verrou(fichier: Path):
-    """Contenu du fichier de verrou, ou None s'il est absent/illisible.
+    """Lock file contents, or None if missing/unreadable.
 
-    Illisible couvre aussi bien la corruption que la fenêtre, très brève, où un
-    autre processus vient de créer le fichier sans avoir fini d'y écrire : dans
-    les deux cas on ne peut rien affirmer sur son propriétaire, donc on
-    retente plutôt que de trancher à tort."""
+    Unreadable covers corruption and the brief window where another process
+    created the file but has not finished writing: in both cases we cannot assert
+    ownership, so retry rather than decide wrongly."""
     try:
         return json.loads(fichier.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -1782,14 +1685,12 @@ def _lire_verrou(fichier: Path):
 
 
 def _supprimer_verrou(fichier: Path) -> None:
-    """Supprime un fichier de verrou qu'on sait nous appartenir, en absorbant
-    un refus Windows transitoire.
+    """Delete a lock file known to be ours, absorbing transient Windows refusal.
 
-    Un antivirus ou l'indexeur peut brièvement rouvrir un fichier qui vient
-    d'être lu ou écrit ; sur Windows, ça suffit à faire échouer unlink() avec
-    PermissionError (WinError 32) alors que plus aucun propriétaire légitime
-    ne le détient. Quelques tentatives rapprochées suffisent, l'ouverture
-    concurrente n'étant jamais longue."""
+    Antivirus or indexer can briefly reopen a file just read or written; on
+    Windows that makes unlink() fail with PermissionError (WinError 32) though
+    no legitimate owner holds it. A few quick retries suffice; concurrent open
+    is never long."""
     for tentative in range(10):
         try:
             fichier.unlink(missing_ok=True)
@@ -1803,63 +1704,51 @@ def _supprimer_verrou(fichier: Path) -> None:
 @contextlib.contextmanager
 def verrou(nom: str, owner: str, stale_after: int = 600, attente: int = 0,
            racine: Path | None = None):
-    """Réserve une ressource entre processus, le temps d'une opération.
+    """Reserve a resource across processes for the duration of an operation.
 
-    Deux ressources ne se partagent pas : le Sync Module, qui ne traite qu'une
-    commande à la fois et répond « System is busy » à la seconde, et
-    l'assemblage, qui écrirait deux fois les mêmes fichiers. Les verbes tournant
-    dans des processus séparés, un verrou mémoire ne suffit pas : il faut une
-    marque sur disque.
+    Two resources cannot be shared: the Sync Module, which handles one command
+    at a time and answers "System is busy" to a second, and merging, which would
+    write the same files twice. Verbs run in separate processes, so an in-memory
+    lock is not enough: a on-disk marker is required.
 
-    L'acquisition passe par une création exclusive du fichier
-    (``O_CREAT | O_EXCL``) : deux processus qui la tentent en même temps ne
-    peuvent pas réussir tous les deux, l'OS le garantit. L'ancien protocole
-    lisait le fichier, concluait qu'il était libre, puis l'écrivait : rien
-    n'empêchait deux processus de franchir les deux premières étapes ensemble
-    (B-05). Un jeton d'acquisition propre à cet appel accompagne owner/pid : il
-    sert à ne jamais libérer, à la sortie, un verrou qu'un autre processus
-    aurait entre-temps re-acquis sous le même PID recyclé.
+    Acquisition uses exclusive file creation (``O_CREAT | O_EXCL``): two
+    processes attempting it at once cannot both succeed, the OS guarantees that.
+    The old protocol read the file, decided it was free, then wrote: nothing
+    stopped two processes from passing the first two steps together (B-05). A
+    per-call acquisition token accompanies owner/pid: it ensures we never release,
+    on exit, a lock another process re-acquired under a recycled PID.
 
-    Un seul garde-fou reste appliqué contre une marque oubliée après un
-    plantage : on ignore celle dont le processus n'existe plus. `stale_after`
-    n'est PLUS lu du tout par cette fonction (trouvé en auditant ce fichier :
-    paramètre fantôme, jamais consulté dans le corps ci-dessous) - il ne vole
-    donc jamais le verrou d'un processus vivant sur le seul critère de son âge
-    (B-05, un passage de téléchargement peut légitimement dépasser dix
-    minutes sur un gros clip, et un âge à lui seul ne prouve rien), pour la
-    raison la plus radicale possible : l'âge n'entre plus en jeu, seule
-    compte l'identité du processus (voir plus bas). Conservé dans la
-    signature pour ne pas casser les appelants existants, qui continuent de
-    documenter une durée réfléchie à cet endroit (7200 s pour l'assemblage,
-    600 s par défaut...) même si elle ne change plus rien ici.
+    One safeguard remains against a marker left after a crash: ignore those whose
+    process no longer exists. `stale_after` is NO LONGER read at all by this
+    function (found auditing this file: ghost parameter, never consulted below) —
+    it never steals a live process's lock on age alone (B-05, a download pass can
+    legitimately exceed ten minutes on a large clip, and age alone proves nothing);
+    most radically, age no longer matters, only process identity (see below).
+    Kept in the signature to avoid breaking callers, who still document a
+    considered duration here (7200 s for merge, 600 s default...) even though it
+    no longer changes behavior.
 
-    Le cas d'un PID recyclé par un processus non lié pendant que le vrai
-    propriétaire est mort - longtemps documenté comme non couvert ici, et
-    constaté en réel (AUDIT-2026-08-13, 28.82/28.84 : la boucle merge est
-    restée bloquée plus de 15h après un redémarrage Windows qui a dû
-    réattribuer le pid) - est désormais tranché via `identite_processus()` :
-    la date de démarrage réelle du processus, donnée par l'OS, est comparée
-    à celle enregistrée dans le verrou. Un pid vivant dont l'identité ne
-    correspond plus n'est pas le même processus : le verrou est traité comme
-    abandonné, purgé comme n'importe quelle marque périmée.
+    PID recycled by an unrelated process while the real owner is dead — long
+    documented as uncovered here, seen in practice (AUDIT-2026-08-13, 28.82/28.84:
+    merge loop blocked 15h+ after Windows reboot reused the pid) — is now resolved
+    via `identite_processus()`: the process's real OS start time is compared to
+    the lock's. A live pid whose identity no longer matches is not the same
+    process: the lock is treated as abandoned, purged like any stale marker.
 
-    `attente` donne le temps pendant lequel on réessaie avant de renoncer. Un
-    direct dure quelques minutes ; sans attente, une boucle qui tombe dessus
-    perdrait son tour entier, alors que la ressource se libère souvent en
-    quelques secondes."""
+    `attente` is how long we retry before giving up. A live stream lasts minutes;
+    without wait, a loop hitting it would lose a whole turn while the resource
+    often frees in seconds."""
     import uuid
 
     dossier_verrou = Path(racine) if racine is not None else app_dir()
     dossier_verrou.mkdir(parents=True, exist_ok=True)
     fichier = dossier_verrou / f".blink_{nom}.lock"
     jeton = uuid.uuid4().hex
-    # monotonic, pas time.time() : une correction NTP/DST pendant l'attente
-    # ne doit pas raccourcir ni rallonger le délai promis par `attente` (même
-    # correctif déjà appliqué à verrou_controle() plus bas dans ce fichier,
-    # et à nettoyer_lances() dans blink_cli.py - juste pas encore ici).
-    # "at" ci-dessous reste time.time() à dessein : c'est un horodatage réel
-    # à comparer à d'autres time.time() (age = time.time() - presente["at"]),
-    # pas un délai à mesurer.
+    # monotonic, not time.time(): NTP/DST correction during wait must not shorten
+    # or lengthen the delay promised by `attente` (same fix already in
+    # verrou_controle() below and nettoyer_lances() in blink_cli.py — not here yet).
+    # "at" below stays time.time() on purpose: real timestamp to compare with
+    # other time.time() (age = time.time() - presente["at"]), not a delay to measure.
     limite = time.monotonic() + max(attente, 0)
     contenu = json.dumps(
         {"owner": owner, "pid": os.getpid(), "jeton": jeton, "at": time.time(),
@@ -1872,25 +1761,23 @@ def verrou(nom: str, owner: str, stale_after: int = 600, attente: int = 0,
         except FileExistsError:
             pass
         except PermissionError as erreur:
-            # Sous Windows, un verrou que son propriétaire vient de supprimer
-            # reste « en attente de suppression » tant qu'un antivirus ou
-            # l'indexeur le tient encore ouvert : le recréer est alors refusé
-            # (accès refusé), ni succès ni FileExistsError. Le verrou se
-            # libère, simplement pas encore : on réessaie dans la même
-            # fenêtre d'attente, comme filelock le fait pour ce même cas.
-            # L'erreur traversait jusqu'ici verrou(), et l'exclusion lancée en
-            # arrière-plan mourait sans rien appliquer (CI Windows des 25 et
-            # 26/09/2026). Ailleurs, ce refus est un vrai manque de droits.
+            # On Windows, a lock just deleted by its owner stays "pending deletion"
+            # while antivirus or indexer keeps it open: recreating is refused
+            # (access denied), neither success nor FileExistsError. The lock is
+            # freeing, just not yet: retry in the same wait window, as filelock
+            # does for this case. The error reached verrou() here and background
+            # exclusion died without applying (Windows CI 25–26/09/2026). Elsewhere
+            # this refusal is a real permissions failure.
             if os.name != "nt":
                 raise
             if time.monotonic() >= limite:
-                raise BusyError(f"verrou en cours de suppression ou "
-                                f"inaccessible : {fichier}") from erreur
+                raise BusyError(f"lock being deleted or "
+                                f"inaccessible: {fichier}") from erreur
             time.sleep(0.05)
             continue
         else:
-            # La création a réussi : le verrou nous appartient, personne
-            # d'autre n'a pu obtenir le même fichier au même instant.
+            # Creation succeeded: the lock is ours, no one else could get the same
+            # file at the same instant.
             with os.fdopen(descripteur, "wb") as flux:
                 flux.write(contenu)
             break
@@ -1900,82 +1787,67 @@ def verrou(nom: str, owner: str, stale_after: int = 600, attente: int = 0,
             try:
                 existe = fichier.exists()
             except PermissionError:
-                # Windows, Python 3.8 : un verrou que son propriétaire vient
-                # de supprimer reste « en attente de suppression » et son
-                # stat() est refusé (CI Win7 du 29/09/2026, le test de
-                # `stop`). Comme pour la création plus haut, il n'est pas
-                # encore libre : on le traite en marque présente, l'attente
-                # (`attente`) et la limite s'appliquent.
+                # Windows, Python 3.8: a lock just deleted stays "pending deletion"
+                # and stat() is refused (Win7 CI 29/09/2026, `stop` test). Like
+                # creation above, not free yet: treat as present marker; `attente`
+                # and limit apply.
                 if os.name != "nt":
                     raise
                 existe = True
             if existe:
-                # Présent mais illisible : corrompu, ou fenêtre d'écriture
-                # d'un autre processus pas encore terminée. Les deux se
-                # confondent ici (même limite documentée que pour B-05), mais
-                # doivent quand même respecter `attente` - une marque restée
-                # corrompue (écriture interrompue, disque en cause) tournait
-                # sinon en boucle active, sans jamais lever BusyError ni
-                # rendre la main (revue de code du 0eab463, bug #3).
+                # Present but unreadable: corrupt, or another process's write window
+                # not finished. Both look the same here (same limit as B-05), but
+                # must still honor `attente` — a stuck corrupt marker (interrupted
+                # write, disk issue) otherwise spun forever without BusyError or
+                # giving up (code review 0eab463, bug #3).
                 if time.monotonic() >= limite:
-                    raise BusyError(f"verrou illisible ou corrompu : {fichier}")
+                    raise BusyError(f"lock unreadable or corrupt: {fichier}")
                 time.sleep(0.05)
                 continue
-            # Fichier réellement absent entre l'échec de la création et la
-            # lecture (son propriétaire vient de le libérer) : retenter tout
-            # de suite, rien à attendre.
+            # File truly absent between failed create and read (owner just freed
+            # it): retry immediately, no wait.
             continue
         pid_verrou = int(presente.get("pid") or 0)
         identite_enregistree = presente.get("identite")
         identite_actuelle = identite_processus(pid_verrou)
-        # Vivant ET la même identité : un pid recyclé par un autre processus
-        # après la mort du vrai propriétaire ne doit pas passer pour lui
-        # (AUDIT-2026-08-13, 28.82/28.84). Une marque sans "identite" vient
-        # d'un ancien format (avant ce correctif) : on ne peut alors rien
-        # comparer, on retombe sur l'ancien comportement plutôt que de purger
-        # à tort un verrou légitime. Même logique si identite_processus()
-        # échoue à interroger le pid actuel (OpenProcess refusé, par exemple) :
-        # un None ici ne prouve pas une identité différente, seulement qu'on
-        # n'a pas pu la lire, donc on ne tranche pas "différent" sur cette
-        # seule base (revue du 27/08, bug 1).
-        # Exception, constatée en réel le 29/09/2026 : la marque porte une
-        # identité mais le pid actuel est illisible. Un propriétaire de notre
-        # compte reste toujours lisible ; un pid refusé (accès refusé) est un
-        # processus protégé ou d'un autre compte, donc un pid recyclé (ici
-        # AggregatorHost.exe) : le verrou d'avant le redémarrage bloquait le
-        # démarrage automatique, à jamais.
+        # Alive AND same identity: a pid recycled after the real owner died must
+        # not count as them (AUDIT-2026-08-13, 28.82/28.84). A marker without
+        # "identite" is old format (before this fix): nothing to compare, fall
+        # back to old behavior rather than purge a legitimate lock. Same if
+        # identite_processus() cannot query current pid (OpenProcess denied):
+        # None here does not prove different identity, only unread, so do not
+        # decide "different" on that alone (review 27/08, bug 1).
+        # Exception, seen 29/09/2026: marker has identity but current pid unread.
+        # Our-account owner is always readable; denied pid (access denied) is
+        # protected or another account, i.e. recycled (AggregatorHost.exe): pre-
+        # reboot lock blocked autostart forever.
         meme_processus = (
             identite_enregistree is None
             or (identite_actuelle is not None
                 and identite_actuelle == identite_enregistree)
         )
         if not (processus_vivant(pid_verrou) and meme_processus):
-            # Propriétaire mort, ou pid recyclé par quelqu'un d'autre : purge
-            # sous mutex, pas par un unlink direct.
-            # L'ancien protocole (lire, conclure « mort », supprimer) laissait
-            # une fenêtre entre la lecture et la suppression : un second
-            # processus arrivé au même verdict pouvait y supprimer, à la
-            # place de la marque périmée qu'il croyait viser, celle qu'un
-            # premier processus venait de recréer entre-temps - les deux se
-            # croyaient alors propriétaires (revue de code du 0eab463, bug
-            # #3). Le fichier `.purge` sert exactement le même rôle que
-            # O_CREAT|O_EXCL sur le verrou lui-même : un seul processus à la
-            # fois entre dans la section suivante, et celui qui y entre
-            # revérifie que le jeton lu n'a pas changé avant de supprimer.
+            # Owner dead, or pid recycled by someone else: purge under mutex, not
+            # direct unlink.
+            # Old protocol (read, decide "dead", delete) left a window: a second
+            # process with the same verdict could delete the lock a first process
+            # just recreated instead of the stale marker — both thought they owned
+            # it (code review 0eab463, bug #3). `.purge` file plays the same role
+            # as O_CREAT|O_EXCL on the lock: one process at a time enters the next
+            # section and rechecks the token before deleting.
             purge = fichier.with_name(fichier.name + ".purge")
             try:
                 os.close(os.open(purge, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
             except (FileExistsError, PermissionError) as erreur:
-                # PermissionError : même refus Windows qu'à la création du
-                # verrou plus haut, la marque de purge étant elle aussi créée
-                # puis supprimée à chaque passage.
+                # PermissionError: same Windows refusal as lock creation above,
+                # purge marker also created then deleted each pass.
                 if isinstance(erreur, PermissionError) and os.name != "nt":
                     raise
-                # Un autre processus est dans cette même section (ou, très
-                # rarement, y est mort avant son finally) : `limite` reste le
-                # seul garde-fou contre une attente indéfinie, même ici.
+                # Another process is in this section (or rarely died before
+                # finally): `limite` remains the only guard against infinite
+                # wait, here too.
                 if time.monotonic() >= limite:
-                    raise BusyError(f"purge du verrou déjà en cours pour "
+                    raise BusyError(f"lock purge already in progress for "
                                     f"« {presente.get('owner')} »")
                 time.sleep(0.05)
                 continue
@@ -1989,8 +1861,8 @@ def verrou(nom: str, owner: str, stale_after: int = 600, attente: int = 0,
 
         if time.monotonic() >= limite:
             age = time.time() - float(presente.get("at") or 0)
-            raise BusyError(f"déjà réservé par « {presente.get('owner')} » "
-                            f"(pid {presente.get('pid')}) depuis {int(age)} s")
+            raise BusyError(f"already held by « {presente.get('owner')} » "
+                            f"(pid {presente.get('pid')}) for {int(age)} s")
         time.sleep(1)
 
     try:
@@ -2002,22 +1874,21 @@ def verrou(nom: str, owner: str, stale_after: int = 600, attente: int = 0,
 
 
 def verrou_controle(owner: str, attente: int = 0):
-    """Verrou global des transitions stop/restart, indépendant du stockage."""
+    """Global lock for stop/restart transitions, independent of storage."""
     return verrou("controle", owner, stale_after=120, attente=attente,
                    racine=_dossier_controle())
 
 
 def verrou_configuration(owner: str = "reglages", attente: int = 0):
-    """Sérialise les bascules du pointeur et l'écriture de leurs réglages."""
+    """Serialize pointer switches and writing their settings."""
     return verrou("configuration", owner, stale_after=120, attente=attente,
                    racine=_dossier_controle())
 
 
-# Identité applicative sous laquelle les notifications Windows sont émises.
-# Windows jette en silence, en rendant zéro, toute notification dont
-# l'identité n'est pas déclarée : emprunter celle de PowerShell marchait sur
-# certaines installations et pas sur d'autres, sans jamais dire pourquoi. On
-# déclare donc la nôtre, comme le font Firefox ou Acrobat.
+# Application identity under which Windows notifications are sent.
+# Windows silently drops, returning zero, any notification whose identity is not
+# declared: borrowing PowerShell's worked on some installs and not others, never
+# saying why. We declare our own, like Firefox or Acrobat.
 APP_ID = "blink2video"
 
 
@@ -2025,16 +1896,14 @@ ARRET_DEMANDE = Path(".blink_arret")
 
 
 def demander_arret() -> None:
-    """Pose le drapeau d'arrêt coopératif.
+    """Set the cooperative shutdown flag.
 
-    repeter() (tous les verbes --loop) et le serveur web le relisent à
-    chaque tour/à intervalle court : un verbe termine son tour en cours
-    (fichier entamé, page en cours de service) puis s'arrête de lui-même,
-    plutôt que d'être tué en plein milieu (revue du 27/08 : un arrêt externe,
-    tray ou stop, tuait directement sans laisser le travail en cours se
-    terminer proprement). Seul ffmpeg reste tué directement : processus
-    tiers, on n'a aucune prise sur son propre nettoyage (voir arreter(),
-    blink_cli.py)."""
+    repeter() (all --loop verbs) and the web server re-read it each turn/at short
+    intervals: a verb finishes its current turn (partial file, page in service)
+    then stops on its own, rather than being killed mid-work (review 27/08:
+    external stop via tray or stop killed directly without letting work finish).
+    Only ffmpeg is killed directly: third-party process, no control over its own
+    cleanup (see arreter(), blink_cli.py)."""
     (_dossier_controle() / ARRET_DEMANDE).write_text(
         str(time.time()), encoding="utf-8")
 
@@ -2044,9 +1913,8 @@ def arret_demande() -> bool:
 
 
 def effacer_arret_demande() -> None:
-    """À appeler au début d'une nouvelle session (le drapeau d'une session
-    précédente ne doit jamais empêcher une nouvelle de tourner) et à la fin
-    d'une séquence d'arrêt réussie."""
+    """Call at the start of a new session (a prior session's flag must never
+    block a new one) and after a successful shutdown sequence."""
     (_dossier_controle() / ARRET_DEMANDE).unlink(missing_ok=True)
 
 
@@ -2054,10 +1922,9 @@ PASSAGES = Path(".blink_passages.json")
 
 
 def marquer(verbe: str) -> None:
-    """Note l'heure à laquelle un verbe vient de finir son travail.
+    """Record when a verb just finished its work.
 
-    L'interface affiche ces heures, ce qui rend visible d'un coup d'œil une
-    boucle qui ne tourne plus."""
+    The UI shows these times, making a stalled loop obvious at a glance."""
     import datetime as dt
 
     fichier = app_dir() / PASSAGES
@@ -2074,7 +1941,7 @@ def marquer(verbe: str) -> None:
 
 
 def passages() -> dict:
-    """Heure du dernier passage de chaque verbe."""
+    """Last run time of each verb."""
     try:
         return json.loads((app_dir() / PASSAGES).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -2086,20 +1953,19 @@ TRAVAIL_TERMINE_VISIBLE = 10
 
 
 def _fichier_travail(pid: int | None = None) -> Path:
-    """Fiche propre à un worker, pour que deux progressions ne s'écrasent pas."""
+    """Per-worker card so two progress updates do not overwrite each other."""
     pid = os.getpid() if pid is None else int(pid)
     return app_dir() / f"{TRAVAIL.stem}.{pid}{TRAVAIL.suffix}"
 
 
 @contextlib.contextmanager
 def _verrou_travail(cible: Path, attente: float = 0.25):
-    """Courte exclusion entre publication et purge, sans sondage de processus.
+    """Brief exclusion between publish and purge, without polling processes.
 
-    Verrou de nico579_commons.atomique, sur le fichier voisin
-    « .blink_travail.lock » : il reste en place (le supprimer après
-    déverrouillage permettrait à deux processus de verrouiller deux fichiers
-    différents au même chemin), et l'OS le libère même si son détenteur
-    s'arrête brutalement. BusyError si un autre le tient plus de `attente`.
+    nico579_commons.atomique lock on neighbor file ".blink_travail.lock": it
+    stays in place (removing after unlock would let two processes lock different
+    files at the same path), and the OS releases it even if the holder crashes.
+    BusyError if another holds it longer than `attente`.
     """
     from nico579_commons import atomique
 
@@ -2114,7 +1980,7 @@ def _verrou_travail(cible: Path, attente: float = 0.25):
 
 
 def _ecrire_fiche_travail(cible: Path, etat: dict) -> bool:
-    """Remplace une fiche atomiquement, y compris sous antivirus Windows."""
+    """Replace a card atomically, including under Windows antivirus."""
     from nico579_commons import atomique
 
     temporaire = atomique.chemin_part(cible)
@@ -2143,51 +2009,47 @@ def _lire_fiche_travail(cible: Path) -> dict:
 
 
 def _supprimer_fiche_travail(cible: Path, attendu: dict, attente: float = 0) -> bool:
-    """Ne retire que la publication lue, sans pouvoir effacer le tick suivant."""
+    """Remove only the publication read, cannot erase the next tick."""
     try:
         with _verrou_travail(cible, attente=attente):
             if _lire_fiche_travail(cible) == attendu:
                 cible.unlink(missing_ok=True)
         return True
     except (OSError, BusyError):
-        # La purge peut attendre le prochain polling. Une fiche active ne
-        # doit jamais être sacrifiée pour faire disparaître une ancienne fin.
+        # Purge can wait for next poll. An active card must never be sacrificed
+        # to clear an old completion.
         return False
 
 
 def travail(quoi: str, fait: float = 0, total: int = 0, cle: str | None = None) -> None:
-    """Publie l'avancement du travail en cours, pour qui voudrait le montrer.
+    """Publish in-progress work for anything that wants to show it.
 
-    Les verbes tournent dans leurs propres processus : quand l'assemblage part
-    d'une boucle de fond, l'interface ne voit rien de sa sortie. Ce fichier est
-    le seul point où elle peut apprendre qu'un calcul occupe la machine, et où
-    il en est. Écrit à chaque clip, effacé à la fin.
+    Verbs run in their own processes: when merge runs from a background loop, the
+    UI sees none of its output. This file is the only place it learns a job is
+    using the machine and how far along. Written per clip, cleared at end.
 
-    `quoi` reste le texte français en dur, pour les appelants qui n'affichent
-    rien (journaux, terminal) : ne pas leur imposer de traduction. `cle` est
-    une étiquette stable, optionnelle, que la page web utilise pour retrouver
-    l'équivalent anglais dans son propre dictionnaire (I18N) sans que ce
-    fichier n'ait besoin d'en connaître la traduction lui-même - un texte
-    inconnu (clé absente, ou clé que la page ne reconnaît pas) reste affiché
-    tel quel, jamais une chaîne vide."""
+    `quoi` stays hard-coded French text for callers that show nothing (logs,
+    terminal): do not force translation on them. `cle` is an optional stable tag
+    the web page uses to find English in its own dictionary (I18N) without this
+    file knowing translations — unknown text (missing key or unrecognized key)
+    stays as-is, never an empty string."""
     import datetime as dt
     etat = {"quoi": quoi, "cle": cle, "fait": round(fait, 3), "total": total,
             "pid": os.getpid(),
             "depuis": dt.datetime.now().astimezone().isoformat(timespec="seconds")}
-    # Une fiche par PID : download et merge peuvent réellement se chevaucher.
-    # Un fichier unique faisait disparaître la barre de téléchargement dès que
-    # l'assemblage publiait son propre tick, et fin_travail() de l'un pouvait
-    # supprimer la publication fraîche de l'autre entre sa lecture et unlink.
+    # One card per PID: download and merge can overlap.
+    # A single file hid the download bar as soon as merge published its tick, and
+    # one fin_travail() could delete the other's fresh publish between read and
+    # unlink.
     _ecrire_fiche_travail(_fichier_travail(), etat)
 
 
 def fin_travail(conserver: float = 0) -> None:
-    """Retire notre fiche, ou conserve brièvement son état final affichable.
+    """Remove our card, or briefly keep its final displayable state.
 
-    Une fin conservée porte ``termine`` : elle n'est donc jamais rendue par
-    :func:`travail_en_cours` et ne bloque ni le bouton Actualiser ni un nouveau
-    calcul. Elle permet seulement à la sonde web de ne pas manquer un petit
-    téléchargement entièrement terminé entre deux interrogations.
+    A kept completion carries ``termine``: it is never returned by
+    :func:`travail_en_cours` and does not block Refresh or a new job. It only
+    lets the web poll not miss a small download fully done between polls.
     """
     import datetime as dt
 
@@ -2202,22 +2064,21 @@ def fin_travail(conserver: float = 0) -> None:
                      visible_secondes=max(0, float(conserver)))
         if _ecrire_fiche_travail(cible, final):
             return
-        # Sous Windows, un antivirus peut exceptionnellement refuser le
-        # replace. Ne surtout pas laisser alors l'ancienne fiche « active »
-        # pendant que le worker dort : mieux vaut perdre le N/N terminal que
-        # bloquer Actualiser jusqu'à la péremption de quinze minutes.
+        # On Windows, antivirus may rarely refuse replace. Do not leave the old
+        # "active" card while the worker sleeps: better lose terminal N/N than
+        # block Refresh for fifteen minutes until expiry.
     _supprimer_fiche_travail(cible, etat, attente=0.25)
 
 
 def _etats_travail(retirer_conclusion: str | None = None) -> tuple:
-    """Renvoie (actifs, terminés encore affichables), en purgeant les périmés."""
+    """Return (active, completions still displayable), purging stale entries."""
     import datetime as dt
 
     maintenant = dt.datetime.now().astimezone()
     racine = app_dir()
     fichiers = list(racine.glob(f"{TRAVAIL.stem}.*{TRAVAIL.suffix}"))
-    # Compatibilité avec une fiche laissée par une version antérieure pendant
-    # une mise à jour en place. Les nouvelles écritures utilisent toutes le PID.
+    # Compatibility with a card left by an older version during in-place update.
+    # New writes all use PID.
     ancienne = racine / TRAVAIL
     if ancienne.exists():
         fichiers.append(ancienne)
@@ -2262,7 +2123,7 @@ def effacer_conclusion_travail(cle: str) -> bool:
 
 
 def _priorite_travail(etat: dict, actif: bool) -> tuple:
-    """Conclusion de mise à jour, puis téléchargement, puis assemblage."""
+    """Update completion, then download, then merge."""
     cle = str(etat.get("cle") or "")
     telechargement = cle in ("phase.inventory_clips", "phase.download_clips")
     # actif download > fin download > actif autre > fin autre
@@ -2273,16 +2134,16 @@ def _priorite_travail(etat: dict, actif: bool) -> tuple:
 
 
 def travail_en_cours() -> dict:
-    """Le travail en cours, ou un dictionnaire vide.
+    """Work in progress, or an empty dict.
 
-    Mêmes garde-fous que les verrous : une marque laissée par un processus mort
-    ou trop vieille ne doit pas faire croire à un calcul éternel."""
+    Same safeguards as locks: a marker left by a dead or too-old process must not
+    imply eternal computation."""
     actifs, _ = _etats_travail()
     return max(actifs, key=lambda etat: _priorite_travail(etat, True)) if actifs else {}
 
 
 def travail_affichable() -> dict:
-    """Travail actif, ou dernière fin N/N retenue pour la prochaine sonde web."""
+    """Active work, or last retained N/N completion for the next web poll."""
     actifs, termines = _etats_travail()
     candidats = [(etat, True) for etat in actifs] + [
         (etat, False) for etat in termines
@@ -2290,68 +2151,47 @@ def travail_affichable() -> dict:
     if not candidats:
         return {}
     choisi = dict(max(candidats, key=lambda item: _priorite_travail(*item))[0])
-    # Le travail montré peut être un N/N terminal prioritaire alors qu'un
-    # assemblage tourne encore derrière. Le navigateur doit distinguer
-    # « visible » de « actif » pour ne pas réactiver son bouton à tort.
+    # Shown work may be a priority terminal N/N while merge still runs behind.
+    # The browser must distinguish "visible" from "active" so it does not wrongly
+    # re-enable its button.
     choisi["actif"] = bool(actifs)
     return choisi
 
 
-# I-11 : liste des options qui attendent une valeur, pour ne jamais confondre
-# cette valeur avec le début d'un nouveau groupe même si elle porte le même
-# texte qu'un verbe (« download --camera watch », « download --camera
-# update »...). Tenue ici plutôt que déduite des analyseurs de chaque
-# programme : ceux-ci vivent dans des fichiers séparés (blink2video.py,
-# merge_daily.py, serve.py, watch.py), que ce découpage précède et ne peut
-# pas encore interroger.
+# I-11: options that take a value, so we never confuse that value with starting
+# a new group even when it matches a verb name ("download --camera watch",
+# "download --camera update"...). Kept here rather than inferred from each
+# program's parser: those live in separate files (blink2video.py, merge_daily.py,
+# serve.py, watch.py), predating this split and not queryable yet.
 _OPTIONS_VALEUR_UNIQUE = frozenset((
     "--hub", "--camera", "--since", "--output", "--from", "--port",
     "--input", "--weekly-output", "--monthly-output", "--normalized-output",
     "--excluded-output", "--timezone", "--date", "--font", "--preset",
     "--crf", "--thumbs", "--usb-loop", "--cloud-loop",
-    # Écrit par standard() dans chaque « start » : un hôte de confiance
-    # nommé comme un verbe (« watch », « list »...) ouvrait sinon un nouveau
-    # groupe, et serve refusait de démarrer faute de valeur (audit du
-    # 2026-09-24).
+    # Written by standard() in each "start": a trusted host named like a verb
+    # ("watch", "list"...) would otherwise open a new group, and serve refused
+    # to start for lack of value (audit 2026-09-24).
     "--trusted-host",
 ))
-# Options « nargs=+ » : consomment tous les mots qui suivent tant qu'aucun
-# ne ressemble à une option (« watch --ignore serve jardin » cible deux
-# caméras, dont une nommée comme un verbe).
+# "nargs=+" options: consume following words until one looks like an option
+# ("watch --ignore serve jardin" targets two cameras, one named like a verb).
 _OPTIONS_VALEURS_MULTIPLES = frozenset(("--exclude", "--include", "--ignore", "--unignore"))
 
 
-def _hote_vide_perdu(arguments: list, indice: int) -> bool:
-    """Vrai si la valeur vide de --trusted-host manque devant `arguments[indice]`.
-
-    L'assistant de mise à jour de nico579-commons 0.5.0 (blink2video 0.23.0 à
-    0.24.0) perd les arguments vides en relançant : « --trusted-host "" watch
-    --loop 10 » revenait « --trusted-host watch --loop 10 », et la relève
-    devenait l'hôte de serve (vu en vrai le 2026-10-17). Un nom d'hôte ne
-    commence jamais par un tiret ; et un hôte nommé comme un verbe (audit I-11)
-    est suivi du verbe que standard() place après lui, ou de rien, alors que
-    dans la ligne abîmée le verbe est suivi de ses propres options."""
-    suivant = arguments[indice]
-    if suivant.startswith("-"):
-        return True
-    return (suivant in VERBES and indice + 1 < len(arguments)
-            and arguments[indice + 1] not in VERBES)
-
-
 def decouper_verbes(arguments) -> list:
-    """Découpe « watch --loop download --loop merge » en groupes.
+    """Split "watch --loop download --loop merge" into groups.
 
-    Chaque nom de verbe connu ouvre un groupe, qui court jusqu'au verbe
-    suivant : les options appartiennent donc au verbe qui les précède. C'est ce
-    qui permet d'en citer autant qu'on veut, chacun réglé à sa façon.
+    Each known verb name opens a group running until the next verb: options
+    belong to the verb before them. That allows citing as many as needed, each
+    configured differently.
 
-    Un même verbe peut être cité plusieurs fois, avec des options différentes :
-    « download --from usb --loop 10 download --from cloud --loop 1 » suit deux
-    sources à deux cadences. La règle inverse, un verbe une seule fois, visait
-    des réglages contradictoires ; ceux-là sont complémentaires.
+    The same verb may appear multiple times with different options:
+    "download --from usb --loop 10 download --from cloud --loop 1" follows two
+    sources at two cadences. The old one-verb-once rule targeted conflicting
+    settings; these are complementary.
 
-    Lève ValueError si le premier élément n'est pas un verbe, faute de quoi on
-    ne saurait pas à qui rattacher les premières options."""
+    Raises ValueError if the first element is not a verb, since the first options
+    would have nothing to attach to."""
     arguments = list(arguments)
     groupes = []
     indice, total = 0, len(arguments)
@@ -2365,10 +2205,7 @@ def decouper_verbes(arguments) -> list:
             raise ValueError(f"« {element} » n'est pas un verbe")
         groupes[-1].append(element)
         indice += 1
-        if (element == "--trusted-host" and indice < total
-                and _hote_vide_perdu(arguments, indice)):
-            groupes[-1].append("")
-        elif element in _OPTIONS_VALEUR_UNIQUE and indice < total:
+        if element in _OPTIONS_VALEUR_UNIQUE and indice < total:
             groupes[-1].append(arguments[indice])
             indice += 1
         elif element in _OPTIONS_VALEURS_MULTIPLES:
@@ -2377,64 +2214,63 @@ def decouper_verbes(arguments) -> list:
                 indice += 1
         elif (element == "--loop" and indice < total
               and arguments[indice].lstrip("-").isdigit()):
-            # nargs="?" : --loop seul est valide (cadence par défaut), donc sa
-            # valeur n'est consommée que si le mot suivant est bien un nombre.
+            # nargs="?": --loop alone is valid (default cadence), so its value is
+            # consumed only if the next word is a number.
             groupes[-1].append(arguments[indice])
             indice += 1
     return groupes
 
 
 def cadence_positive(valeur: str) -> int:
-    """Convertit une cadence CLI en entier strictement positif."""
+    """Convert a CLI cadence to a strictly positive integer."""
     try:
         minutes = int(valeur)
     except (TypeError, ValueError) as exc:
         raise argparse.ArgumentTypeError(
-            "la cadence doit être un nombre entier de minutes"
+            "cadence must be an integer number of minutes"
         ) from exc
     if minutes <= 0:
         raise argparse.ArgumentTypeError(
-            "la cadence doit être strictement supérieure à zéro"
+            "cadence must be strictly greater than zero"
         )
     return minutes
 
 
 def jours_non_negatifs(valeur: str) -> int:
-    """Convertit un nombre de jours CLI et autorise explicitement zéro."""
+    """Convert a CLI day count and explicitly allow zero."""
     try:
         jours = int(valeur)
     except (TypeError, ValueError) as exc:
         raise argparse.ArgumentTypeError(
-            "le nombre de jours doit être un entier"
+            "day count must be an integer"
         ) from exc
     if jours < 0:
         raise argparse.ArgumentTypeError(
-            "le nombre de jours doit être positif ou nul"
+            "day count must be zero or positive"
         )
     return jours
 
 
 def port_valide(valeur: str) -> int:
-    """Convertit un port CLI et refuse les valeurs hors plage TCP/UDP."""
+    """Convert a CLI port and reject values outside TCP/UDP range."""
     try:
         port = int(valeur)
     except (TypeError, ValueError) as exc:
         raise argparse.ArgumentTypeError(
-            "le port doit être un nombre entier"
+            "port must be an integer"
         ) from exc
     if not 1 <= port <= 65535:
         raise argparse.ArgumentTypeError(
-            "le port doit être compris entre 1 et 65535"
+            "port must be between 1 and 65535"
         )
     return port
 
 
 def ajouter_boucle(parser) -> None:
-    """Ajoute --loop à un analyseur d'arguments.
+    """Add --loop to an argument parser.
 
-    La répétition est une manière de travailler, pas un travail : elle
-    s'applique donc à n'importe quel verbe plutôt que d'en constituer un. Écrite
-    une seule fois ici, elle se comporte pareil partout."""
+    Repetition is a way of working, not a job: it applies to any verb rather than
+    being one. Defined once here, it behaves the same everywhere."""
     parser.add_argument(
         "--loop", type=cadence_positive, nargs="?", const=10, default=None,
         metavar="MINUTES",
@@ -2443,24 +2279,22 @@ def ajouter_boucle(parser) -> None:
 
 
 def repeter(travail, minutes, journal=None) -> int:
-    """Exécute `travail` une fois, ou indéfiniment si `minutes` est donné.
+    """Run `travail` once, or indefinitely if `minutes` is set.
 
-    Deux défauts de la boucle de fond sont corrigés ici, pour tous les verbes
-    qui partagent cette fonction :
+    Two background-loop bugs are fixed here for all verbs sharing this function:
 
-    - une erreur transitoire (réseau, ffmpeg, JSON) ne doit pas tuer
-      définitivement le worker : seul Ctrl+C doit l'arrêter (I-17) ;
-    - l'échéance du prochain tour se calcule depuis l'heure de départ du tour
-      courant, sur time.monotonic(), plutôt que de dormir après le travail :
-      un tour qui dure plus longtemps que la cadence ne doit pas décaler tous
-      les suivants d'autant (O-05)."""
+    - a transient error (network, ffmpeg, JSON) must not kill the worker for
+      good: only Ctrl+C should stop it (I-17);
+    - next turn deadline is computed from the current turn's start on
+      time.monotonic(), rather than sleeping after work: a turn longer than the
+      cadence must not shift all following turns by that much (O-05)."""
     import time
 
     if not minutes:
         return int(travail() or 0)
     print(_msg("repetition", minutes=minutes))
     if journal:
-        journal(f"repetition toutes les {minutes} min")
+        journal(f"repeating every {minutes} min")
     periode = minutes * 60
     try:
         while not arret_demande():
@@ -2468,15 +2302,14 @@ def repeter(travail, minutes, journal=None) -> int:
             try:
                 travail()
             except Exception as erreur:
-                # Console traduite, journal (fichier de diagnostic) figé dans
-                # sa forme technique habituelle comme ses autres entrées ici.
+                # Translated console; journal (diagnostic file) stays in its usual
+                # technical form like other entries here.
                 print(_msg("tour_interrompu", erreur=erreur))
                 if journal:
-                    journal(f"tour interrompu par une erreur, on reessaie au prochain : {erreur}")
-            # Sommeil scindé en tranches courtes : sans ça, un arrêt demandé
-            # pendant l'attente entre deux tours ne serait vu qu'à l'échéance
-            # complète (jusqu'à `minutes` d'attente), pas dans la seconde
-            # (revue du 27/08 : arrêt coopératif plutôt qu'un kill externe).
+                    journal(f"run interrupted by an error, retrying next time: {erreur}")
+            # Sleep split into short slices: otherwise a shutdown requested between
+            # turns would only be seen at full deadline (up to `minutes` wait),
+            # not within a second (review 27/08: cooperative stop vs external kill).
             while not arret_demande():
                 reste = echeance - time.monotonic()
                 if reste <= 0:
@@ -2484,20 +2317,20 @@ def repeter(travail, minutes, journal=None) -> int:
                 time.sleep(min(1.0, reste))
     except KeyboardInterrupt:
         if journal:
-            journal("arret de la repetition")
+            journal("stopped repeating")
         print(_msg("arret"))
     else:
         if journal:
-            journal("arret demande, sortie propre")
+            journal("stop requested, clean exit")
     return 0
 
 
 def commande_composee(arguments) -> list:
-    """Ligne complète passant par le point d'entrée, verbes compris.
+    """Full command line via the entry point, verbs included.
 
-    Distincte de self_command, qui vise le programme d'un seul verbe : ici on
-    veut que blink lui-même reçoive la suite, puisque c'est lui qui sait lancer
-    plusieurs verbes côte à côte."""
+    Unlike self_command, which targets one verb's program: here blink itself
+    must receive the rest, since it knows how to launch several verbs side by
+    side."""
     if frozen():
         return [sys.executable, *arguments]
     return [sys.executable, "-u",
@@ -2505,18 +2338,18 @@ def commande_composee(arguments) -> list:
 
 
 def self_command(verb: str, *arguments: str) -> list:
-    """Ligne de commande pour se relancer sur un autre verbe.
+    """Command line to relaunch on another verb.
 
-    Le seul endroit du programme qui connaisse la différence entre les deux
-    modes d'exécution. Tout le reste appelle self_command et ignore s'il tourne
-    depuis des sources ou depuis un exécutable."""
+    The only place in the program that knows the difference between the two
+    execution modes. Everything else calls self_command and ignores sources vs
+    executable."""
     if frozen():
         return [sys.executable, verb, *arguments]
     if verb not in VERBES:
-        raise ValueError(f"verbe inconnu : {verb}")
+        raise ValueError(f"unknown verb: {verb}")
     module = VERBES[verb].module
     base = [sys.executable, "-u",
             str(Path(__file__).resolve().parent / f"{module}.py")]
-    # Le point d'entrée attend son verbe comme premier argument positionnel ;
-    # les autres programmes sont appelés directement, sans verbe.
+    # The entry point expects its verb as first positional argument; other
+    # programs are invoked directly, without a verb.
     return base + ([verb] if module == ENTREE else []) + list(arguments)

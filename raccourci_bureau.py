@@ -1,22 +1,22 @@
-"""Raccourci de bureau : ouvrir ou lancer blink2video en un double-clic.
+"""Desktop shortcut: open or launch blink2video with a double-click.
 
-N'installe rien de permanent, contrairement à autostart.py : un seul fichier
-posé sur le Bureau, que l'utilisateur retire lui-même (glisser à la
-corbeille) le jour où il n'en veut plus. Pas de pendant « off ».
+Installs nothing permanent, unlike autostart.py: a single file
+placed on the Desktop, which the user removes themselves (drag to the
+trash) when they no longer want it. No « off » counterpart.
 
-La pose du fichier (Bureau de chaque système, .lnk, .app, .desktop, marque de
-confiance de GNOME) est dans nico579_commons.raccourci, la même pour les
-quatre applications. Ne reste ici que ce qui est propre à blink2video : la
-commande, le dossier de travail et l'icône.
+Placing the file (each system's Desktop, .lnk, .app, .desktop, GNOME
+trust mark) is in nico579_commons.raccourci, the same for the
+four applications. Only what is specific to blink2video remains here: the
+command, the working directory and the icon.
 
-La commande posée dans le raccourci est simplement « start » : blink_cli
-(voir la branche « start » de executer()) se comporte déjà comme « open »
-quand une instance écoute déjà sur le port configuré, sans rien relancer.
-Le même raccourci sert donc aussi bien à démarrer qu'à rouvrir l'interface
-en place. « --open-browser » est ajouté ici : absent de la composition
-standard (elle n'ouvre jamais de navigateur toute seule, voir DEFAUT dans
-autostart.py), il faut l'ajouter explicitement pour ce raccourci-ci, qui n'a
-de sens que si l'interface finit par s'afficher.
+The command placed in the shortcut is simply « start »: blink_cli
+(see the « start » branch of executer()) already behaves like « open »
+when an instance is already listening on the configured port, without relaunching anything.
+The same shortcut therefore serves both to start and to reopen the interface
+in place. « --open-browser » is added here: absent from the standard
+composition (it never opens a browser on its own, see DEFAUT in
+autostart.py), it must be added explicitly for this shortcut, which only
+makes sense if the interface ends up being displayed.
 """
 
 import subprocess
@@ -30,9 +30,9 @@ import runtime
 
 
 def _icone() -> Path:
-    """Windows prend le .ico, macOS ignore l'icône. Les bureaux Linux
-    affichent un PNG : à la racine du bundle (blink2video.spec l'y pose), ou
-    dans assets/ depuis les sources."""
+    """Windows takes the .ico, macOS ignores the icon. Linux desktops
+    display a PNG: at the root of the bundle (blink2video.spec places it there), or
+    in assets/ from sources."""
     racine = runtime.resource_dir()
     ico = racine / "assets" / "blink2video.ico"
     if not sys.platform.startswith("linux"):
@@ -50,20 +50,20 @@ def _lancer(commande):
 
 
 def creer(simulation: bool = False) -> int:
-    """Pose le raccourci sur le Bureau ; 0 si c'est fait (ou simulé)."""
+    """Places the shortcut on the Desktop; 0 if done (or simulated)."""
     langue = runtime.lire_langue()
     return raccourci.creer(
         "blink2video",
-        # autostart.commande() fait exactement ce qu'il faut : self_command, puis
-        # substitution de pythonw.exe à python.exe depuis les sources (seule
-        # façon d'obtenir un lancement sans aucune console sous Windows).
+        # autostart.commande() does exactly what is needed: self_command, then
+        # substituting pythonw.exe for python.exe from sources (the only
+        # way to get a launch with no console at all under Windows).
         autostart.commande(("start", "--open-browser")),
         runtime.app_dir(),
         _icone(),
         "Ouvrir blink2video" if langue == "fr" else "Open blink2video",
-        # Exécutable en mode console (console=True dans le .spec) : il ne peut
-        # pas se lancer sans fenêtre, seulement réduite d'emblée sous Windows,
-        # ou dans un terminal sous Linux.
+        # Console-mode executable (console=True in the .spec): it cannot
+        # launch without a window, only minimized from the start under Windows,
+        # or in a terminal under Linux.
         terminal=True, reduit=True, simulation=simulation, langue=langue,
         lancer=_lancer,
     )

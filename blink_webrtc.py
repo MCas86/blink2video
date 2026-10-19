@@ -1,44 +1,44 @@
-"""Direct WebRTC : passerelle sans reencodage entre le flux Blink (immis,
-via blinkpy) et un navigateur, en alternative a /live-mse (MSE + ffmpeg).
+"""WebRTC live view: passthrough bridge between the Blink stream (immis,
+via blinkpy) and a browser, as an alternative to /live-mse (MSE + ffmpeg).
 
-Mesure sur prototype le 2026-09-03 (cf. BACKLOG.md) : premiere image 2.3 a
-2.9x plus rapide qu'en MSE, sans le cout CPU d'un reencodage - MSE doit
-attendre le SPS pour ecrire un entete MP4 (empty_moov) avant d'emettre quoi
-que ce soit, WebRTC negocie les parametres du codec a part (SDP), donc peut
-demarrer des la premiere image-cle.
+Prototype measurement on 2026-09-03 (see BACKLOG.md): first frame 2.3 to
+2.9x faster than MSE, without the CPU cost of re-encoding - MSE must
+wait for the SPS to write an MP4 header (empty_moov) before emitting anything,
+WebRTC negotiates codec parameters separately (SDP), so it can
+start from the first key frame.
 
-Optionnel par construction : DISPONIBLE reste False si aiortc n'est pas
-installe (pip install -r requirements.txt pas encore fait, ou plateforme ou
-la roue binaire n'existe pas). serve.py doit retomber sur MSE dans ce cas,
-jamais faire echouer son propre import pour ce module.
+Optional by design: DISPONIBLE stays False if aiortc is not
+installed (pip install -r requirements.txt not done yet, or platform where
+the binary wheel does not exist). serve.py must fall back to MSE in that case,
+never fail its own import because of this module.
 
-Ecueils reels rencontres en construisant ceci, tous geres ici :
-- PyAV (av.open()) extrait SPS/PPS dans codec_context.extradata au lieu de
-  les laisser dans le flux de paquets demuxe, et sa sonde (analyzeduration/
-  probesize) doit rester assez genereuse pour les capturer fiablement -
-  baisser ce palier a l'aveugle a echoue en reel sur jardin (2026-09-03) :
-  negociation SDP reussie, mais extradata incomplet, plus aucune image
-  jamais decodee. D'ou blink_ts_demux.py : un demultiplexeur MPEG-TS/PES/NAL
-  minimal mais correct (PAT -> PMT -> PID video -> flux elementaire), qui
-  extrait SPS/PPS des les tout premiers octets, sans la marge de securite
-  qu'il fallait garder pour la sonde de conteneur de PyAV.
-- aiortc n'annonce en SDP que du H.264 Baseline (42001f/42e01f, code en dur
-  dans aiortc/codecs/__init__.py) alors que les cameras Blink filment en
-  High (souvent 640028) : le navigateur negocie Baseline, recoit du High,
-  ignore tout en silence. Aucune solution officielle coté aiortc (issue
-  aiortc/aiortc#944, fermee sans suite ; la reserve du mainteneur porte sur
-  l'encodage, pas sur ce cas de passthrough). D'ou _enregistrer_profil_h264,
-  qui ajoute le vrai profil (lu dans le SPS) a la table de capacites
-  d'aiortc avant de repondre - un detail d'implementation non documente,
-  susceptible de casser a une future mise a jour d'aiortc sans avertissement.
-- RTCPeerConnection() sans configuration retombe sur un serveur STUN public
-  par defaut (stun.l.google.com) : setLocalDescription() n'y renvoie
-  qu'apres la collecte de candidats, un blocage reseau/pare-feu dessus a
-  laisse MODULE_SLOT/le verrou disque tenus indefiniment en reel
-  (2026-09-03). D'ou iceServers=[] (navigateur et serveur sur le meme
-  reseau local, un STUN n'a de toute facon rien a apporter) et les deux
-  plafonds durs (NEGOCIATION_MAX_SECONDS, SESSION_MAX_SECONDS) plus bas,
-  memes principes que LIVE_FIRST_FRAME_SECONDS/LIVE_MAX_SECONDS en MSE."""
+Real pitfalls encountered while building this, all handled here:
+- PyAV (av.open()) extracts SPS/PPS into codec_context.extradata instead of
+  leaving them in the demuxed packet stream, and its probe (analyzeduration/
+  probesize) must stay generous enough to capture them reliably -
+  lowering that threshold blindly failed in the wild on jardin (2026-09-03):
+  SDP negotiation succeeded, but incomplete extradata, no frame
+  ever decoded. Hence blink_ts_demux.py: a minimal but correct MPEG-TS/PES/NAL
+  demultiplexer (PAT -> PMT -> video PID -> elementary stream), which
+  extracts SPS/PPS from the very first bytes, without the safety margin
+  that had to be kept for PyAV's container probe.
+- aiortc only announces H.264 Baseline in SDP (42001f/42e01f, hard-coded
+  in aiortc/codecs/__init__.py) whereas Blink cameras film in
+  High (often 640028): the browser negotiates Baseline, receives High,
+  silently ignores everything. No official aiortc-side solution (issue
+  aiortc/aiortc#944, closed without follow-up; the maintainer's reservation is about
+  encoding, not this passthrough case). Hence _enregistrer_profil_h264,
+  which adds the real profile (read from the SPS) to aiortc's capability
+  table before answering - an undocumented implementation detail,
+  liable to break on a future aiortc update without warning.
+- RTCPeerConnection() without configuration falls back on a public STUN server
+  by default (stun.l.google.com): setLocalDescription() only returns
+  after candidate gathering; a network/firewall block on it
+  left MODULE_SLOT/the disk lock held indefinitely in the wild
+  (2026-09-03). Hence iceServers=[] (browser and server on the same
+  local network, STUN has nothing to add anyway) and the two
+  hard ceilings (NEGOCIATION_MAX_SECONDS, SESSION_MAX_SECONDS) below,
+  same principles as LIVE_FIRST_FRAME_SECONDS/LIVE_MAX_SECONDS in MSE."""
 
 import asyncio
 from contextlib import suppress
@@ -71,59 +71,59 @@ try:
 except ImportError:
     DISPONIBLE = False
 
-# Mêmes plafonds durs qu'en MSE (LIVE_FIRST_FRAME_SECONDS/LIVE_MAX_SECONDS,
-# serve.py), pour la même raison : sans borne, un blocage réseau ou une
-# session jamais fermée proprement retient MODULE_SLOT/le verrou disque
-# indéfiniment. NEGOCIATION_MAX_SECONDS reste large : offre/réponse SDP et
-# poignée de main DTLS n'ont normalement rien à attendre de long.
+# Same hard ceilings as MSE (LIVE_FIRST_FRAME_SECONDS/LIVE_MAX_SECONDS,
+# serve.py), for the same reason: without a bound, a network stall or a
+# session never closed cleanly holds MODULE_SLOT/the disk lock
+# indefinitely. NEGOCIATION_MAX_SECONDS stays generous: SDP offer/answer and
+# DTLS handshake normally have nothing long to wait for.
 NEGOCIATION_MAX_SECONDS = 15
-# Distinct de NEGOCIATION_MAX_SECONDS depuis le 2026-09-03 (BACKLOG.md) :
-# les deux partageaient jusque-la le meme plafond de 15s pour l'attente du
-# SPS/PPS (sps_pps_pret), confondant deux choses sans rapport - la vitesse
-# d'une negociation SDP/DTLS purement locale, et le temps que met une
-# camera sur batterie a se reveiller. 15s suffit a la premiere, pas
-# toujours a la seconde (timeout constate en reel sur jardin) : memes
-# raison et valeur que LIVE_FIRST_FRAME_SECONDS cote MSE (serve.py), qui
-# accorde deja cette patience pour la meme raison.
+# Distinct from NEGOCIATION_MAX_SECONDS since 2026-09-03 (BACKLOG.md):
+# the two previously shared the same 15s ceiling for waiting on
+# SPS/PPS (sps_pps_pret), conflating two unrelated things—the speed
+# of a purely local SDP/DTLS negotiation, and the time a
+# battery-powered camera takes to wake. 15s is enough for the first, not
+# always for the second (timeout observed in the wild on jardin): same
+# rationale and value as LIVE_FIRST_FRAME_SECONDS on the MSE side (serve.py), which
+# already allows that patience for the same reason.
 PREMIERE_IMAGE_MAX_SECONDS = 40
-# Silence en cours de session (apres le premier SPS/PPS, donc une fois
-# connectionState deja passe a "connected") : distinct de SESSION_MAX_SECONDS
-# (420s), qui borne la duree totale d'un direct sain, pas le temps qu'on
-# tolere sans le moindre octet. Sans ce plafond-la, _lire() (ci-dessous)
-# reste bloque sur son `await reader.read()` tant que le relais Blink ne
-# ferme pas proprement la connexion TCP - jamais garanti (WinError 10054
-# "connexion fermee par l'hote distant" vu dans les logs asyncio APRES
-# coup, pas au moment du blocage). Sans signal explicite, aiortc ne
-# remarque rien de son cote (pas d'etat "disconnected", cf. plus haut) :
-# connectionState restait a "connected" jusqu'au seul filet qui restait,
-# SESSION_MAX_SECONDS - 5 minutes bloque sur "Reconnexion..." pour
-# l'utilisateur (constate en reel, Salon, 2026-09-04). Meme ordre de
-# grandeur qu'ATTENTE_HUB_MAX_SECONDS/le timeout de _stop_stream (serve.py,
-# 20s chacun) plutot qu'une valeur inventee ici.
+# Silence during an active session (after the first SPS/PPS, so once
+# connectionState has already moved to "connected"): distinct from SESSION_MAX_SECONDS
+# (420s), which bounds total duration of a healthy live stream, not how long we
+# tolerate without a single byte. Without this ceiling, _lire() (below)
+# stays blocked on its `await reader.read()` as long as the Blink relay does not
+# cleanly close the TCP connection—never guaranteed (WinError 10054
+# "connection closed by remote host" seen in asyncio logs AFTER
+# the fact, not at the moment of the block). With no explicit signal, aiortc
+# notices nothing on its side (no "disconnected" state, cf. above):
+# connectionState stayed at "connected" until the only safety net left,
+# SESSION_MAX_SECONDS—5 minutes stuck on "Reconnecting..." for
+# the user (observed in the wild, Salon, 2026-09-04). Same order of
+# magnitude as ATTENTE_HUB_MAX_SECONDS/the _stop_stream timeout (serve.py,
+# 20s each) rather than an invented value here.
 SILENCE_FLUX_MAX_SECONDS = 20
-# Même valeur et même raison que LIVE_MAX_SECONDS (serve.py) : Blink ferme
-# lui-même une session au bout d'environ six minutes de vidéo (mesuré le
-# 2026-09-28), sept minutes le laissent aller au bout.
+# Same value and same rationale as LIVE_MAX_SECONDS (serve.py): Blink itself
+# closes a session after about six minutes of video (measured
+# 2026-09-28), seven minutes let it run to the end.
 SESSION_MAX_SECONDS = 420
 FERMETURE_MAX_SECONDS = 10
 
-# Tampon de lecture (jitter buffer) avant d'emettre la toute premiere image,
-# puis chaque image suivante cadencee sur son PTS a partir de cette meme
-# ancre. Mesure en reel sur jardin (camera a pile, 2026-09-03, cf.
-# BACKLOG.md) : un trou reseau regulier d'environ 1,0s (0,62 a 0,86s mesures
-# sur 6 cycles), tres probablement le wifi de la camera qui s'endort par
-# intervalles pour economiser la batterie - le PTS camera lui reste
-# parfaitement regulier (30 fps sans saut), ce n'est donc pas un probleme
-# d'encodage. Sans tampon, recv() renvoyait une image des sa
-# demultiplexation : le moindre trou se voyait directement comme un arret de
-# lecture (lecture saccadee, signale par l'utilisateur). Cout : un peu de la
-# latence gagnee sur MSE, qui reste tres largement devant (jardin
-# ~5,6s + 1,2s contre 15,8s en MSE). Applique uniformement (pas seulement
-# aux cameras a pile) : plus simple, et Salon a largement la marge pour
-# l'absorber sans redevenir plus lent que MSE.
+# Read buffer (jitter buffer) before emitting the very first frame,
+# then each following frame paced on its PTS from that same
+# anchor. Measured in the wild on jardin (battery camera, 2026-09-03, cf.
+# BACKLOG.md): a regular network gap of about 1.0s (0.62 to 0.86s measured
+# over 6 cycles), very likely the camera Wi-Fi sleeping in
+# intervals to save battery—the camera PTS stays
+# perfectly regular (30 fps with no jumps), so it is not an encoding
+# problem. Without buffering, recv() returned a frame as soon as
+# demux: the slightest gap showed up directly as playback
+# stutter (reported by the user). Cost: some of the
+# latency gained over MSE, which still stays well ahead (jardin
+# ~5.6s + 1.2s vs 15.8s on MSE). Applied uniformly (not only
+# to battery cameras): simpler, and Salon has plenty of headroom to
+# absorb it without becoming slower than MSE.
 TAMPON_LECTURE_SECONDS = 1.2
-# Garde-fou mémoire si le navigateur cesse de consommer les images. Ne pas
-# jeter arbitrairement des images H.264 : les suivantes peuvent en dépendre.
+# Memory guard if the browser stops consuming frames. Do not
+# arbitrarily drop H.264 frames: later ones may depend on them.
 FILE_IMAGES_MAX = 900
 FILE_IMAGES_MAX_OCTETS = 32 * 1024 * 1024
 TAMPON_ENREGISTREMENT_MAX_OCTETS = 8 * 1024 * 1024
@@ -131,43 +131,43 @@ TAMPON_ENREGISTREMENT_MAX_OCTETS = 8 * 1024 * 1024
 
 if DISPONIBLE:
 
-    # Chromium récent utilise aussi 35..63 quand 96..127 est rempli.
-    # aiortc 1.9 (et certaines versions récentes) ne les considère pas
-    # dynamiques : sa réponse conserve alors le PT local au lieu de celui
-    # de l'offre, et le navigateur jette les RTP reçus (zéro image).
-    # RFC 5761 §4 autorise cette plage, mais interdit 64..95 (RTCP).
+    # Recent Chromium also uses 35..63 when 96..127 is full.
+    # aiortc 1.9 (and some recent versions) do not treat them as
+    # dynamic: its answer then keeps the local PT instead of the
+    # offer's, and the browser drops received RTP (zero frames).
+    # RFC 5761 §4 allows this range, but forbids 64..95 (RTCP).
     _rtp.DYNAMIC_PAYLOAD_TYPES = frozenset(_rtp.DYNAMIC_PAYLOAD_TYPES) | frozenset(range(35, 64))
 
     class _PisteH264(MediaStreamTrack):
-        """Piste video sans decodage ni reencodage : lit le flux TCP local
-        de blinkpy octet par octet, demultiplexe nous-memes (pas de PyAV,
-        blink_ts_demux.py), regroupe les NAL units par unite d'acces
-        (AUD, type 9, quand la camera en emet comme les Mini d'origine ;
-        sinon premiere tranche d'une nouvelle image, cf. _traiter_nal),
-        les fait passer telles quelles en av.Packet.
+        """Video track without decode or re-encode: reads the local TCP stream
+        from blinkpy byte by byte, demuxes ourselves (no PyAV,
+        blink_ts_demux.py), groups NAL units by access unit
+        (AUD, type 9, when the camera emits them like original Minis;
+        otherwise first slice of a new frame, cf. _traiter_nal),
+        passes them through as av.Packet.
 
-        recv() peut renvoyer un av.Packet plutot qu'un av.VideoFrame
-        (documente dans la docstring de MediaStreamTrack.recv elle-meme) :
-        RTCRtpSender (_next_encoded_frame, rtcrtpsender.py) detecte alors
-        que ce n'est pas une Frame et appelle encoder.pack() au lieu de
-        encoder.encode(), qui se contente de decouper le bitstream deja
-        compresse en paquets RTP. Zero appel a un encodeur. Equivalent
-        WebRTC du -c:v copy qu'utilise deja /live-mse.
+        recv() may return an av.Packet rather than an av.VideoFrame
+        (documented in MediaStreamTrack.recv's own docstring):
+        RTCRtpSender (_next_encoded_frame, rtcrtpsender.py) then detects
+        that it is not a Frame and calls encoder.pack() instead of
+        encoder.encode(), which only splits the already
+        compressed bitstream into RTP packets. Zero encoder calls. WebRTC
+        equivalent of the -c:v copy already used by /live-mse.
 
-        Horodatage : le vrai PTS encode par la camera (extrait de l'entete
-        PES par blink_ts_demux, deja cadence a 90 kHz - meme horloge que la
-        video RTP, aucune conversion a faire), pas l'heure d'arrivee. Un
-        horodatage improvise a la reception a ete essaye puis retire
-        (2026-09-03) : le reseau livre par rafales, pas a cadence reguliere,
-        et le recepteur perd alors l'information de rythme dont il a besoin
-        pour lisser l'affichage - lecture saccadee, constate en reel. Repli
-        sur l'horloge locale seulement si jamais un PTS venait a manquer
-        (ne devrait pas arriver : la camera en donne un par image).
+        Timestamps: the real PTS encoded by the camera (extracted from the PES
+        header by blink_ts_demux, already at 90 kHz—the same clock as
+        RTP video, no conversion needed), not arrival time. An
+        improvised timestamp on receive was tried then removed
+        (2026-09-03): the network delivers in bursts, not at a steady rate,
+        and the receiver then loses the timing information it needs
+        to smooth playback—stutter observed in the wild. Fall back
+        to the local clock only if a PTS were ever missing
+        (should not happen: the camera provides one per frame).
 
-        recv() cadence aussi sa sortie sur ce PTS, retenue derriere
-        TAMPON_LECTURE_SECONDS (cf. plus haut) plutot que de renvoyer une
-        image des qu'elle est demultiplexee : necessaire pour absorber le
-        trou reseau periodique mesure sur les cameras a pile."""
+        recv() also paces its output on that PTS, held behind
+        TAMPON_LECTURE_SECONDS (cf. above) rather than returning a
+        frame as soon as it is demuxed: needed to absorb the
+        periodic network gap measured on battery cameras."""
 
         kind = "video"
 
@@ -191,21 +191,21 @@ if DISPONIBLE:
             self._file_octets = 0
             self.sps_pps = b""
             self.sps_pps_pret = asyncio.Event()
-            # Posés par negocier() après le SPS/PPS : toute fin du flux doit
-            # fermer aussi la connexion, car track.stop() ne suffit pas à
-            # faire transiter connectionState.
+            # Set by negocier() after SPS/PPS: any end of the stream must
+            # also close the connection, because track.stop() is not enough to
+            # transition connectionState.
             self.pc = None
             self._demander_fermeture = None
-            # Enregistrement disque, optionnel et pilote par bouton : voir
-            # _synchroniser_enregistrement. chemin_enregistrement est une
-            # fonction (pas un chemin deja resolu) : chaque demarrage doit
-            # recalculer un horodatage frais, pas reprendre celui du debut
-            # de session.
+            # Optional disk recording, button-driven: see
+            # _synchroniser_enregistrement. chemin_enregistrement is a
+            # callable (not an already-resolved path): each start must
+            # recompute a fresh timestamp, not reuse the one from session
+            # start.
             self._ffmpeg = ffmpeg
             self._chemin_enregistrement = chemin_enregistrement
             self._enregistrement_actif = enregistrement_actif
-            # No-op par defaut : negocier() sans camera identifiee (tests,
-            # appelants futurs) ne doit jamais planter faute de journal.
+            # No-op by default: negocier() without an identified camera (tests,
+            # future callers) must never crash for lack of journal.
             self._journal = journal or (lambda _message: None)
             self._recorder_process = None
             self._recorder_stdin = None
@@ -220,12 +220,11 @@ if DISPONIBLE:
             fin_normale = False
             try:
                 while not self._fermee:
-                    # None (pas de plafond) tant que le SPS/PPS initial n'est
-                    # pas arrive : PREMIERE_IMAGE_MAX_SECONDS (40s, negocier())
-                    # accorde deja cette patience-la, plus longue qu'ici a
-                    # dessein (reveil d'une camera sur batterie) - un plafond
-                    # plus court ici y couperait court en silence, avant meme
-                    # que ce delai plus genereux n'ait sa chance.
+                    # None (no ceiling) while the initial SPS/PPS has
+                    # not yet arrived: PREMIERE_IMAGE_MAX_SECONDS (40s, negocier())
+                    # already allows that longer patience by design (battery
+                    # camera wake)—a shorter ceiling here would cut off in
+                    # silence before that more generous delay gets a chance.
                     delai = (
                         SILENCE_FLUX_MAX_SECONDS
                         if self.sps_pps_pret.is_set() else None
@@ -236,8 +235,8 @@ if DISPONIBLE:
                         )
                     except asyncio.TimeoutError:
                         self._journal(
-                            f"flux Blink silencieux depuis "
-                            f"{SILENCE_FLUX_MAX_SECONDS}s, fermeture"
+                            f"Blink stream silent for "
+                            f"{SILENCE_FLUX_MAX_SECONDS}s, closing"
                         )
                         fin_normale = True
                         break
@@ -248,47 +247,47 @@ if DISPONIBLE:
                         self._traiter_nal(pts, nal)
             except Exception as error:
                 self._journal(
-                    f"lecture du flux interrompue, "
+                    f"stream read interrupted, "
                     f"{type(error).__name__}: {error}"
                 )
             finally:
-                # Toutes les fins du flux (EOF, reset, silence, annulation)
-                # doivent fermer aussi WebRTC ; arrêter la piste seule ne
-                # change pas connectionState et ne rend pas le module Blink.
+                # All stream ends (EOF, reset, silence, cancellation)
+                # must also close WebRTC; stopping the track alone does not
+                # change connectionState or release the Blink module.
                 try:
                     if fin_normale:
-                        # Le démultiplexeur garde toujours sa toute dernière
-                        # NAL en tampon, faute d'un prochain start code pour
-                        # en confirmer la fin (qui ne viendra plus) ; sans ce
-                        # flush, elle - et l'unité d'accès en cours qui
-                        # l'attendait, jamais close par un nouvel AUD - étaient
-                        # perdues (bug réel : dernière image d'un direct
-                        # jamais transmise, ni à l'écran ni à l'enregistrement).
+                        # The demuxer always keeps its very last
+                        # NAL buffered, lacking a next start code to
+                        # confirm its end (which will never come); without this
+                        # flush, it—and the in-progress access unit
+                        # waiting for it, never closed by a new AUD—were
+                        # lost (real bug: last frame of a live stream
+                        # never sent, neither to screen nor recording).
                         for pts, nal in self._demux.finaliser():
                             self._traiter_nal(pts, nal)
                         self._flush_unite_courante()
                     self._arreter_enregistrement()
                 finally:
-                    # vider=False (fin normale) laisse recv() consommer les
-                    # images déjà en file avant de tomber sur le sentinel de
-                    # fin - sans ça, la fin de flux effaçait tout ce qui
-                    # restait en attente, jamais transmis (bug réel : sur une
-                    # source de 60 images, seules celles déjà lues par le
-                    # navigateur au moment de l'EOF survivaient). Un arrêt
-                    # forcé (fermer(), plus bas) garde le vidage immédiat :
-                    # l'appelant ne va de toute façon plus lire recv().
+                    # vider=False (normal end) lets recv() consume
+                    # frames already queued before hitting the end
+                    # sentinel—without that, end of stream wiped everything
+                    # still pending, never sent (real bug: on a
+                    # 60-frame source, only those already read by the
+                    # browser at EOF survived). Forced stop
+                    # (fermer(), below) keeps immediate drain:
+                    # the caller will not read recv() anyway.
                     self._terminer_file(vider=not fin_normale)
-                    # Une fin normale laisse recv() transmettre les images
-                    # déjà reçues avant de fermer la connexion.
+                    # A normal end lets recv() send frames
+                    # already received before closing the connection.
                     if not fin_normale and self._demander_fermeture is not None:
                         self._demander_fermeture()
 
         def _traiter_nal(self, pts, nal: bytes) -> None:
-            # Début d'unité d'accès selon ITU-T H.264 §7.4.1.2.3, pas
-            # seulement l'AUD : les Blink Mini d'origine en émettent un par
-            # image, les Mini 2 / Mini 2K+ apparemment pas (issue #18). Sans
-            # AUD, rien n'était jamais transmis au navigateur - MSE, qui
-            # délègue ce découpage à ffmpeg, marchait sur ces mêmes caméras.
+            # Start of access unit per ITU-T H.264 §7.4.1.2.3, not
+            # only AUD: original Blink Minis emit one per
+            # frame, Mini 2 / Mini 2K+ apparently do not (issue #18). Without
+            # AUD, nothing was ever sent to the browser—MSE, which
+            # delegates this splitting to ffmpeg, worked on those same cameras.
             type_ = blink_ts_demux.type_nal(nal)
             if type_ == 9 or (
                 self._unite_a_vcl and blink_ts_demux.debut_unite_acces(nal)
@@ -300,12 +299,12 @@ if DISPONIBLE:
                 self._unite_a_vcl = True
             self._unite_courante_octets += len(nal)
             if self._unite_courante_octets > FILE_IMAGES_MAX_OCTETS:
-                raise RuntimeError("Unité d'accès H.264 sans fin détectable")
+                raise RuntimeError("H.264 access unit with no detectable end")
             self._unite_courante.append(nal)
             if type_ in (7, 8) and not self.sps_pps_pret.is_set():
                 self.sps_pps += nal
-                if type_ == 8:  # PPS suit toujours SPS : les
-                    self.sps_pps_pret.set()  # deux sont la
+                if type_ == 8:  # PPS always follows SPS: both
+                    self.sps_pps_pret.set()  # are here
 
         def _flush_unite_courante(self) -> None:
             if not self._unite_courante:
@@ -320,13 +319,13 @@ if DISPONIBLE:
         def _mettre_unite(self, pts, unite: bytes) -> None:
             if (self._file.full()
                     or self._file_octets + len(unite) > FILE_IMAGES_MAX_OCTETS):
-                raise RuntimeError("Le navigateur ne consomme plus le flux vidéo")
+                raise RuntimeError("The browser is no longer consuming the video stream")
             self._file.put_nowait((pts, unite))
             self._file_octets += len(unite)
 
         def _terminer_file(self, *, vider: bool = True) -> None:
-            # Libère les octets et réveille recv(), même si la lecture a été
-            # annulée avant son tout premier tour de boucle.
+            # Releases bytes and wakes recv(), even if reading was
+            # cancelled before its very first loop iteration.
             if vider:
                 while not self._file.empty():
                     self._file.get_nowait()
@@ -334,12 +333,12 @@ if DISPONIBLE:
             try:
                 self._file.put_nowait(None)
             except asyncio.QueueFull:
-                # Ne peut arriver que si FILE_IMAGES_MAX (900) images
-                # attendent déjà sans qu'aucune n'ait jamais été consommée -
-                # _mettre_unite() refuse déjà d'en ajouter une 901e avant
-                # d'en arriver là. best-effort : recv() finira par relire le
-                # flux vide sans sentinelle plutôt que de planter le
-                # nettoyage (fermeture du pc, libération du module Blink).
+                # Can only happen if FILE_IMAGES_MAX (900) frames
+                # are already waiting with none ever consumed—
+                # _mettre_unite() already refuses a 901st before
+                # getting here. best-effort: recv() will eventually read an
+                # empty queue without sentinel rather than crash
+                # cleanup (pc close, Blink module release).
                 pass
 
         async def recv(self):
@@ -354,12 +353,12 @@ if DISPONIBLE:
             if pts is None:
                 pts = int((time.monotonic() - self._t0) * 90000)
 
-            # Ancre posee sur la toute premiere image, puis chaque image
-            # attend son tour selon l'ecart de PTS depuis cette ancre - pas
-            # selon l'ordre d'arrivee. Un reseau qui rattrape un trou en
-            # livrant plusieurs images d'un coup ne les fait donc pas
-            # ressortir toutes en meme temps : elles restent espacees comme
-            # a la prise de vue.
+            # Anchor set on the very first frame, then each frame
+            # waits its turn by PTS delta from that anchor—not
+            # by arrival order. A network catching up after a gap by
+            # delivering several frames at once does not therefore
+            # emit them all at once: they stay spaced as
+            # at capture time.
             if self._t_ancrage is None:
                 self._t_ancrage = time.monotonic()
                 self._pts_ancrage = pts
@@ -377,15 +376,15 @@ if DISPONIBLE:
             return paquet
 
         def _synchroniser_enregistrement(self, unite: bytes) -> None:
-            """Démarre/arrête le sous-processus d'enregistrement selon l'état
-            voulu par le bouton de la page (enregistrement_actif), puis lui
-            transmet cette unité d'accès si un enregistrement est en cours.
+            """Starts/stops the recording subprocess according to the state
+            requested by the page button (enregistrement_actif), then sends it
+            this access unit if recording is active.
 
-            Consulté à chaque unité d'accès complète (plusieurs fois par
-            seconde) : un clic sur le bouton met donc au plus une fraction
-            de seconde à se voir ici, sans file d'attente ni événement
-            dédié - même mécanique que le drapeau ENREGISTREMENT_DIRECT_
-            ACTIF côté MSE (serve.py), lu à chaque bloc envoyé au navigateur."""
+            Polled on each complete access unit (several times per
+            second): a button click therefore shows up here within at most a fraction
+            of a second, with no queue or dedicated
+            event—same mechanism as the ENREGISTREMENT_DIRECT_
+            ACTIF flag on the MSE side (serve.py), read on each block sent to the browser."""
             if self._enregistrement_actif is None or self._chemin_enregistrement is None:
                 return
             desire = self._enregistrement_actif()
@@ -393,8 +392,8 @@ if DISPONIBLE:
                     and self.sps_pps_pret.is_set()
                     and (self._recorder_demarrage is None
                          or self._recorder_demarrage.done())):
-                # Un MP4 commencé par une image dépendante n'est pas
-                # décodable. Attendre le prochain IDR, sans réencoder.
+                # An MP4 started with a dependent frame is not
+                # decodable. Wait for the next IDR, without re-encoding.
                 depart = 0
                 while True:
                     depart = unite.find(b"\x00\x00\x01", depart)
@@ -412,13 +411,13 @@ if DISPONIBLE:
                 return
             elif not desire and self._recorder_demande:
                 self._arreter_enregistrement()
-                return  # deja arrete : rien a transmettre pour cette unite
+                return  # already stopped: nothing to send for this unit
             if self._recorder_demande and self._recorder_stdin is None:
-                # create_subprocess_exec rend la main à la boucle : toutes
-                # les unités reçues dans cet intervalle doivent suivre l'IDR.
+                # create_subprocess_exec yields to the loop: all
+                # units received in that interval must follow the IDR.
                 if (self._recorder_attente_octets + len(unite)
                         > TAMPON_ENREGISTREMENT_MAX_OCTETS):
-                    self._journal("enregistrement arrêté : lancement trop lent")
+                    self._journal("recording stopped: startup too slow")
                     self._arreter_enregistrement()
                     return
                 self._recorder_attente.append(unite)
@@ -427,19 +426,18 @@ if DISPONIBLE:
             self._ecrire_enregistrement(unite)
 
         async def _demarrer_enregistrement(self) -> None:
-            """Lance un ffmpeg dedie qui remuxe (sans reencoder) le flux
-            Annexe B deja demultiplexe ici vers un MP4 fragmente - meme
-            format que /live-mse (frag_keyframe+empty_moov, serve.py), pour
-            la meme raison : lisible meme coupe net (fermeture d'onglet,
-            crash), sans dependre d'une sortie propre pour ecrire un moov
-            final valide.
+            """Starts a dedicated ffmpeg that remuxes (without re-encoding) the
+            Annex B stream already demuxed here into fragmented MP4—same
+            format as /live-mse (frag_keyframe+empty_moov, serve.py), for
+            the same reason: readable even if cut abruptly (tab close,
+            crash), without relying on a clean exit to write a valid final moov.
 
-            Sous-processus separe de la RTCPeerConnection a dessein : si
-            l'enregistrement ralentit (disque lent...), il ne doit jamais
-            ralentir _lire() ni donc le direct affiche au navigateur.
+            Subprocess separate from RTCPeerConnection on purpose: if
+            recording slows (slow disk...), it must never
+            slow _lire() and thus the live view in the browser.
 
-            Les unités arrivées pendant le lancement sont conservées dans
-            _recorder_attente, depuis un IDR et jusqu'à l'adoption du stdin.
+            Units arriving during startup are kept in
+            _recorder_attente, from an IDR until stdin is adopted.
             """
             try:
                 chemin = self._chemin_enregistrement()
@@ -456,11 +454,11 @@ if DISPONIBLE:
                     creationflags=runtime.SANS_FENETRE,
                 )
             except Exception as error:
-                # Permet un nouvel essai au prochain passage a "desire" :
-                # sans ceci, un seul echec (ffmpeg introuvable...) bloquerait
-                # tout enregistrement pour le reste de la session.
+                # Allows a retry on the next pass when "desire" is true:
+                # without this, a single failure (ffmpeg missing...) would block
+                # all recording for the rest of the session.
                 self._journal(
-                    f"echec de demarrage de l'enregistrement disque, "
+                    f"failed to start disk recording, "
                     f"{type(error).__name__}: {error}"
                 )
                 self._recorder_demande = False
@@ -468,9 +466,9 @@ if DISPONIBLE:
                 self._recorder_attente_octets = 0
                 return
             if not self._recorder_demande or self.readyState == "ended":
-                # Arrete (bouton, ou piste fermee) pendant que ce sous-
-                # processus demarrait : personne n'en veut plus, ne pas
-                # l'adopter - juste le laisser sortir proprement.
+                # Stopped (button, or track closed) while this subprocess
+                # was starting: nobody wants it anymore, do not
+                # adopt it—just let it exit cleanly.
                 try:
                     processus.stdin.close()
                 except Exception:
@@ -487,22 +485,22 @@ if DISPONIBLE:
                 self._ecrire_enregistrement(unite)
 
         def _ecrire_enregistrement(self, donnees: bytes) -> None:
-            # write() ne bloque pas. Borner son tampon protège la mémoire
-            # si ffmpeg/disque cesse de consommer, sans ralentir le direct.
+            # write() does not block. Capping its buffer protects memory
+            # if ffmpeg/disk stops consuming, without slowing the live view.
             stdin = self._recorder_stdin
             if stdin is None:
                 return
             try:
                 if (stdin.transport.get_write_buffer_size() + len(donnees)
                         > TAMPON_ENREGISTREMENT_MAX_OCTETS):
-                    raise BufferError("tampon disque plein")
+                    raise BufferError("disk buffer full")
                 stdin.write(donnees)
             except Exception as error:
-                # Une seule ligne meme si _lire() rappelle _ecrire_enregistrement
-                # plusieurs fois par seconde : stdin passe a None des la
-                # premiere erreur, donc ce bloc ne s'execute plus ensuite.
+                # One line even if _lire() calls _ecrire_enregistrement
+                # several times per second: stdin becomes None on the
+                # first error, so this block does not run again.
                 self._journal(
-                    f"enregistrement disque interrompu (ecriture), "
+                    f"disk recording interrupted (write), "
                     f"{type(error).__name__}: {error}"
                 )
                 self._arreter_enregistrement()
@@ -524,8 +522,8 @@ if DISPONIBLE:
                 asyncio.ensure_future(_attendre_fin_enregistrement(processus))
 
         def fermer(self) -> None:
-            # Python 3.8 : wait_for peut absorber cancel() si read() vient
-            # de finir. Le drapeau interdit alors une nouvelle lecture.
+            # Python 3.8: wait_for may swallow cancel() if read() just
+            # finished. The flag then forbids a new read.
             self._fermee = True
             self.stop()
             self._tache.cancel()
@@ -533,25 +531,25 @@ if DISPONIBLE:
             try:
                 self._arreter_enregistrement()
             except Exception as error:
-                # Appelée depuis le nettoyage (negocier(), plus bas), avant
-                # `await on_close()` : une exception non
-                # rattrapée ici y interromprait la coroutine avant on_close,
-                # qui libère MODULE_SLOT - direct.log en a montré un cas
-                # réel (2026-09-04, "négocié" jamais suivi de "session
-                # rendue normalement", verrou resté pris indéfiniment).
-                # sous pythonw (autostart), sans console, une telle
-                # exception ne serait de toute façon jamais vue nulle part
-                # sans cette ligne : c'est exactement le cas que ce
-                # journal doit désormais rendre visible.
+                # Called from cleanup (negocier(), below), before
+                # `await on_close()`: an uncaught exception
+                # here would interrupt the coroutine before on_close,
+                # which releases MODULE_SLOT—direct.log showed a real
+                # case (2026-09-04, negotiated log never followed by normal
+                # session release, lock held indefinitely).
+                # Under pythonw (autostart), with no console, such an
+                # exception would never be seen anywhere
+                # without this line: that is exactly what this
+                # journal must now make visible.
                 self._journal(
-                    f"echec d'arret de l'enregistrement pendant la "
-                    f"fermeture, {type(error).__name__}: {error}"
+                    f"failed to stop recording during "
+                    f"shutdown, {type(error).__name__}: {error}"
                 )
 
     async def _attendre_fin_enregistrement(processus) -> None:
-        """Laisse ffmpeg vider son tampon et sortir de lui-meme une fois
-        stdin ferme (fermer(), ci-dessus) ; au-dela, meme plafond (5s) que
-        le nettoyage ffmpeg de send_live_mse (serve.py)."""
+        """Lets ffmpeg drain its buffer and exit on its own once
+        stdin is closed (fermer(), above); beyond that, same ceiling (5s) as
+        ffmpeg cleanup in send_live_mse (serve.py)."""
         try:
             await asyncio.wait_for(processus.wait(), timeout=5)
         except Exception:
@@ -562,9 +560,9 @@ if DISPONIBLE:
                 pass
 
     def _profile_level_id(sps_pps_annexb: bytes) -> Optional[str]:
-        """profile_idc/level_idc (ex. "640028") a partir d'un SPS Annexe B.
+        """profile_idc/level_idc (e.g. "640028") from an Annex B SPS.
 
-        Ces 3 octets suivent toujours l'entete NAL en tete de SPS (ITU-T
+        These 3 bytes always follow the NAL header at the start of the SPS (ITU-T
         H.264, 7.3.2.1.1)."""
         i = sps_pps_annexb.find(b"\x00\x00\x01")
         if i == -1:
@@ -577,12 +575,12 @@ if DISPONIBLE:
     _PROFILS_ENREGISTRES: set = set()
 
     def _profil_reception_h264(offer_sdp: str, profil_source: str) -> str:
-        """Préfère le profil source ; accepte le décodeur High 4:4:4
-        logiciel de Chromium pour un flux High, sans convertir les images.
+        """Prefer the source profile; accept Chromium's software High 4:4:4
+        decoder for a High stream, without converting frames.
 
-        Il s'agit des capacités du récepteur, jamais d'annoncer Baseline
-        pour une source High. Le SPS et les octets vidéo restent inchangés.
-        ITU-T H.264.1 §6.5.7 impose ce décodage du sous-ensemble High.
+        These are receiver capabilities, never announcing Baseline
+        for a High source. SPS and video bytes stay unchanged.
+        ITU-T H.264.1 §6.5.7 requires this decoding of the High subset.
         """
         source, _ = parse_h264_profile_level_id(profil_source)
         profils = set()
@@ -605,15 +603,15 @@ if DISPONIBLE:
         if (source in (H264Profile.PROFILE_HIGH, H264Profile.PROFILE_CONSTRAINED_HIGH)
                 and H264Profile.PROFILE_PREDICTIVE_HIGH_444 in profils):
             return "f400" + profil_source[4:]
-        return profil_source  # aiortc produira l'erreur de codecs incompatibles.
+        return profil_source  # aiortc will raise incompatible-codecs error.
 
     def _enregistrer_profil_h264(profil: str) -> None:
-        """Ajoute ce profile-level-id a aiortc.codecs.CODECS["video"].
+        """Adds this profile-level-id to aiortc.codecs.CODECS["video"].
 
-        get_capabilities() (aiortc/codecs/__init__.py) lit directement
-        cette liste, remplie une fois par init_codecs() avec seulement du
-        Baseline. setCodecPreferences() valide son argument contre cette
-        meme liste ("Codec is not in capabilities" sinon)."""
+        get_capabilities() (aiortc/codecs/__init__.py) reads this
+        list directly, filled once by init_codecs() with Baseline
+        only. setCodecPreferences() validates its argument against this
+        same list ("Codec is not in capabilities" otherwise)."""
         if profil in _PROFILS_ENREGISTRES:
             return
         _PROFILS_ENREGISTRES.add(profil)
@@ -640,10 +638,10 @@ if DISPONIBLE:
 
 
 async def fermer_connexion(pc) -> None:
-    """Ferme WebRTC et attend la libération du flux Blink associé.
+    """Closes WebRTC and waits for the associated Blink stream to be released.
 
-    aiortc émet ses événements de fermeture sans attendre leurs coroutines.
-    pc.close() seul ne garantit donc pas que on_close() a terminé.
+    aiortc emits its close events without awaiting their coroutines.
+    pc.close() alone therefore does not guarantee on_close() has finished.
     """
     demander = getattr(pc, "_blink_demander_fermeture", None)
     if demander is None:
@@ -660,18 +658,18 @@ async def negocier(
     enregistrement_actif: Optional[Callable[[], bool]] = None,
     journal: Optional[Callable[[str], None]] = None,
 ):
-    """Ouvre le flux Blink (sans decodage), negocie WebRTC, renvoie
+    """Opens the Blink stream (no decode), negotiates WebRTC, returns
     (pc, sdp_reponse, type_reponse).
 
-    `on_close` est attendu (await) quand la connexion se termine (etat
-    "closed" ou "failed") : c'est le seul signal de fin disponible ici, il
-    n'y a pas de requete HTTP a garder ouverte comme en MSE - fermer
-    l'onglet ferme la RTCPeerConnection cote navigateur, ce qui remonte
-    jusqu'ici via connectionstatechange. Appele au plus une fois.
+    `on_close` is awaited when the connection ends (state
+    "closed" or "failed"): this is the only end signal available here, there
+    is no HTTP request to keep open as in MSE—closing
+    the tab closes RTCPeerConnection on the browser side, which propagates
+    here via connectionstatechange. Called at most once.
 
-    `chemin_enregistrement`/`enregistrement_actif`, avec `ffmpeg` : si
-    fournis, une copie du direct est écrite à ce chemin tant que ce dernier
-    répond vrai - piloté par le bouton de la page (voir
+    `chemin_enregistrement`/`enregistrement_actif`, with `ffmpeg`: if
+    provided, a copy of the live stream is written to that path while the latter
+    returns true—driven by the page button (see
     _PisteH264._synchroniser_enregistrement)."""
     if not DISPONIBLE:
         raise RuntimeError(
@@ -687,8 +685,8 @@ async def negocier(
     tache_fermeture = None
 
     async def _fermer_ressources() -> None:
-        # Cette tâche unique est protégée de l'annulation de negocier() et
-        # des demandes HTTP. Elle possède le nettoyage jusqu'à sa fin.
+        # This single task is shielded from negocier() cancellation and
+        # HTTP request cancellation. It owns cleanup until it finishes.
         if tache_plafond is not None:
             tache_plafond.cancel()
         try:
@@ -717,8 +715,8 @@ async def negocier(
         nonlocal tache_fermeture
         if tache_fermeture is None:
             tache_fermeture = asyncio.create_task(_fermer_ressources())
-            # Les fins spontanées (EOF/état failed) n'ont pas d'appelant
-            # attendant cette tâche : consommer et journaliser leur erreur.
+            # Spontaneous ends (EOF/failed state) have no caller
+            # awaiting this task: consume and log their error.
             def _fin(tache):
                 if not tache.cancelled() and tache.exception() is not None:
                     error = tache.exception()
@@ -732,9 +730,9 @@ async def negocier(
             reader, ffmpeg=ffmpeg, chemin_enregistrement=chemin_enregistrement,
             enregistrement_actif=enregistrement_actif, journal=journal,
         )
-        # Le temps que met la camera a se reveiller et a livrer son
-        # SPS/PPS - PREMIERE_IMAGE_MAX_SECONDS (40s, cf. plus haut), pas
-        # NEGOCIATION_MAX_SECONDS (15s, pour la suite, purement locale).
+        # Time for the camera to wake and deliver its
+        # SPS/PPS—PREMIERE_IMAGE_MAX_SECONDS (40s, cf. above), not
+        # NEGOCIATION_MAX_SECONDS (15s, for what follows, purely local).
         try:
             attente_sps = asyncio.create_task(track.sps_pps_pret.wait())
             try:
@@ -746,28 +744,28 @@ async def negocier(
                 if not terminees:
                     raise asyncio.TimeoutError
                 if track._tache.done():
-                    raise RuntimeError("Le flux Blink s'est arrêté avant la première image.")
+                    raise RuntimeError("The Blink stream stopped before the first frame.")
             finally:
                 attente_sps.cancel()
                 with suppress(asyncio.CancelledError):
                     await attente_sps
         except asyncio.TimeoutError:
-            # Sans ceci, l'utilisateur ne voyait qu'un "TimeoutError: " brut
-            # (constate en reel, 2026-09-03) - RuntimeError s'affiche tel
-            # quel cote page (send_offer_webrtc, serve.py), meme traitement
-            # que les messages MSE deja clairs pour ce cas.
+            # Without this, the user only saw a bare "TimeoutError: "
+            # (observed in the wild, 2026-09-03)—RuntimeError displays as-is
+            # on the page (send_offer_webrtc, serve.py), same handling
+            # as the already-clear MSE messages for this case.
             raise RuntimeError(
-                "La camera n'a envoye aucune image. Hors de portee du "
-                "module, endormie, ou deja occupee par une autre session."
+                "The camera sent no image. Out of range of the "
+                "module, asleep, or already busy with another session."
             ) from None
 
-        # iceServers=[] : sans ceci, aiortc retombe sur son defaut
+        # iceServers=[]: without this, aiortc falls back to its default
         # (stun:stun.l.google.com:19302, RTCIceGatherer.getDefaultIceServers)
-        # et setLocalDescription() n'y renvoie qu'une fois la collecte de
-        # candidats terminee - un blocage reseau/pare-feu dessus bloque tout
-        # indefiniment (constate en reel, cf. BACKLOG.md). Navigateur et
-        # serveur sur le meme reseau local : aucun NAT a traverser, un STUN
-        # n'a de toute facon rien a apporter ici.
+        # and setLocalDescription() only returns once candidate
+        # gathering finishes—a network/firewall block there blocks everything
+        # indefinitely (observed in the wild, cf. BACKLOG.md). Browser and
+        # server on the same local network: no NAT to traverse, STUN
+        # has nothing to add here anyway.
         pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=[]))
         track.pc = pc
         track._demander_fermeture = _demander_fermeture
@@ -777,17 +775,17 @@ async def negocier(
         def _sur_changement_etat() -> None:
             journal(f"connectionstatechange -> {pc.connectionState}")
             if pc.connectionState in ("closed", "failed"):
-                # Ne pas attendre pc.close() depuis son propre événement :
-                # aiortc peut encore être en train de fermer les transports.
+                # Do not await pc.close() from its own event:
+                # aiortc may still be closing transports.
                 _demander_fermeture()
 
         sender = pc.addTrack(track)
         profil = _profile_level_id(track.sps_pps)
-        journal(f"H.264 source {profil or 'SPS illisible'}")
+        journal(f"H.264 source {profil or 'SPS unreadable'}")
         if profil:
             profil_reception = _profil_reception_h264(offer_sdp, profil)
             if profil_reception != profil:
-                journal(f"H.264 source {profil}, décodeur négocié {profil_reception}, sans réencodage")
+                journal(f"H.264 source {profil}, negotiated decoder {profil_reception}, no re-encode")
             profil = profil_reception
             _enregistrer_profil_h264(profil)
             transceiver = next(
@@ -804,12 +802,12 @@ async def negocier(
                 )
             ])
 
-        # Filet de securite : meme sans STUN, rien ne garantit qu'une
-        # negociation aboutisse toujours vite (reseau capricieux, bug
-        # aiortc/aioice non identifie...). Sans plafond ici, un blocage
-        # laisse MODULE_SLOT/le verrou disque tenus indefiniment - deja
-        # observe en reel (cf. BACKLOG.md) : aucun connectionstatechange
-        # n'arrive jamais si la negociation elle-meme ne se termine jamais.
+        # Safety net: even without STUN, nothing guarantees
+        # negotiation always finishes quickly (flaky network, unidentified
+        # aiortc/aioice bug...). Without a ceiling here, a stall
+        # keeps MODULE_SLOT/the disk lock held indefinitely—already
+        # observed in the wild (cf. BACKLOG.md): no connectionstatechange
+        # ever arrives if negotiation itself never completes.
         async def _echanger_sdp():
             await pc.setRemoteDescription(
                 RTCSessionDescription(sdp=offer_sdp, type=offer_type)
@@ -821,18 +819,18 @@ async def negocier(
             _echanger_sdp(), timeout=NEGOCIATION_MAX_SECONDS
         )
         if tache_fermeture is not None:
-            raise RuntimeError("Le flux Blink s'est arrêté pendant la négociation.")
+            raise RuntimeError("The Blink stream stopped during negotiation.")
     except (Exception, asyncio.CancelledError):
-        # CancelledError n'hérite pas d'Exception. L'expiration du budget
-        # extérieur doit aussi fermer le TCP et rendre le module.
+        # CancelledError does not inherit Exception. Outer budget
+        # expiry must also close TCP and release the module.
         with suppress(Exception):
             await asyncio.shield(_demander_fermeture())
         raise
 
-    # Deuxieme filet, une fois la negociation reussie : une session qui ne
-    # se ferme jamais proprement (onglet tue plutot que ferme, reseau qui
-    # tombe sans notification...) ne doit pas non plus tenir la ressource
-    # indefiniment - meme principe que LIVE_MAX_SECONDS cote MSE (serve.py).
+    # Second safety net, once negotiation succeeds: a session that never
+    # closes cleanly (tab killed rather than closed, network drop
+    # without notification...) must not hold the resource
+    # indefinitely either—same principle as LIVE_MAX_SECONDS on MSE (serve.py).
     async def _plafond_duree() -> None:
         await asyncio.sleep(SESSION_MAX_SECONDS)
         if pc.connectionState not in ("closed", "failed"):

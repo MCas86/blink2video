@@ -42,7 +42,7 @@ class RaisonDuRefus(unittest.TestCase):
     def test_un_fichier_valide_ne_donne_aucun_refus(self):
         raison, valide = self.raison(stdout="922\n")
         self.assertTrue(valide)
-        self.assertIn("valide", raison)
+        self.assertIn("valid", raison)
 
     def test_le_bruit_connu_du_clip_usb_reste_accepte(self):
         raison, valide = self.raison(
@@ -58,7 +58,7 @@ class RaisonDuRefus(unittest.TestCase):
     def test_aucune_sonde_disponible(self):
         with mock.patch.object(merge_daily, "_outil_validation_media", return_value=None):
             self.assertFalse(merge_daily.valid_mp4_complet(self.chemin))
-            self.assertTrue(merge_daily.raison_refus_mp4(self.chemin).startswith("outil=aucun"))
+            self.assertTrue(merge_daily.raison_refus_mp4(self.chemin).startswith("tool=neither"))
 
     def test_sonde_impossible_a_lancer(self):
         with mock.patch.object(merge_daily, "_outil_validation_media",
@@ -82,12 +82,12 @@ class RaisonDuRefus(unittest.TestCase):
     def test_aucun_paquet_video(self):
         raison, valide = self.raison(stdout="0\n")
         self.assertFalse(valide)
-        self.assertEqual(raison, "outil=ffprobe paquets-video=0")
+        self.assertEqual(raison, "outil=ffprobe video-packets=0")
 
     def test_sortie_illisible(self):
         raison, valide = self.raison(stdout="N/A\n")
         self.assertFalse(valide)
-        self.assertEqual(raison, "outil=ffprobe sortie=illisible")
+        self.assertEqual(raison, "outil=ffprobe output=unreadable")
 
     def test_ffmpeg_seul_rapporte_son_code(self):
         raison, valide = self.raison(genre="ffmpeg", code=1, stderr="Invalid NAL unit size (1 > 0)\n")
@@ -116,7 +116,7 @@ class RaisonDuRefus(unittest.TestCase):
     def test_le_diagnostic_ne_leve_jamais(self):
         with mock.patch.object(merge_daily, "_motif_refus_mp4_complet", side_effect=RuntimeError("boum")):
             self.assertEqual(merge_daily.raison_refus_mp4(self.chemin),
-                             "diagnostic impossible (RuntimeError)")
+                             "diagnosis impossible (RuntimeError)")
 
 
 class RaisonImprimeeParLeTelechargement(unittest.IsolatedAsyncioTestCase):

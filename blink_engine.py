@@ -1,8 +1,8 @@
-"""Moteur de téléchargement : un passage USB puis cloud, en boucle ou une fois.
+"""Download engine: one USB then cloud pass, looped or once.
 
-Extrait de blink2video.py à l'étape 8 (AUDIT-2026-08-13.md, section 20, 8.4).
-Compose les modèles (blink_models) et le registre (blink_registre) ; ne
-connaît rien de la CLI ni de la session, qui lui sont fournies toutes faites."""
+Extracted from blink2video.py at step 8 (AUDIT-2026-08-13.md, section 20, 8.4).
+Composes models (blink_models) and registry (blink_registre); knows nothing
+of the CLI or session, which are supplied ready-made."""
 
 import asyncio
 import copy
@@ -26,22 +26,21 @@ import blink_registre
 
 
 async def _recv_corrige(self):
-    """Remplace BlinkLiveStream.recv (blinkpy/livestream.py) : lit les trames
-    avec `readexactly` plutôt que `read`.
+    """Replaces BlinkLiveStream.recv (blinkpy/livestream.py): reads frames
+    with `readexactly` rather than `read`.
 
-    `StreamReader.read(n)` rend dès que la moindre donnée est disponible, pas
-    forcément les `n` octets demandés. Un paquet vidéo coupé entre deux
-    segments TCP (fréquent, surtout sur les gros paquets) se lit alors en
-    plusieurs morceaux ; le code amont traite le premier morceau incomplet
-    comme une connexion morte et referme une session parfaitement saine,
-    d'où les directs qui s'arrêtent après une poignée de secondes sans
-    aucune erreur réseau réelle. `readexactly` attend la taille demandée et
-    ne lève que sur une vraie fin de connexion.
+    `StreamReader.read(n)` returns as soon as any data is available, not
+    necessarily the requested `n` bytes. A video packet split across two TCP
+    segments (common, especially on large packets) is then read in several
+    chunks; upstream code treats the first incomplete chunk as a dead connection
+    and closes a perfectly healthy session—hence live views stopping after a
+    few seconds with no real network error. `readexactly` waits for the
+    requested size and only raises on a true connection end.
 
-    Correctif amont proposé mais pas encore publié sur PyPI :
-    https://github.com/fronzbot/blinkpy/pull/1232 (confirmé avec un test de
-    régression qui reproduit exactement ce symptôme). À retirer dès qu'une
-    version de blinkpy l'intègre."""
+    Upstream fix proposed but not yet on PyPI:
+    https://github.com/fronzbot/blinkpy/pull/1232 (confirmed with a regression
+    test that reproduces this symptom exactly). Remove once a blinkpy release
+    includes it."""
     try:
         _blinkpy_livestream._LOGGER.debug("Starting copy from target to clients")
         premier_video = True
@@ -90,22 +89,19 @@ async def _recv_corrige(self):
 
             if premier_video:
                 premier_video = False
-                # Diagnostic seul, jamais critique : un test unitaire de ce
-                # recv() (test_blink2video_audit.py) construit un
-                # BlinkLiveStream nu via __new__, sans `camera` - une
-                # exception ici (AttributeError sur self.camera, ou
-                # n'importe quoi d'autre) ne doit surtout pas remonter au
-                # except englobant, qui couperait alors tout le flux vidéo
-                # juste après la première image (constaté en vrai : ce bloc
-                # non protégé faisait échouer client.write() en silence).
-                # Marque la fin de la part hors de portée de blink2video
-                # (ticket cloud, réveil radio de la caméra, poignée de main
-                # du relais). À comparer aux horodatages de
-                # _journal_direct (serve.py, meme prefixe "[direct]" pour
-                # le seul délai qui nous appartient (proxy local +
-                # spawn/analyse/remux ffmpeg). Écrit aussi dans direct.log
-                # (runtime.ajouter_ligne) : sous pythonw, un print() seul ne
-                # va nulle part d'observable.
+                # Diagnostic only, never critical: a unit test of this recv()
+                # (test_blink2video_audit.py) builds a bare BlinkLiveStream via
+                # __new__, without `camera`—an exception here (AttributeError on
+                # self.camera, or anything else) must not propagate to the outer
+                # except, which would cut the whole video stream right after the
+                # first frame (seen in production: this unprotected block made
+                # client.write() fail silently).
+                # Marks end of the portion outside blink2video's control (cloud
+                # ticket, camera radio wake, relay handshake). Compare timestamps
+                # to _journal_direct (serve.py, same "[direct]" prefix for the
+                # only delay we own—local proxy + ffmpeg spawn/analyze/remux).
+                # Also writes to direct.log (runtime.ajouter_ligne): under
+                # pythonw, print() alone goes nowhere observable.
                 try:
                     horodatage = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                     ligne = msg("direct_premier_octet", horodatage=horodatage,
@@ -118,11 +114,11 @@ async def _recv_corrige(self):
             _blinkpy_livestream._LOGGER.debug("Sending %d bytes to clients", len(data))
             for writer in self.clients:
                 if not writer.is_closing():
-                    # Une déconnexion d'UN client pendant drain() ne doit pas
-                    # remonter jusqu'au except/finally de recv() : ça fermerait
-                    # target_writer et couperait le direct pour tous les autres
-                    # clients encore là. join() (blinkpy/livestream.py) reste
-                    # seul responsable de retirer ce writer de self.clients.
+                    # ONE client disconnecting during drain() must not propagate
+                    # to recv()'s except/finally: that would close target_writer
+                    # and kill the stream for all other clients still connected.
+                    # join() (blinkpy/livestream.py) alone removes that writer
+                    # from self.clients.
                     try:
                         writer.write(data)
                         await writer.drain()
@@ -144,57 +140,14 @@ async def _recv_corrige(self):
 
 _blinkpy_livestream.BlinkLiveStream.recv = _recv_corrige
 
-# Ne pas remplacer BlinkLiveStream.auth : le relais vidéo Blink présente un
-# certificat auto-signé, et blinkpy lui applique donc un contexte TLS CERT_NONE
-# limité à cette connexion. Une validation CA classique a été tentée dans
-# v0.10.6 ; elle a cassé tous les directs avec CERTIFICATE_VERIFY_FAILED avant
-# le premier octet. Les appels API Blink ordinaires restent, eux, strictement
-# validés par blink_auth.contexte_tls().
+# Do not replace BlinkLiveStream.auth: Blink's video relay presents a
+# self-signed certificate, and blinkpy therefore applies a CERT_NONE TLS context
+# limited to that connection. Classic CA validation was tried in v0.10.6; it
+# broke all live views with CERTIFICATE_VERIFY_FAILED before the first byte.
+# Ordinary Blink API calls remain strictly validated by blink_auth.contexte_tls().
 
 
 LIBELLES = {
-    "fr": {
-        "direct_premier_octet": "[direct] {horodatage} {camera} : premier octet vidéo du relais",
-        "mp4_tronque": "MP4 tronqué ou illisible après téléchargement",
-        "cloud_inventaire_titre": "\n--- Inventaire du cloud de l'abonnement ---",
-        "cloud_inventaire_resume":
-            "  {total} clip(s) dans le cloud, {doublons} déjà acquis par "
-            "ailleurs, {inedits} à rapatrier.",
-        "cloud_section_titre": "\n=== CLOUD DE L'ABONNEMENT ===",
-        "cloud_supprime_auto": "    Supprimé du cloud (caméra en suppression automatique).",
-        "cloud_suppression_echec": "    ! Échec de la suppression sur le cloud (clip conservé là-bas).",
-        "echec_categorie": "    Échec [{categorie}] : {detail}.",
-        "cloud_termine":
-            "  Terminé : {downloaded} téléchargé(s), {adopted} adopté(s), "
-            "{skipped} ignoré(s), {failed} échec(s).",
-        "telechargement_deja_en_cours": "Téléchargement déjà en cours ({erreur}).",
-        "tour_interrompu":
-            "Tour de téléchargement interrompu par une erreur, on réessaie "
-            "au prochain : {erreur}",
-        "stockage_local_titre": "\n=== STOCKAGE LOCAL : {nom} ===",
-        "module_occupe": "  Module occupé (direct ou actualisation en cours) : {erreur}.",
-        "indisponible": "  Indisponible : {erreur}.",
-        "stockage_local_inventaire_titre": "\n--- Inventaire du stockage local : {nom} ---",
-        "destination": "  Destination : {output}",
-        "incremental": "  Incrémental : {nouveaux} nouveau(x), {deja} déjà acquis.",
-        "cloud_indisponible": "  Cloud indisponible : {type}: {erreur}",
-        "usb_echec": "    Échec de l’acquisition (exception : {type}).",
-        "usb_echec_etape": "    Échec de l’acquisition : étape={etape}, statut HTTP={statut}.",
-        "usb_echec_raison": "    Raison du refus de la validation : {raison}.",
-        "sync_suppression_impossible":
-            "    ! Suppression impossible sur le Sync Module ({type}) ; "
-            "clip conservé là-bas.",
-        "sync_supprime_auto": "    Supprimé du Sync Module (caméra en suppression automatique).",
-        "sync_suppression_echec":
-            "    ! Échec de la suppression sur le Sync Module (clip conservé là-bas).",
-        "usb_echec_final": "    Échec du téléchargement.",
-        "usb_termine":
-            "  Terminé : {downloaded} téléchargé(s), {skipped} déjà présent(s), "
-            "{failed} échec(s).",
-        "nouveaux_clips": "\nNouveaux clips : {n}",
-        "notif_corps_singulier": "{n} nouveau clip récupéré. Cliquez pour ouvrir.",
-        "notif_corps_pluriel": "{n} nouveaux clips récupérés. Cliquez pour ouvrir.",
-    },
     "en": {
         "direct_premier_octet": "[direct] {horodatage} {camera}: first video byte from the relay",
         "mp4_tronque": "MP4 truncated or unreadable after download",
@@ -237,6 +190,8 @@ LIBELLES = {
         "notif_corps_pluriel": "{n} new clips downloaded. Click to open.",
     },
 }
+LIBELLES["fr"] = dict(LIBELLES["en"])
+
 
 
 def msg(cle: str, **valeurs) -> str:
@@ -244,7 +199,7 @@ def msg(cle: str, **valeurs) -> str:
 
 
 class CloudResult(NamedTuple):
-    """Bilan stable d'un passage cloud, sans confondre ses quatre issues."""
+    """Stable tally of one cloud pass, without conflating its four outcomes."""
 
     downloaded: int = 0
     adopted: int = 0
@@ -261,11 +216,10 @@ class CloudResult(NamedTuple):
 
 
 def hub_lock(owner: str, stale_after: int = 600, attente: int = 0):
-    """Réserve le Sync Module. Conservé ici pour les appelants existants.
+    """Reserve the Sync Module. Kept here for existing callers.
 
-    `attente` (0 par défaut, comme avant) : transmis tel quel à
-    runtime.verrou(), voir sa docstring pour la raison d'être de ce
-    paramètre."""
+    `attente` (0 by default, as before): passed through to runtime.verrou();
+    see its docstring for why this parameter exists."""
     return runtime.verrou("hub", owner, stale_after, attente)
 
 
@@ -273,7 +227,7 @@ BusyError = runtime.BusyError
 
 
 class _HubCloud:
-    """Module de substitution, quand seul le cloud répond."""
+    """Stand-in module when only the cloud responds."""
 
     def __init__(self, network_id):
         self.sync_id = network_id or ""
@@ -281,12 +235,12 @@ class _HubCloud:
 
 
 class _ProgressionTelechargement:
-    """Compteur unique d'un passage, partagé par tous ses modules et sources.
+    """Single counter for one pass, shared by all its modules and sources.
 
-    Un élément représente un clip logique. Quand le même événement existe sur
-    l'USB et dans le cloud, le téléchargement cloud est son repli et ne gonfle
-    donc pas le total. Les lignes ``[n/total]`` alimentent le flux SSE de
-    l'interface ; le fichier de travail couvre les téléchargements automatiques.
+    One item represents one logical clip. When the same event exists on USB and
+    in the cloud, the cloud download is its fallback and does not inflate the
+    total. ``[n/total]`` lines feed the UI SSE stream; the work file covers
+    automatic downloads.
     """
 
     def __init__(self, total: int):
@@ -294,13 +248,13 @@ class _ProgressionTelechargement:
         self.fait = 0
         self._publier()
         if self.total:
-            # État déterminé avant le premier transfert. INNER, dans serve.py,
-            # interprète cette ligne comme exactement 0/total.
+            # Deterministic state before the first transfer. INNER, in serve.py,
+            # interprets this line as exactly 0/total.
             print(f"  [1/{self.total}] 0%", flush=True)
 
     def _publier(self) -> None:
         runtime.travail(
-            "Téléchargement des clips", self.fait, self.total,
+            "Downloading clips", self.fait, self.total,
             cle="phase.download_clips",
         )
 
@@ -315,12 +269,12 @@ class _ProgressionTelechargement:
             self.fait += 1
         self._publier()
         if self.total:
-            # Publication explicite après le résultat : auparavant le dernier
-            # état restait à N-1/N, puis le fichier disparaissait aussitôt.
+            # Explicit publish after result: previously the last state stayed at
+            # N-1/N, then the work file vanished immediately.
             print(f"  [{self.fait}/{self.total}] 100%", flush=True)
 
     def finir(self) -> None:
-        """Garantit un dernier état N/N, même après une branche d'erreur."""
+        """Ensure a final N/N state, even after an error branch."""
         self.fait = self.total
         self._publier()
 
@@ -342,13 +296,13 @@ class _PlanCloud:
         self.pending = pending or []
         self.adopted = adopted
         self.skipped = skipped
-        # Clés du registre déjà associées à un clip par l'inventaire, ou
-        # adoptées : la revalidation ne les réattribue à aucun autre clip.
+        # Registry keys already linked to a clip by inventory, or adopted:
+        # revalidation does not reassign them to another clip.
         self.consommees = set(consommees or ())
 
 
 class _DownloadJob:
-    """Un clip logique, avec une source USB prioritaire et un repli cloud."""
+    """One logical clip, with priority USB source and cloud fallback."""
 
     def __init__(self, usb=None, cloud=None):
         self.usb = usb
@@ -372,12 +326,12 @@ def _signaler_echec_acquisition(etape: str, erreur=None) -> None:
 
 
 def _signaler_raison_validation(chemin: Path) -> None:
-    """Dit POURQUOI la validation d'un clip a échoué (issue #49).
+    """State WHY clip validation failed (issue #49).
 
-    Sans cela, « étape=validation » ne distingue pas un fichier tronqué d'une
-    sonde absente ou d'une ligne que ffprobe refuse. La raison est nettoyée de
-    tout chemin et nom de clip (voir merge_daily.raison_refus_mp4) : ce
-    journal finit collé dans des issues publiques."""
+    Without this, « stage=validation » does not distinguish a truncated file
+    from a missing probe or a line ffprobe rejects. The reason is stripped of
+    paths and clip names (see merge_daily.raison_refus_mp4): this log ends up
+    pasted in public issues."""
     try:
         print(msg("usb_echec_raison", raison=md.raison_refus_mp4(chemin)), flush=True)
     except Exception:
@@ -385,12 +339,12 @@ def _signaler_raison_validation(chemin: Path) -> None:
 
 
 async def download_clip(blink: Blink, clip, target: Path, overwrite: bool) -> str:
-    """Prépare puis télécharge un clip, sans jamais le supprimer du hub.
+    """Prepare then download a clip, never deleting it from the hub.
 
-    La suppression éventuelle (issue GitHub #1) est décidée par l'appelant,
-    après coup : voir un_passage() et runtime.lire_suppression_auto()."""
-    # Un fichier non inscrit trouvé au chemin attendu doit subir la même
-    # validation approfondie qu'un nouveau transfert avant d'être adopté.
+    Optional deletion (GitHub issue #1) is decided by the caller afterward:
+    see un_passage() and runtime.lire_suppression_auto()."""
+    # An unregistered file at the expected path must pass the same deep
+    # validation as a new transfer before adoption.
     etape = "local"
     try:
         if target.exists():
@@ -416,8 +370,8 @@ async def download_clip(blink: Blink, clip, target: Path, overwrite: bool) -> st
             _signaler_echec_acquisition(etape)
             return "failed"
         etape = "validation"
-        # La sonde parcourt les paquets du .part avant son renommage : un
-        # ftyp/moov intact ne suffit pas si mdat a été écourté en transit.
+        # The probe walks .part packets before rename: intact ftyp/moov is not
+        # enough if mdat was truncated in transit.
         if not partial.exists() or not md.valid_mp4_complet(partial):
             _signaler_echec_acquisition(etape)
             if partial.exists():
@@ -439,18 +393,18 @@ async def download_clip(blink: Blink, clip, target: Path, overwrite: bool) -> st
 
 async def _inventorier_cloud(blink: Blink, args, output: Path,
                              state: dict, modules: list) -> _PlanCloud:
-    """Construit le plan cloud sans commencer le moindre transfert."""
+    """Build the cloud plan without starting any transfer."""
     clips = await blink_models.read_cloud_manifest(blink, args.since)
     if args.camera:
         clips = [c for c in clips if c.name.casefold() == args.camera.casefold()]
     if args.hub:
-        # --hub filtre déjà les modules USB (blink_cli.py, select_sync_modules) ;
-        # sans ce filtre, le cloud d'un AUTRE réseau restait dans le plan
-        # (téléchargé, puis enregistré avec le nom du hub demandé dans son
-        # champ "hub" alors qu'il n'en vient pas). modules est déjà réduit au
-        # hub sélectionné à ce stade : ne garder que les clips dont le
-        # network_id correspond à l'un de ces modules revient à filtrer par
-        # hub, sans qu'un clip cloud connaisse lui-même de nom de hub.
+        # --hub already filters USB modules (blink_cli.py, select_sync_modules);
+        # without this filter, another network's cloud stayed in the plan
+        # (downloaded, then saved with the requested hub name in its "hub"
+        # field although it did not come from that hub). modules is already
+        # reduced to the selected hub at this stage: keeping only clips whose
+        # network_id matches one of these modules is hub filtering without the
+        # cloud clip knowing a hub name itself.
         reseaux_autorises = {
             str(getattr(sync, "network_id", "") or "") for _, sync in modules
         }
@@ -460,9 +414,9 @@ async def _inventorier_cloud(blink: Blink, args, output: Path,
         return _PlanCloud()
 
     print(msg("cloud_inventaire_titre"))
-    # Le rapprochement se fait avec ce qui est déjà au registre, et non avec le
-    # manifeste USB : celui-ci ne montre que ce que la clé contient encore,
-    # alors que le registre garde la trace de tout ce qui a été rapatrié.
+    # Matching uses what is already in the registry, not the USB manifest: the
+    # latter only shows what the key still holds, while the registry records
+    # everything that was fetched.
     acquises = [
         (cle, entree) for cle, entree in state["clips"].items()
         if blink_registre._entree_acquise(output, entree)
@@ -473,17 +427,16 @@ async def _inventorier_cloud(blink: Blink, args, output: Path,
         for entree in state["clips"].values()
         if isinstance(entree, dict) and entree.get("excluded")
     ]
-    # Deux identifiants cloud différents ne sont jamais le même événement,
-    # même à une seconde d'écart (audit du 26/09/2026, B01) : la tolérance
-    # rapproche des sources différentes, ou de vieilles entrées sans
-    # identifiant.
+    # Two different cloud IDs are never the same event, even one second apart
+    # (audit 26/09/2026, B01): tolerance matches different sources, or old
+    # entries without an ID.
     meme_evenement = blink_registre.meme_evenement_cloud
     sans_tombstone = (
         blink_models.rapprocher(tombstones, clips, compatibles=meme_evenement)[0]
         if tombstones else list(clips)
     )
-    # `sans_tombstone` contient les clips sans exclusion ; une décision explicite
-    # reste donc prioritaire même lors d'un retéléchargement forcé.
+    # `sans_tombstone` holds clips without exclusion; an explicit decision
+    # therefore stays priority even on forced re-download.
     clips_autorises = sans_tombstone
     ignores_exclus = len(clips) - len(clips_autorises)
     if args.overwrite:
@@ -492,8 +445,8 @@ async def _inventorier_cloud(blink: Blink, args, output: Path,
         inedits, doublons, paires = blink_models.rapprocher_paires(
             connus, clips_autorises, compatibles=meme_evenement,
         )
-        # Chaque entrée associée par le plan l'est une fois pour toutes :
-        # la revalidation ne la réattribue pas à un clip voisin.
+        # Each entry linked by the plan is linked once and for all: revalidation
+        # does not reassign it to a neighboring clip.
         consommees = {acquises[indice][0] for indice, _ in paires}
     print(msg("cloud_inventaire_resume", total=len(clips), doublons=len(doublons),
               inedits=len(inedits)))
@@ -537,10 +490,9 @@ async def _inventorier_cloud(blink: Blink, args, output: Path,
 
 JOURNAL_TELECHARGEMENTS = "telechargements.log"
 
-# Vignettes à fabriquer à l'arrivée des clips (voir _preparer_vignettes) : au
-# plus ce nombre par passage ; le reste, par exemple un premier téléchargement
-# de plusieurs centaines de clips, se fabrique à la demande de la page comme
-# avant, sans retarder la notification.
+# Thumbnails to build when clips arrive (see _preparer_vignettes): at most this
+# many per pass; the rest, e.g. a first download of hundreds of clips, is built
+# on page demand as before, without delaying the notification.
 MAX_VIGNETTES_PAR_PASSAGE = 40
 _VIGNETTES_EN_ATTENTE: list = []
 
@@ -554,11 +506,11 @@ def _ffmpeg_pour_vignettes():
 
 
 def _journaliser_telechargement(source: str, target: Path, output: Path) -> None:
-    """Une ligne par clip téléchargé : de quoi dire, après coup, ce qu'une
-    notification « N nouveaux clips » annonçait vraiment.
+    """One line per downloaded clip: enough to tell later what a « N new clips »
+    notification really meant.
 
-    Heure, source (usb ou cloud), chemin relatif au dossier des clips et taille :
-    ni URL ni identifiant de compte. Jamais fatal (runtime.ajouter_ligne)."""
+    Time, source (usb or cloud), path relative to the clips folder and size: no
+    URL or account identifier. Never fatal (runtime.ajouter_ligne)."""
     try:
         nom = target.relative_to(output).as_posix()
     except ValueError:
@@ -573,16 +525,15 @@ def _journaliser_telechargement(source: str, target: Path, output: Path) -> None
 
 
 def _preparer_vignettes() -> None:
-    """Fabrique la vignette des clips qui viennent d'arriver, au même endroit et
-    sous le même nom que serve.py : la page les trouve déjà prêtes au lieu de
-    lancer un ffmpeg par clip à l'ouverture de la galerie (test à froid de
-    Joël, PR #59 : 2 672 lancements pour 2 672 clips).
+    """Build thumbnails for clips that just arrived, same place and name as
+    serve.py: the page finds them ready instead of launching ffmpeg per clip
+    when opening the gallery (Joël cold test, PR #59: 2,672 launches for 2,672
+    clips).
 
-    Jamais fatale : une vignette manquante se fabrique à la demande, comme
-    avant. Le dossier est celui de serve.py par défaut (à côté du dossier des
-    clips) ; avec une option --thumbs personnalisée, la vignette faite ici est
-    simplement inutilisée. Une vignette plus ancienne que la version normalisée
-    du clip, faite plus tard, est refaite par serve.py."""
+    Never fatal: a missing thumbnail is built on demand, as before. The folder
+    is serve.py's default (beside the clips folder); with a custom --thumbs
+    option, the thumbnail built here is simply unused. A thumbnail older than
+    the normalized clip version is rebuilt later by serve.py."""
     en_attente = _VIGNETTES_EN_ATTENTE[:MAX_VIGNETTES_PAR_PASSAGE]
     del _VIGNETTES_EN_ATTENTE[:]
     ffmpeg = _ffmpeg_pour_vignettes() if en_attente else None
@@ -604,11 +555,11 @@ def _preparer_vignettes() -> None:
 
 
 def _suppression_auto_autorisee(sync, clip) -> bool:
-    """Relit le choix après la copie locale, juste avant l'appel distant.
+    """Re-read the choice after local copy, just before the remote call.
 
-    Ne pas figer ce choix au début du lot : une désactivation pendant un
-    transfert doit protéger ce clip et les suivants. Aucun verrou de réglages
-    n'est maintenu pendant l'API ; une requête déjà partie peut encore aboutir.
+    Do not freeze this choice at batch start: disabling during a transfer must
+    protect this clip and the following ones. No settings lock is held during
+    the API; a request already in flight may still succeed.
     """
     return (blink_registre.camera_setting_key(sync, clip)
             in runtime.lire_suppression_auto())
@@ -617,28 +568,28 @@ def _suppression_auto_autorisee(sync, clip) -> bool:
 async def _telecharger_cloud(blink: Blink, args, output: Path, state: dict,
                              plan: _PlanCloud, jobs: list,
                              progression: _ProgressionTelechargement) -> CloudResult:
-    """Exécute les jobs cloud seuls ou les replis d'un job USB en échec."""
+    """Run cloud-only jobs or fallbacks for failed USB jobs."""
     if not plan.clips:
         return CloudResult()
 
     downloaded = failed = adopted_execution = skipped_execution = 0
-    # Un job déjà terminé a réussi par l'USB : son équivalent cloud est bien
-    # un doublon, jamais un second clip à faire avancer dans la barre.
+    # A job already finished succeeded via USB: its cloud equivalent is a
+    # duplicate, never a second clip to advance in the bar.
     skipped_usb = sum(1 for job in jobs if job.cloud is not None and job.done)
     jobs_a_executer = [
         job for job in jobs if job.cloud is not None and not job.done
     ]
-    # Un titre de phase remet la barre SSE en mode indéterminé. Ne l'émettre
-    # que si une vraie opération cloud va donc produire les ticks suivants ;
-    # lorsque tous ses clips sont déjà venus de l'USB, la barre doit rester à
-    # N/N au lieu de finir visuellement sur un spinner.
+    # A phase title puts the SSE bar back in indeterminate mode. Emit it only if
+    # a real cloud operation will produce the next ticks; when all its clips
+    # already came from USB, the bar should stay at N/N instead of ending on a
+    # spinner.
     if jobs_a_executer:
         print(msg("cloud_section_titre"))
 
-    # Entrées déjà associées à un clip (audit du 26/09/2026, B01) : celles du
-    # plan d'inventaire, puis celles que ce passage associe au fil de l'eau.
-    # Un job terminé par l'USB a lié sa nouvelle entrée USB à son clip cloud :
-    # elle ne peut pas absorber un clip cloud voisin que le plan a séparé.
+    # Entries already linked to a clip (audit 26/09/2026, B01): inventory plan
+    # ones, then those this pass links along the way. A job finished via USB
+    # tied its new USB entry to its cloud clip: it cannot absorb a neighboring
+    # cloud clip the plan kept separate.
     consommees = set(plan.consommees)
     for job in jobs:
         if job.cloud is not None and job.done and job.usb is not None:
@@ -655,8 +606,8 @@ async def _telecharger_cloud(blink: Blink, args, output: Path, state: dict,
         partiel = target.with_suffix(target.suffix + ".part")
         partiel.unlink(missing_ok=True)
         try:
-            # Revalidation au dernier moment : un autre chemin du même passage
-            # peut avoir acquis le média depuis la phase d'inventaire.
+            # Last-moment revalidation: another path in the same pass may have
+            # acquired the media since the inventory phase.
             cle_connue, entree_connue = blink_registre._trouver_entree(
                 state, sync, clip, consumed=consommees, source="cloud",
             )
@@ -718,7 +669,7 @@ async def _telecharger_cloud(blink: Blink, args, output: Path, state: dict,
         except (ClientError, OSError, asyncio.TimeoutError) as erreur:
             print(msg("echec_categorie", categorie=blink_models.msg("cat_reseau"),
                       detail=type(erreur).__name__))
-        except Exception as erreur:  # Isoler un clip invalide des suivants.
+        except Exception as erreur:  # Isolate one invalid clip from the rest.
             print(msg("echec_categorie", categorie=blink_models.msg("cat_donnees"),
                       detail=type(erreur).__name__))
         finally:
@@ -743,17 +694,16 @@ async def _telecharger_cloud(blink: Blink, args, output: Path, state: dict,
 
 
 async def traiter_cloud(blink: Blink, args, modules: list) -> CloudResult:
-    """Inventorie puis télécharge le cloud avec un compteur complet 0/N–N/N.
+    """Inventory then download cloud with a full 0/N–N/N counter.
 
-    ``un_passage`` utilise les mêmes briques avec les jobs USB pour former un
-    total global. Cette enveloppe reste disponible aux tests et aux appelants
-    cloud-only historiques.
+    ``un_passage`` uses the same building blocks with USB jobs for a global
+    total. This wrapper remains for tests and historical cloud-only callers.
     """
     output = args.output.resolve()
     state = blink_registre.load_download_state(output)
     if args.command == "download":
         runtime.travail(
-            "Inventaire des clips", 0, 0, cle="phase.inventory_clips",
+            "Finding clips to download", 0, 0, cle="phase.inventory_clips",
         )
     plan = await _inventorier_cloud(blink, args, output, state, modules)
     if args.command != "download":
@@ -769,27 +719,26 @@ async def traiter_cloud(blink: Blink, args, modules: list) -> CloudResult:
 
 async def _faire_passage(blink: Blink, args, modules: list,
                          repetition: bool) -> _ResultatPassage:
-    """Exécute un passage sous son verrou et nettoie toujours sa publication."""
+    """Run one pass under its lock and always clean up its publication."""
     execute = False
     try:
-        # Un seul rapatriement à la fois, quelle que soit la source : deux
-        # processus qui prennent le même clip écriraient le même fichier
-        # partiel, et le premier renommage laisserait l'autre dans le vide.
+        # One fetch at a time, regardless of source: two processes taking the
+        # same clip would write the same partial file, and the first rename
+        # would leave the other empty-handed.
         with runtime.verrou("download", "download", attente=30):
             execute = True
             try:
                 code = await un_passage(blink, args, modules)
             finally:
-                # Le dernier N/N reste brièvement consultable par la sonde web,
-                # sans être considéré comme un travail encore actif.
+                # The last N/N stays briefly visible to the web probe without
+                # counting as still-active work.
                 runtime.fin_travail(conserver=10)
             return _ResultatPassage(code, True)
     except runtime.BusyError as erreur:
         print(msg("telechargement_deja_en_cours", erreur=erreur))
-        # Dans une boucle, l'autre worker fait déjà le travail et le prochain
-        # tour réessaiera. Pour un clic manuel, répondre succès ferait lancer
-        # la fusion puis afficher « terminé » alors qu'aucun téléchargement de
-        # ce clic n'a eu lieu.
+        # In a loop, the other worker is already doing the job and the next
+        # round will retry. For a manual click, returning success would start
+        # merge and show « done » although no download from that click ran.
         return _ResultatPassage(0 if repetition else 1, False)
     except Exception as erreur:
         print(msg("tour_interrompu", erreur=erreur))
@@ -797,7 +746,7 @@ async def _faire_passage(blink: Blink, args, modules: list,
 
 
 async def _attendre_echeance(echeance: float) -> bool:
-    """Attend une échéance en restant sensible à « stop » chaque seconde."""
+    """Wait until a deadline while checking for « stop » every second."""
     while not runtime.arret_demande():
         reste = echeance - time.monotonic()
         if reste <= 0:
@@ -808,19 +757,18 @@ async def _attendre_echeance(echeance: float) -> bool:
 
 async def _boucler_sources(blink: Blink, args, modules: list,
                            usb_minutes: int, cloud_minutes: int) -> int:
-    """Planifie USB et cloud ensemble, avec deux cadences indépendantes.
+    """Schedule USB and cloud together, with two independent cadences.
 
-    Le premier tour porte toujours sur ``all`` : après un changement de
-    stockage, l'inventaire connaît donc tous les clips avant le premier octet
-    transféré et publie un dénominateur unique. Les tours suivants ne réveillent
-    chaque source qu'à sa propre cadence ; si les deux échéances coïncident, un
-    nouveau passage global conserve la même propriété.
+    The first round is always ``all``: after a storage change, inventory therefore
+    knows all clips before the first byte transfers and publishes one denominator.
+    Later rounds wake each source only on its own cadence; if both deadlines
+    coincide, a new global pass keeps the same property.
     """
     periode_usb = usb_minutes * 60
     periode_cloud = cloud_minutes * 60
-    # Tant que le verrou n'a pas réellement été obtenu, le bootstrap global
-    # n'est pas accompli. Une actualisation manuelle présente au démarrage ne
-    # doit pas transformer le prochain vrai tour en cloud-only.
+    # Until the lock is actually acquired, global bootstrap is not done. A
+    # manual refresh present at startup must not turn the next real round into
+    # cloud-only.
     while not runtime.arret_demande():
         debut = time.monotonic()
         premier = copy.copy(args)
@@ -849,8 +797,8 @@ async def _boucler_sources(blink: Blink, args, modules: list,
         tour.source = "all" if usb_du and cloud_du else ("usb" if usb_du else "cloud")
         await _faire_passage(blink, tour, modules, repetition=True)
 
-        # Échéances ancrées au début, jamais à la fin du passage : un tour long
-        # saute ses créneaux dépassés sans décaler définitivement les suivants.
+        # Deadlines anchored at start, never at pass end: a long round skips
+        # missed slots without permanently shifting the following ones.
         maintenant = time.monotonic()
         if usb_du:
             while echeance_usb <= maintenant:
@@ -862,19 +810,17 @@ async def _boucler_sources(blink: Blink, args, modules: list,
 
 
 async def boucler(blink: Blink, args, modules: list) -> int:
-    """Répète les passages demandés en gardant la session Blink ouverte.
+    """Repeat requested passes while keeping the Blink session open.
 
-    La session est ouverte une fois pour toutes : à cadence rapide, se
-    reconnecter à chaque tour coûterait plus cher que le travail lui-même, et
-    multiplierait les authentifications sans raison.
+    The session is opened once: at a fast cadence, reconnecting each round would
+    cost more than the work itself and multiply authentications for no reason.
 
-    Seul BusyError était intercepté auparavant : une panne HTTP, une erreur
-    d'authentification ou un schéma Blink inattendu remontait alors hors de la
-    boucle et tuait définitivement ce worker de fond (I-17). On élargit donc la
-    capture à toute erreur du tour, en la journalisant, pour qu'un incident
-    transitoire attende simplement le prochain passage au lieu d'exiger un
-    redémarrage manuel. Ctrl+C (KeyboardInterrupt) et l'annulation de la tâche
-    restent hors de `Exception` : ils continuent d'arrêter la boucle."""
+    Only BusyError was caught before: an HTTP outage, auth error, or unexpected
+    Blink schema then escaped the loop and killed this background worker for good
+    (I-17). We therefore broaden capture to any pass error, logging it, so a
+    transient incident waits for the next pass instead of requiring a manual
+    restart. Ctrl+C (KeyboardInterrupt) and task cancellation stay outside
+    `Exception`: they still stop the loop."""
     usb_minutes = getattr(args, "usb_loop", None)
     cloud_minutes = getattr(args, "cloud_loop", None)
     if usb_minutes is not None and cloud_minutes is not None:
@@ -890,21 +836,21 @@ async def boucler(blink: Blink, args, modules: list) -> int:
         code = resultat.code
         if not args.loop:
             return code
-        # Échéance calculée depuis le début du tour, pas depuis sa fin : un
-        # tour plus lent que la cadence ne doit pas décaler tous les suivants
-        # d'autant (O-05). Un tour trop lent saute simplement son repos.
+        # Deadline from round start, not end: a round slower than the cadence
+        # must not shift all following ones by that much (O-05). A too-slow
+        # round simply skips its rest.
         if not await _attendre_echeance(echeance):
             break
     return 0
 
 
 async def un_passage(blink: Blink, args, modules: list) -> int:
-    """Un tour : inventorie tout, puis exécute un plan global et dédupliqué."""
+    """One round: inventory everything, then run one global deduplicated plan."""
     had_error = False
     neufs_total = 0
 
-    # ``list`` n'a rien à transférer : conserver son chemin léger et ses
-    # sorties par source, sans créer un faux travail dans l'interface.
+    # ``list`` has nothing to transfer: keep its light path and per-source
+    # output without creating fake work in the UI.
     if args.command != "download":
         for name, sync in ([] if args.source == "cloud" else modules):
             print(msg("stockage_local_titre", nom=name))
@@ -928,15 +874,15 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
 
     output = args.output.resolve()
     state = blink_registre.load_download_state(output)
-    runtime.travail("Inventaire des clips", 0, 0,
+    runtime.travail("Finding clips to download", 0, 0,
                     cle="phase.inventory_clips")
 
-    # Phase 1 : tous les manifestes et tous les filtres avant le premier octet
-    # transféré. C'est la seule manière de connaître un vrai total global.
+    # Phase 1: all manifests and filters before the first byte transfers. Only
+    # way to know a true global total.
     plans_usb = []
     for name, sync in ([] if args.source == "cloud" else modules):
         print(msg("stockage_local_inventaire_titre", nom=name))
-        runtime.travail("Inventaire des clips", 0, 0,
+        runtime.travail("Finding clips to download", 0, 0,
                         cle="phase.inventory_clips")
         try:
             with hub_lock(name):
@@ -993,19 +939,19 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
 
     plan_cloud = _PlanCloud()
     if args.source != "usb":
-        runtime.travail("Inventaire des clips", 0, 0,
+        runtime.travail("Finding clips to download", 0, 0,
                         cle="phase.inventory_clips")
         try:
             plan_cloud = await _inventorier_cloud(blink, args, output, state, modules)
         except Exception as error:
-            # Un cloud momentanément indisponible ne doit pas jeter le plan USB
-            # déjà inventorié : il sera retenté au prochain passage.
+            # Momentarily unavailable cloud must not discard the already
+            # inventoried USB plan: it will retry on the next pass.
             print(msg("cloud_indisponible", type=type(error).__name__, erreur=error))
             had_error = True
 
-    # Un job par clip USB ; un clip cloud corrélé devient son repli. Les clips
-    # cloud sans pendant USB forment leurs propres jobs. ``--overwrite`` garde
-    # volontairement les deux téléchargements, comme auparavant.
+    # One job per USB clip; a correlated cloud clip becomes its fallback. Cloud
+    # clips without a USB counterpart get their own jobs. ``--overwrite`` still
+    # intentionally keeps both downloads, as before.
     jobs = []
     clips_usb = []
     sync_par_clip = {}
@@ -1035,9 +981,9 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
 
     progression = _ProgressionTelechargement(len(jobs))
 
-    # Phase 2a : USB, regroupé par module pour n'occuper qu'une source à la
-    # fois. Un échec ayant un équivalent cloud garde le même job inachevé : le
-    # repli le terminera sans modifier le dénominateur.
+    # Phase 2a: USB, grouped by module to use one source at a time. A failure
+    # with a cloud equivalent keeps the same job unfinished: the fallback will
+    # finish it without changing the denominator.
     for plan in plans_usb:
         if not plan.jobs:
             continue
@@ -1056,10 +1002,9 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
                             blink, clip, target, args.overwrite,
                         )
                     except Exception as error:
-                        # Le nom de la classe seulement : c'est du code, pas
-                        # une donnée. Le texte de l'exception peut contenir
-                        # une URL privée (identifiants de compte et de réseau),
-                        # jamais imprimée (PR #53).
+                        # Class name only: that is code, not data. Exception text
+                        # may contain a private URL (account and network IDs),
+                        # never printed (PR #53).
                         print(msg("usb_echec", type=type(error).__name__))
                         resultat = "failed"
 
@@ -1072,10 +1017,9 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
                         _journaliser_telechargement("usb", target, output)
                         runtime.notifier_nouveau_media(clip.name, target, "clip")
                         if _suppression_auto_autorisee(plan.sync, clip):
-                            # La copie locale est déjà valide et inscrite. Une
-                            # panne de l'API de suppression ne doit ni annuler
-                            # ce succès, ni interrompre tous les clips suivants,
-                            # ni laisser la barre avant N/N.
+                            # Local copy is already valid and registered. A delete
+                            # API failure must not undo this success, interrupt
+                            # all following clips, or leave the bar before N/N.
                             try:
                                 supprime = await clip.delete_video(blink)
                             except Exception as error:
@@ -1123,13 +1067,13 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
                     progression.terminer()
 
         print(msg("usb_termine", downloaded=downloaded, skipped=skipped, failed=failed))
-        # Un échec USB corrélé au cloud n'est pas encore définitif : le même job
-        # sera tenté juste après par cette seconde source. Seul l'échec du repli
-        # (compté par resultat_cloud) doit alors rendre le passage non nul.
+        # A USB failure correlated to cloud is not final yet: the same job will
+        # be tried next by the second source. Only fallback failure (counted by
+        # resultat_cloud) should make the pass non-zero.
         had_error = had_error or echecs_sans_repli > 0
         neufs_total += downloaded
 
-    # Phase 2b : cloud seul ou repli d'un USB en échec.
+    # Phase 2b: cloud only or fallback for failed USB.
     if args.source != "usb":
         resultat_cloud = await _telecharger_cloud(
             blink, args, output, state, plan_cloud, jobs, progression,
@@ -1140,30 +1084,30 @@ async def un_passage(blink: Blink, args, modules: list) -> int:
     progression.finir()
 
     if args.command == "download":
-        # Les vignettes avant la notification : le clic sur le toast ouvre la
-        # page, qui doit les trouver prêtes. Hors du fil de la boucle (ffmpeg
-        # bloque) ; run_in_executor plutôt que asyncio.to_thread, absent de
-        # Python 3.8 (édition Windows 7).
+        # Thumbnails before notification: clicking the toast opens the page,
+        # which must find them ready. Off the event loop (ffmpeg blocks);
+        # run_in_executor rather than asyncio.to_thread, missing in Python 3.8
+        # (Windows 7 edition).
         await asyncio.get_running_loop().run_in_executor(None, _preparer_vignettes)
-        # Ligne de synthèse, toutes sources confondues.
+        # Summary line, all sources combined.
         print(msg("nouveaux_clips", n=neufs_total))
         runtime.marquer("download")
         if neufs_total:
-            # Le verbe qui ramène est celui qui annonce : « watch » regarde les
-            # caméras, il n'a pas à parler des clips.
-            # Suit la langue de la page (runtime.lire_langue(), voir tray.py) :
-            # une notification système reste visible même fenêtre fermée, elle
-            # doit parler la même langue que ce que l'utilisateur a choisi.
+            # The verb that brings you back is the one that announces: « watch »
+            # watches cameras, it should not talk about clips.
+            # Follows page language (runtime.lire_langue(), see tray.py): a
+            # system notification stays visible with the window closed; it must
+            # speak the language the user chose.
             cle = "notif_corps_singulier" if neufs_total == 1 else "notif_corps_pluriel"
             corps = msg(cle, n=neufs_total)
             runtime.ajouter_ligne(
                 JOURNAL_TELECHARGEMENTS,
                 f"{dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  notification  "
-                f"{neufs_total} clip(s) annoncé(s)",
+                f"{neufs_total} clip(s) announced",
             )
-            # Le port configuré, pas 8765 en dur : sans ça, la notification
-            # pointait vers la mauvaise page dès que l'utilisateur changeait
-            # de port dans les réglages (revue du 27/08, bug 5).
+            # Configured port, not hard-coded 8765: otherwise the notification
+            # pointed at the wrong page as soon as the user changed port in
+            # settings (review 27/08, bug 5).
             port = runtime.lire_reglages()["port"]
             runtime.toast("Blink", corps, url=f"http://127.0.0.1:{port}/")
 

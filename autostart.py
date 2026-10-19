@@ -1,19 +1,19 @@
-"""Démarrage de la surveillance avec la session, par le mécanisme du système.
+"""Start monitoring with the login session, via the system's mechanism.
 
-Chaque plateforme a le sien, et aucun n'exige de droits d'administrateur tant
-qu'on s'en tient à la session courante :
+Each platform has its own, and none requires administrator rights as long
+as we stick to the current session:
 
-  Windows : un raccourci dans le dossier de démarrage. Le planificateur de
-            tâches ferait aussi l'affaire, mais son dossier racine demande une
-            élévation, alors que ce raccourci n'en demande jamais.
-  macOS   : un agent de lancement, chargé à l'ouverture de session.
-  Linux   : un service utilisateur systemd.
+  Windows : a shortcut in the Startup folder. The Task Scheduler
+            would also work, but its root folder needs elevation,
+            whereas this shortcut never does.
+  macOS   : a launch agent, loaded at login.
+  Linux   : a systemd user service.
 
-Chacun se défait en supprimant un fichier, ce qui est délibéré : un mécanisme
-de démarrage qu'on ne sait plus retirer est une nuisance.
+Each is undone by deleting a file, which is deliberate: a startup
+mechanism you can no longer remove is a nuisance.
 
-L'installation modifie la configuration de votre session : elle n'a lieu que
-sur demande explicite, et `--dry-run` montre ce qui serait fait sans le faire.
+Installation changes your session configuration: it only happens on
+explicit request, and `--dry-run` shows what would be done without doing it.
 """
 
 import argparse
@@ -28,58 +28,6 @@ from nico579_commons import relance as relance_commune
 import runtime
 
 LIBELLES = {
-    "fr": {
-        "aide_desc": "Démarrage de la surveillance avec la session.",
-        "aide_exemples":
-            "Exemples : blink2video autostart on | blink2video autostart status | "
-            "blink2video autostart off --dry-run",
-        "aide_etat": "on installe, off retire, status renseigne (défaut)",
-        "aide_metavar_verbe": "VERBE",
-        "aide_quoi":
-            "ce qu'il faut lancer à l'ouverture de session, avec ses options. "
-            "Défaut : « watch --loop », qui surveille, alerte, rapatrie, "
-            "assemble et sert l'interface",
-        "aide_dry_run": "montrer ce qui serait fait sans rien modifier",
-        "verbe_inconnu": "verbe inconnu : {verbe}",
-        "note_open_browser":
-            "Note : « --open-browser » ouvrira un navigateur à chaque "
-            "ouverture de session.",
-        "en_cours_non": "En cours  : non",
-        "en_cours_ligne": "En cours  : {commande} (PID {pid}, depuis {depuis})",
-        "plateforme_non_prise_en_charge":
-            "Démarrage automatique non pris en charge sur {plateforme}.",
-        "creerait": "Créerait {cible}",
-        "cible_label": "  cible : {executable}",
-        "args_label": "  args  : {arguments}",
-        "raccourci_non_cree": "raccourci non créé",
-        "echec_raccourci": "Échec : {detail}",
-        "ecrirait": "Écrirait {cible} :\n{contenu}",
-        "label_raccourcis_demarrage": "Raccourcis de démarrage",
-        "label_agents_lancement": "Agents de lancement",
-        "label_services_utilisateur": "Services utilisateur",
-        "intitule_aucune": "{intitule} : aucune",
-        "intitule_compte": "{intitule} : {n}",
-        "lance_commande": "    lance : {commande}",
-        "supprimerait": "Supprimerait {cible}",
-        "demarrage_retire": "Démarrage automatique retiré : {cible}",
-        "demarrage_deja_absent": "Démarrage automatique déjà absent : {cible}",
-        "demarrage_installe": "Démarrage automatique installé : {cible}",
-        "installation_refusee":
-            "Échec du démarrage automatique : {commande} a répondu {code}. "
-            "Fichier laissé en place pour examen : {cible}",
-        "plist_invalide":
-            "Échec du démarrage automatique : l'agent généré n'est pas un plist "
-            "valide ({erreur}). Rien n'a été écrit.",
-        "commande_label": "  commande : {commande}",
-        "prendra_effet": "  Il prendra effet à la prochaine ouverture de session.",
-        "session_systemd_absente":
-            "  Aucune session systemd pour {utilisateur} : le service démarrera à "
-            "sa prochaine connexion. Pour un démarrage dès l'allumage, sans "
-            "connexion : sudo loginctl enable-linger {utilisateur}",
-        "agent_migre":
-            "Agent de démarrage mis à jour : {cible} (effet à la prochaine "
-            "ouverture de session)",
-    },
     "en": {
         "aide_desc": "Start monitoring along with the login session.",
         "aide_exemples":
@@ -130,6 +78,8 @@ LIBELLES = {
         "agent_migre": "Login agent updated: {cible} (takes effect at the next login)",
     },
 }
+LIBELLES["fr"] = dict(LIBELLES["en"])
+
 
 
 def _(cle: str, **valeurs) -> str:
@@ -140,41 +90,41 @@ NOM = "blink2video"
 
 
 def etiquette(quoi: tuple) -> str:
-    """Nom de l'entrée, dérivé du verbe : une par verbe automatisé.
+    """Entry name, derived from the verb: one per automated verb.
 
-    Plusieurs entrées cohabitent, c'est le besoin courant : la boucle qui
-    surveille et rapatrie, et l'interface qui reste à disposition. Les nommer
-    d'après leur verbe permet d'en retirer une sans toucher aux autres."""
+    Several entries coexist, that is the common need: the loop that
+    monitors and fetches, and the interface that stays available. Naming them
+    after their verb lets you remove one without touching the others."""
     return f"{NOM}-{(quoi or DEFAUT)[0]}"
 
 
-# Ce qu'on automatise par défaut : l'interface, et la boucle complète chaque
-# minute. « all » porte lui-même les deux rythmes : le cloud à chaque tour, pour
-# un dixième de seconde, et le manifeste USB une fois sur dix, parce qu'il
-# réveille le module de synchronisation. Une seule boucle, donc un seul état, un
-# seul assemblage et une seule notification. Rien n'oblige à automatiser
-# cela : « autostart on watch --loop » n'alerterait que, sans rien rapatrier.
-# L'interface n'ouvre pas de navigateur : elle attend qu'on vienne, ou qu'on
-# clique sur une notification.
+# What we automate by default: the interface, and the full loop every
+# minute. « all » itself carries both paces: cloud on every turn, for
+# a tenth of a second, and the USB manifest once in ten, because it
+# wakes the sync module. One loop, therefore one state, one
+# assembly and one notification. Nothing requires automating
+# that: « autostart on watch --loop » would only alert, without fetching anything.
+# The interface does not open a browser: it waits for someone to come, or for a
+# click on a notification.
 DEFAUT = ("start",)
 
 
 def commande(verbe_et_options: tuple = DEFAUT) -> list:
-    """Ligne à faire exécuter au démarrage, pour le verbe demandé.
+    """Line to have executed at startup, for the requested verb.
 
-    runtime.self_command sait déjà se relancer correctement selon qu'on tourne
-    depuis les sources ou depuis un bundle : c'est exactement ce qu'il faut
-    inscrire dans le mécanisme de démarrage.
+    runtime.self_command already knows how to relaunch correctly whether we run
+    from sources or from a bundle: that is exactly what must be
+    written into the startup mechanism.
 
-    Une substitution s'impose toutefois sous Windows quand on tourne depuis les
-    sources : python.exe ouvrirait une console noire à chaque ouverture de
-    session. pythonw.exe exécute la même chose sans fenêtre, ce que ces
-    programmes peuvent se permettre puisqu'ils rendent compte dans watch.log."""
+    A substitution is still required under Windows when running from
+    sources: python.exe would open a black console at every login.
+    pythonw.exe runs the same thing without a window, which these
+    programs can afford since they report in watch.log."""
     arguments = list(verbe_et_options or DEFAUT)
     if arguments[0] not in runtime.VERBES:
         raise ValueError(_("verbe_inconnu", verbe=arguments[0]))
-    # Par le point d'entrée, et non par le programme d'un verbe : lui seul sait
-    # lancer plusieurs verbes côte à côte.
+    # Via the entry point, not a verb's program: only it knows how to
+    # launch several verbs side by side.
     ligne = runtime.commande_composee(arguments)
     if sys.platform == "win32" and not runtime.frozen():
         sans_fenetre = Path(ligne[0]).with_name("pythonw.exe")
@@ -184,25 +134,25 @@ def commande(verbe_et_options: tuple = DEFAUT) -> list:
 
 
 def appliquer_tous(etat: str, simulation: bool, quoi: tuple) -> int:
-    """Ordonnance la commande citée, telle quelle.
+    """Schedules the cited command, as-is.
 
-    « autostart » est un préfixe : il ne fait qu'inscrire au démarrage ce qu'on
-    aurait tapé sans lui. Le point d'entrée sachant déjà lancer plusieurs
-    verbes, « autostart on serve watch --loop merge --loop 60 » pose une seule
-    entrée, qui lancera les trois. L'entrée est nommée d'après le premier
-    verbe, ce qui permet d'en tenir plusieurs et d'en retirer une seule."""
+    « autostart » is a prefix: it only registers at startup what one
+    would have typed without it. Since the entry point already knows how to launch several
+    verbs, « autostart on serve watch --loop merge --loop 60 » places a single
+    entry, which will launch all three. The entry is named after the first
+    verb, which lets you keep several and remove just one."""
     if quoi and "--open-browser" in quoi:
         print(_("note_open_browser"))
     if quoi:
-        # Vérifie la syntaxe avant d'écrire quoi que ce soit : une entrée de
-        # démarrage fautive ne se découvre qu'à l'ouverture de session
-        # suivante, quand plus personne ne regarde.
+        # Check syntax before writing anything: a faulty startup
+        # entry is only discovered at the next login,
+        # when nobody is watching anymore.
         runtime.decouper_verbes(list(quoi))
     code = appliquer(etat, simulation, quoi or DEFAUT)
     if etat == "status":
-        # Ce qui est installé et ce qui tourne sont deux choses : on peut avoir
-        # une entrée posée sans instance vivante, ou l'inverse après un
-        # lancement à la main.
+        # What is installed and what is running are two things: you can have
+        # an entry placed without a living instance, or the reverse after a
+        # manual launch.
         instances = runtime.lire_instances()
         if not instances:
             print(_("en_cours_non"))
@@ -214,7 +164,7 @@ def appliquer_tous(etat: str, simulation: bool, quoi: tuple) -> int:
 
 
 def appliquer(etat: str, simulation: bool = False, quoi: tuple = DEFAUT) -> int:
-    """`on` installe, `off` retire, `status` renseigne."""
+    """`on` installs, `off` removes, `status` reports."""
     if sys.platform == "win32":
         return _windows(etat, simulation, quoi)
     if sys.platform == "darwin":
@@ -226,13 +176,13 @@ def appliquer(etat: str, simulation: bool = False, quoi: tuple = DEFAUT) -> int:
 
 
 def est_installe(quoi: tuple = DEFAUT) -> bool:
-    """Vrai si le démarrage automatique est actuellement installé.
+    """True if autostart is currently installed.
 
-    `appliquer("status", ...)` imprime et rend un code de sortie qui ne dit
-    jamais si c'est actif (0 dans tous les cas, y compris « aucun ») : bon
-    pour une CLI, inutilisable tel quel par un appelant programmatique comme
-    l'interface web. Même condition que chaque branche `status`, sans rien
-    imprimer ni modifier."""
+    `appliquer("status", ...)` prints and returns an exit code that never
+    says whether it is active (0 in all cases, including « none »): fine
+    for a CLI, unusable as-is by a programmatic caller like
+    the web interface. Same condition as each `status` branch, without
+    printing or modifying anything."""
     if sys.platform == "win32":
         return any(_dossier_demarrage().glob(f"{NOM}*.lnk"))
     if sys.platform == "darwin":
@@ -248,7 +198,7 @@ def _dossier_demarrage() -> Path:
     import ctypes
 
     tampon = ctypes.create_unicode_buffer(260)
-    # CSIDL_STARTUP = 7 : dossier de démarrage de l'utilisateur courant.
+    # CSIDL_STARTUP = 7: current user's Startup folder.
     ctypes.windll.shell32.SHGetFolderPathW(None, 7, None, 0, tampon)
     return Path(tampon.value)
 
@@ -258,10 +208,10 @@ def _raccourci(quoi: tuple = ()) -> Path:
 
 
 def _entree(quoi: tuple = DEFAUT) -> demarrage.Entree:
-    """L'entrée de démarrage de ce verbe, pour nico579_commons.demarrage (le
-    même code que lidar2map et watch2notif pose les fichiers) : ne reste ici
-    que ce qui est propre à blink2video, le nom d'entrée, la commande et le
-    dossier de travail."""
+    """This verb's startup entry, for nico579_commons.demarrage (the
+    same code lidar2map and watch2notif use to place files): only what is
+    specific to blink2video remains here — the entry name, the command and the
+    working directory."""
     return demarrage.Entree(
         etiquette(quoi), tuple(commande(quoi)), runtime.app_dir(),
         "Surveillance blink2video", label_macos=_label_macos(quoi),
@@ -269,8 +219,8 @@ def _entree(quoi: tuple = DEFAUT) -> demarrage.Entree:
 
 
 def _entree_nommee(quoi: tuple = DEFAUT) -> demarrage.Entree:
-    """Pour retirer ou lister : le nom suffit, la commande n'est pas évaluée (un
-    verbe inconnu ne doit pas empêcher de retirer une entrée)."""
+    """For remove or list: the name is enough, the command is not evaluated (an
+    unknown verb must not prevent removing an entry)."""
     return demarrage.Entree(etiquette(quoi), (), runtime.app_dir(),
                             label_macos=_label_macos(quoi))
 
@@ -297,9 +247,9 @@ def _windows(etat: str, simulation: bool, quoi: tuple = DEFAUT) -> int:
         print(_("args_label", arguments=arguments))
         return 0
 
-    # Aucune fenêtre ne s'ouvre : l'exécutable est construit sans console
-    # (console=False dans blink2video.spec), comme pythonw.exe qui le remplace
-    # depuis les sources. WindowStyle 7 (réduite) ne sert plus que de garde.
+    # No window opens: the executable is built without a console
+    # (console=False in blink2video.spec), like pythonw.exe which replaces it
+    # from sources. WindowStyle 7 (minimized) is only a safeguard now.
     try:
         demarrage.activer(entree, plateforme="win32", lancer=runtime.lancer)
     except demarrage.ErreurDemarrage as erreur:
@@ -309,17 +259,17 @@ def _windows(etat: str, simulation: bool, quoi: tuple = DEFAUT) -> int:
 
 
 def _chaine_ps(valeur: str) -> str:
-    """Chaîne littérale PowerShell : seule l'apostrophe se double."""
+    """PowerShell literal string: only the apostrophe is doubled."""
     return "'" + valeur.replace("'", "''") + "'"
 
 
 # --------------------------------------------------------------------- macOS
 
-# Nom que portaient tous les agents jusqu'à la 0.14 : le même pour chaque
-# entrée, alors que launchd identifie un agent par ce nom. Deux entrées ne
-# pouvaient donc pas cohabiter, et retirer l'une pouvait décharger l'autre.
-# Chaque agent porte désormais le nom de son fichier, selon la convention
-# d'Apple, comme ceux de lidar2map et de watch2notif.
+# Name all agents carried until 0.14: the same for each
+# entry, whereas launchd identifies an agent by that name. Two entries
+# therefore could not coexist, and removing one could unload the other.
+# Each agent now carries its file name, per Apple's
+# convention, like those of lidar2map and watch2notif.
 ANCIEN_LABEL_MACOS = f"com.nico579.{NOM}"
 RELANCE_MACOS = {"SuccessfulExit": False}
 
@@ -329,26 +279,26 @@ def _label_macos(quoi: tuple = DEFAUT) -> str:
 
 
 def _retirer_agent_ancien_nom() -> None:
-    """Décharge l'agent encore chargé sous l'ancien nom commun, s'il l'est.
+    """Unloads the agent still loaded under the old common name, if it is.
 
-    launchd garde la définition lue à l'ouverture de session. Une fois le
-    fichier réécrit (voir migrer_agents_macos), l'agent chargé porte encore
-    l'ancien nom : ni « unload » du fichier, ni un nouveau « load », ne le
-    retrouveraient, et il relancerait un second superviseur à côté du
-    nouveau."""
+    launchd keeps the definition read at login. Once the
+    file is rewritten (see migrer_agents_macos), the loaded agent still carries
+    the old name: neither « unload » of the file, nor a new « load », would
+    find it, and it would relaunch a second supervisor beside the
+    new one."""
     runtime.lancer(["launchctl", "remove", ANCIEN_LABEL_MACOS], check=False,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def migrer_agents_macos(dossier=None) -> list:
-    """Réécrit sur disque les agents posés par une version antérieure.
+    """Rewrites on disk agents placed by an earlier version.
 
-    Leur nom et leur politique de relance ont changé (issue #31) : sans cette
-    réécriture, un agent déjà installé garderait ses défauts jusqu'à ce qu'on
-    le réinstalle. launchd ne relit le fichier qu'à l'ouverture de session ;
-    la correction prend donc effet à la suivante, sans aucun geste. Même
-    principe que la mise à jour de watch2notif. Rend les fichiers réécrits.
-    Un fichier illisible reste tel quel : jamais au prix d'un démarrage."""
+    Their name and relaunch policy changed (issue #31): without this
+    rewrite, an already-installed agent would keep its defaults until
+    reinstalled. launchd only rereads the file at login;
+    the fix therefore takes effect at the next one, with no action. Same
+    principle as the watch2notif update. Returns the rewritten files.
+    An unreadable file stays as-is: never at the cost of a startup."""
     import plistlib
 
     if dossier is None:
@@ -387,15 +337,15 @@ def _macos(etat: str, simulation: bool, quoi: tuple = DEFAUT) -> int:
             print(_("supprimerait", cible=cible))
             return 0
         existait = cible.exists()
-        # Même sans fichier : un agent chargé sous l'ancien nom commun.
+        # Even without a file: an agent loaded under the old common name.
         _retirer_agent_ancien_nom()
         demarrage.desactiver(entree, plateforme="darwin", lancer=runtime.lancer)
         return _message_retrait(cible, existait)
 
-    # Valeurs échappées par plistlib : un dossier comme « Blink & Videos »
-    # écrivait un & brut, et launchd refusait le plist (audit du 26/09/2026,
-    # B08). Relu avant d'être écrit : jamais d'agent annoncé installé que
-    # launchd refuserait à la prochaine ouverture de session.
+    # Values escaped by plistlib: a folder like « Blink & Videos »
+    # wrote a raw &, and launchd refused the plist (audit of 26/09/2026,
+    # B08). Reread before writing: never announce an agent installed that
+    # launchd would refuse at the next login.
     import plistlib
     try:
         contenu = demarrage.contenu_agent(entree)
@@ -412,46 +362,46 @@ def _macos(etat: str, simulation: bool, quoi: tuple = DEFAUT) -> int:
 
 # --------------------------------------------------------------------- Linux
 
-# Ces deux-là sont celles du commun (nico579_commons.demarrage), nées ici :
-# l'environnement de « systemctl --user » (issue #23) et un argument d'ExecStart=
-# entre guillemets, % et $ doublés (audit du 26/09/2026, B07).
+# These two come from the common package (nico579_commons.demarrage), born here:
+# the « systemctl --user » environment (issue #23) and an ExecStart=
+# argument in quotes, with % and $ doubled (audit of 26/09/2026, B07).
 env_systemctl = demarrage.env_systemctl
 argument_systemd = demarrage.argument_systemd
 
 
-# Sous l'unité posée par « autostart on », tout processus lancé par blink2video
-# reste dans le cgroup de l'unité, quel que soit son parent : start_new_session
-# change de session, pas de cgroup. Quand « stop » fait sortir le processus
-# principal, systemd clôt l'unité et tue ce qui reste dans ce cgroup, y compris
-# ce qui devait remplacer les fichiers d'une mise à jour ou relancer
-# blink2video après Appliquer ; et comme la sortie se fait avec le code 0,
-# Restart=on-failure ne relance rien (issue #35, pendant Linux de l'issue #31).
+# Under the unit placed by « autostart on », every process launched by blink2video
+# stays in the unit's cgroup, whatever its parent: start_new_session
+# changes session, not cgroup. When « stop » exits the main
+# process, systemd closes the unit and kills what remains in that cgroup, including
+# what was meant to replace update files or relaunch
+# blink2video after Apply; and since exit is with code 0,
+# Restart=on-failure relaunches nothing (issue #35, Linux counterpart of issue #31).
 UNITE_ENV = "BLINK_UNITE_SYSTEMD"
 
 
 def unite_systemd(cgroup: Path = Path("/proc/self/cgroup")) -> str:
-    """Unité blink2video (« blink2video-start.service ») dont ce processus
-    fait partie, ou "" : hors Linux, hors d'une telle unité, ou cgroup
-    illisible. La lecture du cgroup est celle de nico579-commons, d'où cette
-    fonction est née (issue #35) ; ne reste ici que le nom de l'application."""
+    """blink2video unit (« blink2video-start.service ») this process
+    belongs to, or "": not Linux, not in such a unit, or
+    unreadable cgroup. cgroup reading is that of nico579-commons, where this
+    function was born (issue #35); only the application name remains here."""
     return relance_commune.unite_systemd(NOM, cgroup)
 
 
 def sortir_du_service(commande: list, environ=None) -> bool:
-    """Relance ``commande`` hors de l'unité blink2video dont ce processus
-    fait partie, et rend True : l'appelant s'arrête alors là, la suite
-    s'exécute dans le processus relancé. Rend False hors d'une telle unité,
-    une fois déjà sorti, ou si systemd-run ne répond pas : l'appelant
-    continue alors comme avant.
+    """Relaunches ``commande`` outside the blink2video unit this process
+    belongs to, and returns True: the caller then stops there, the rest
+    runs in the relaunched process. Returns False outside such a unit,
+    once already left, or if systemd-run does not respond: the caller
+    then continues as before.
 
-    systemd-run --user --scope place la commande dans une unité « scope »
-    transitoire, son propre cgroup, que la fin du service n'atteint pas. Un
-    premier essai à vide vérifie que la sortie fonctionne vraiment : sans
-    lui, un systemd-run qui échouerait après notre départ ne laisserait plus
-    personne pour finir le travail. Les deux gestes, l'essai et le préfixe,
-    sont ceux de nico579_commons.relance.hors_du_service ; ne reste ici que
-    ce qui est propre à blink2video : le nom de l'unité quittée voyage dans
-    BLINK_UNITE_SYSTEMD, pour relancer_service()."""
+    systemd-run --user --scope places the command in a transient « scope »
+    unit, its own cgroup, which the end of the service does not reach. An
+    empty first try verifies that leaving really works: without
+    it, a systemd-run that failed after our departure would leave
+    nobody to finish the work. Both gestures, the try and the prefix,
+    are those of nico579_commons.relance.hors_du_service; only what is
+    specific to blink2video remains here: the left unit's name travels in
+    BLINK_UNITE_SYSTEMD, for relancer_service()."""
     env = dict(os.environ if environ is None else environ)
     unite = unite_systemd()
     if not unite or env.get(UNITE_ENV):
@@ -468,11 +418,11 @@ def sortir_du_service(commande: list, environ=None) -> bool:
 
 
 def relancer_service(environ=None) -> str:
-    """Relance par systemd l'unité quittée par sortir_du_service() : start
-    reprend ainsi sous la garde de son service, plutôt que détaché dans le
-    scope transitoire, et la prochaine ouverture de session trouve l'unité
-    dans l'état attendu. Rend le nom de l'unité si systemctl l'a acceptée,
-    "" sinon : l'appelant relance alors comme avant."""
+    """Relaunches via systemd the unit left by sortir_du_service(): start
+    thus resumes under its service's guard, rather than detached in the
+    transient scope, and the next login finds the unit
+    in the expected state. Returns the unit name if systemctl accepted it,
+    "" otherwise: the caller then relaunches as before."""
     env = dict(os.environ if environ is None else environ)
     unite = env.pop(UNITE_ENV, "")
     if not unite:
@@ -508,8 +458,8 @@ def _linux(etat: str, simulation: bool, quoi: tuple = DEFAUT) -> int:
     try:
         notes = demarrage.activer(entree, plateforme="linux", lancer=runtime.lancer, env=env)
     except demarrage.ErreurDemarrage as erreur:
-        # Avec une session systemd, un refus est un vrai échec : ne plus
-        # l'annoncer comme une installation réussie (audit du 26/09/2026, B07).
+        # With a systemd session, a refusal is a real failure: no longer
+        # announce it as a successful install (audit of 26/09/2026, B07).
         v = erreur.valeurs
         print(_("installation_refusee", commande=v["commande"], code=v["retour"],
                 cible=v["cible"]))
@@ -521,17 +471,17 @@ def _linux(etat: str, simulation: bool, quoi: tuple = DEFAUT) -> int:
     return code
 
 
-# ------------------------------------------------------------------- communs
+# ------------------------------------------------------------------- shared
 
 def lue(cible: Path) -> list:
-    """Commande réellement inscrite dans le mécanisme installé.
+    """Command actually written into the installed mechanism.
 
-    On la relit plutôt que de la recalculer : ce qui compte pour l'utilisateur
-    est ce qui va s'exécuter, pas ce qu'on installerait aujourd'hui."""
+    We reread it rather than recalculate: what matters to the user
+    is what will run, not what we would install today."""
     try:
         if cible.suffix == ".lnk":
-            # Un raccourci n'existe que sous Windows, et powershell aussi :
-            # la garde est explicite plutôt que déduite de l'extension.
+            # A shortcut only exists under Windows, and so does powershell:
+            # the guard is explicit rather than inferred from the extension.
             if sys.platform != "win32":
                 return []
             import subprocess as sp
@@ -558,7 +508,7 @@ def lue(cible: Path) -> list:
 
 
 def _lister(entrees: list, intitule: str) -> int:
-    """Toutes les entrées installées, avec ce que chacune lance réellement."""
+    """All installed entries, with what each actually launches."""
     if not entrees:
         print(_("intitule_aucune", intitule=intitule))
         return 0
@@ -596,10 +546,10 @@ def main() -> int:
     )
     parser.add_argument("etat", choices=("on", "off", "status"), nargs="?",
                         default="status", help=_("aide_etat"))
-    # nargs="*" plus parse_known_args : les options inconnues d'ici, comme
-    # « --port 8899 », rejoignent le verbe, tandis que --dry-run reste compris
-    # où qu'il soit placé. REMAINDER avalait --dry-run avec le reste, et une
-    # simulation installait pour de bon.
+    # nargs="*" plus parse_known_args: options unknown here, like
+    # « --port 8899 », join the verb, while --dry-run stays understood
+    # wherever it is placed. REMAINDER swallowed --dry-run with the rest, and a
+    # simulation installed for real.
     parser.add_argument("quoi", nargs="*", metavar=_("aide_metavar_verbe"),
                         help=_("aide_quoi"))
     parser.add_argument("--dry-run", action="store_true", help=_("aide_dry_run"))
@@ -608,7 +558,7 @@ def main() -> int:
     try:
         return appliquer_tous(args.etat, args.dry_run, quoi)
     except ValueError as erreur:
-        # Un verbe inconnu mérite un message, pas une trace d'exécution.
+        # An unknown verb deserves a message, not a stack trace.
         parser.error(str(erreur))
 
 

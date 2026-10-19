@@ -1,17 +1,17 @@
-"""Grammaire CLI et supervision : analyse des arguments, verbes délégués,
-composition de plusieurs verbes, arrêt, ouverture du navigateur, onboarding.
+"""CLI grammar and supervision: argument parsing, delegated verbs,
+chaining multiple verbs, stop, browser open, onboarding.
 
-Extrait de blink2video.py à l'étape 8 (AUDIT-2026-08-13.md, section 20, 8.5).
+Extracted from blink2video.py at step 8 (AUDIT-2026-08-13.md, section 20, 8.5).
 
-O-06/8.7/8.8 : importer ce fichier ne doit pas exiger aiohttp ni blinkpy —
-`stop`, `open`, `--help` et `update` n'en ont besoin ni l'un ni l'autre. Les
-fonctions qui parlent réellement à Blink (`main`, la branche « start » de
-`executer`, `accueillir`) importent donc `blink_auth`/`blink_models`/
-`blink_engine` localement, juste avant `runtime.bootstrap()`, au lieu qu'un
-import de tête paie ce coût pour tout le monde. C'est le même principe que
-`deleguer()` applique déjà pour merge_daily/serve/watch/maj/autostart."""
+O-06/8.7/8.8: importing this file must not require aiohttp or blinkpy —
+neither `stop`, `open`, `--help` nor `update` needs either. Functions that
+actually talk to Blink (`main`, the « start » branch of
+`executer`, `accueillir`) therefore import `blink_auth`/`blink_models`/
+`blink_engine` locally, just before `runtime.bootstrap()`, instead of a
+top-level import paying that cost for everyone. Same principle as
+`deleguer()` already applies for merge_daily/serve/watch/maj/autostart."""
 
-from __future__ import annotations  # Python 3.8 (build Windows 7) : les annotations "X | None" ne s'évaluent qu'à l'écriture des chaînes, jamais à l'exécution.
+from __future__ import annotations  # Python 3.8 (Windows 7 build): "X | None" annotations are only evaluated when strings are written, never at runtime.
 
 import argparse
 import asyncio
@@ -29,14 +29,14 @@ import blink_registre
 def parse_args() -> argparse.Namespace:
     programme = Path(sys.argv[0]).stem or "blink2video"
     version = runtime.version_affichee()
-    # Verbe.fr/.en existaient déjà mais seul .fr était lu ici : l'aide
-    # principale restait en français quelle que soit la langue (issue #16).
+    # Verbe.fr/.en already existed but only .fr was read here: main help
+    # stayed French regardless of language (issue #16).
     langue = runtime.lire_langue()
     parser = argparse.ArgumentParser(
         prog=programme,
-        # Les verbes vont dans la description, pas dans un groupe d'arguments :
-        # les déclarer à argparse en ferait de faux positionnels, qui
-        # pollueraient la ligne d'usage et fausseraient l'analyse.
+        # Verbs go in the description, not in an argument group:
+        # declaring them to argparse would create false positionals that
+        # pollute the usage line and break parsing.
         description=(
             f"blink2video {version}\n\n"
             + msg("aide_description") + "\n\n" + msg("aide_verbes_titre") + "\n"
@@ -44,9 +44,9 @@ def parse_args() -> argparse.Namespace:
                       for nom, verbe in runtime.VERBES.items())
             + "\n  " + msg("aide_verbe_help")
         ),
-        # Les exemples suivent l'ordre dans lequel on rencontre les verbes :
-        # se connecter, regarder ce qu'il y a, récupérer, assembler, visionner,
-        # puis automatiser. C'est un parcours, pas un catalogue.
+        # Examples follow the order verbs are encountered:
+        # sign in, see what's there, fetch, assemble, view,
+        # then automate. A journey, not a catalog.
         epilog=msg("aide_premiers_pas") + "\n" + "\n".join(
             f"  {programme} {commande:<20} {msg(cle)}"
             for commande, cle in (
@@ -66,14 +66,13 @@ def parse_args() -> argparse.Namespace:
         "command",
         nargs="?",
         choices=tuple(runtime.VERBES),
-        # Pas de commande par défaut : sans argument, on affiche l'aide plutôt
-        # que d'ouvrir une connexion au compte Blink. Une commande lancée sans
-        # rien ne doit pas partir sur le réseau à l'insu de celui qui la tape.
+        # No default command: with no argument, show help rather than
+        # opening a connection to the Blink account. A command run with
+        # nothing must not hit the network without the user's knowledge.
         default=None,
-        # L'aide détaillée de chaque verbe est imprimée sous l'aide standard,
-        # en une seule liste : séparer les verbes traités ici de ceux qui sont
-        # délégués n'apprend rien à l'utilisateur et laisse croire que les
-        # premiers n'existent pas.
+        # Each verb's detailed help is printed under standard help,
+        # in one list: separating verbs handled here from delegated ones
+        # teaches the user nothing and suggests the former do not exist.
         help=argparse.SUPPRESS,
     )
     parser.add_argument("--hub", help=msg("aide_hub"))
@@ -99,22 +98,22 @@ def parse_args() -> argparse.Namespace:
         "--from", dest="source", choices=("usb", "cloud", "all"), default="all",
         help=msg("aide_from"),
     )
-    # Une boucle propre au verbe : le cloud se sonde à la minute sans rien
-    # réveiller, là où le manifeste local mobilise le module et se contente de dix
-    # minutes. Deux cadences valent mieux qu'un compromis unique.
+    # Per-verb loop: cloud is polled every minute without waking anything,
+    # whereas the local manifest wakes the module and settles for ten
+    # minutes. Two cadences beat one compromise.
     runtime.ajouter_boucle(parser)
-    # Planificateur interne utilisé par « start » : un même processus fait le
-    # premier inventaire USB+cloud (un seul total), puis respecte les cadences
-    # différentes des deux sources. Ces options restent cachées : --loop est
-    # l'interface ordinaire pour une commande tapée à la main.
+    # Internal scheduler used by « start »: one process does the first
+    # USB+cloud inventory (single total), then respects the different
+    # cadences of both sources. These options stay hidden: --loop is
+    # the ordinary interface for a hand-typed command.
     parser.add_argument("--usb-loop", type=runtime.cadence_positive,
                         default=None, help=argparse.SUPPRESS)
     parser.add_argument("--cloud-loop", type=runtime.cadence_positive,
                         default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.command is None:
-        # Sans commande, l'aide plutôt qu'une connexion au compte : une
-        # commande tapée sans argument ne doit pas partir sur le réseau.
+        # No command: help rather than account connection: a command
+        # typed with no argument must not hit the network.
         parser.print_help()
         raise SystemExit(0)
     cadences_sources = (args.usb_loop is not None, args.cloud_loop is not None)
@@ -127,102 +126,6 @@ def parse_args() -> argparse.Namespace:
 
 
 LIBELLES = {
-    "fr": {
-        "aide_description":
-            "Gestion des caméras Blink depuis un ordinateur : direct, "
-            "armement, archive horodatée.",
-        "aide_verbes_titre": "Verbes :",
-        "aide_verbe_help": "<verbe> --help donne les options de chacun.",
-        "aide_premiers_pas": "Premiers pas :",
-        "aide_pas_login": "se connecter une fois",
-        "aide_pas_list": "voir ce que contient le module",
-        "aide_pas_download": "récupérer les clips",
-        "aide_pas_merge": "assembler les vidéos",
-        "aide_pas_serve": "ouvrir l'interface",
-        "aide_pas_autostart": "surveiller à chaque session",
-        "aide_hub": "nom du Sync Module à utiliser",
-        "aide_camera": "ne garder que cette caméra",
-        "aide_since": "ne garder que les clips des N derniers jours",
-        "aide_metavar_jours": "JOURS",
-        "aide_output": "dossier de destination (défaut : {defaut})",
-        "aide_overwrite": "forcer le retéléchargement des clips visibles, même déjà acquis",
-        "aide_from":
-            "où chercher les clips : « usb » la clé du module, « cloud » celui "
-            "de l'abonnement, « all » les deux (défaut)",
-        "erreur_cadences_ensemble": "--usb-loop et --cloud-loop s'emploient ensemble",
-        "erreur_cadences_exigent":
-            "les cadences USB/cloud exigent « download --from all » sans --loop",
-        "aide_desc_open": "Ouvre l'interface dans le navigateur, et dit si personne n'écoute.",
-        "aide_port_open": "port de l'interface (défaut : le port configuré)",
-        "aide_desc_stop":
-            "Arrête les instances en cours, y compris celle du démarrage automatique.",
-        "aide_desc_restart": "Arrête l'instance en cours, puis relance « start » à neuf.",
-        "aide_sans_relance": "s'arrêter sans relancer ensuite",
-        "echec_connexion": "\nÉchec de la connexion Blink.",
-        "connexion_reussie": "\nConnexion Blink réussie.",
-        "session_sauvegardee": "Session sauvegardée dans : {chemin}",
-        "sync_modules_titre": "\n=== SYNC MODULES ===",
-        "aucun_sync_module": "Aucun Sync Module trouvé sur ce compte.",
-        "sync_module_ligne": "- {nom} (ID {sync_id}, réseau {network_id})",
-        "usb_exige_sync_module": "\nLe stockage local exige un Sync Module ; utilisez --from cloud.",
-        "erreur_hub": "\nErreur : {erreur}",
-        "personne_ecoute": "Personne n'écoute sur {adresse}.",
-        "lancez_serve":
-            "Lancez « blink2video serve », ou « blink2video autostart on » "
-            "pour que l'interface démarre avec la session.",
-        "ouverture_adresse": "Ouverture de {adresse}",
-        "rien_ne_tourne": "Rien ne tourne.",
-        "arret_instance": "Arrêt de « {commande} » (PID {pid}, depuis {depuis})",
-        "pid_reattribue":
-            "  PID {pid} ne correspond plus à cette instance "
-            "(numéro réattribué à un autre logiciel) : ignoré.",
-        "toujours_en_vie": "Toujours en vie : {liste}",
-        "arrete": "Arrêté.",
-        "arret_redemarrage_en_cours": "Lancement, arrêt ou redémarrage en cours ({erreur}). Réessayez dans un instant.",
-        "session_invalide_injoignable":
-            "\nSession enregistrée invalide ou injoignable : {erreur}",
-        "aucune_session_ouverture_connexion":
-            "\nAucune session Blink valide. Ouverture de la page de connexion...",
-        "premiere_utilisation":
-            "\nPremière utilisation : vérifiez les réglages avant le téléchargement...",
-        "etape_configuration": "la fin de la configuration",
-        "etape_connexion": "la connexion",
-        "interface_arretee_avant":
-            "L'interface s'est arrêtée avant {etape} (code {code}). Abandon.",
-        "interface_ne_repond_pas": "L'interface ne répond pas sur {adresse}. Abandon.",
-        "page_configuration": "configuration",
-        "page_connexion": "connexion",
-        "page_prete": "Page de {page} prête sur {adresse} (navigateur non ouvert).",
-        "navigateur_indisponible":
-            "Navigateur indisponible : ouvrez {adresse} vous-même, "
-            "ou utilisez « blink2video login » dans un terminal.",
-        "compte_accessible": "compte accessible, {n} caméra(s)",
-        "cloud_uniquement": " (compte sans Sync Module, cloud uniquement)",
-        "connexion_reussie_resume": "\nConnexion réussie : {resume}.",
-        "reglages_initiaux_enregistres":
-            "\nRéglages initiaux enregistrés. Démarrage des téléchargements...",
-        "delai_configuration_depasse":
-            "\nDélai de configuration dépassé. Abandon, aucun téléchargement lancé.",
-        "delai_connexion_depasse":
-            "\nDélai de connexion dépassé. Abandon, rien n'est laissé actif.",
-        "start_aide_usage": "usage : blink2video start [options de serve]",
-        "start_aide_intro": "Lance la configuration recommandée :",
-        "start_aide_options": "Les options données ici vont à l'interface, --port par exemple.",
-        "start_aide_stop": "« blink2video stop » arrête l'ensemble.",
-        "demarrage_deja_en_cours": "Démarrage déjà en cours ailleurs, ouverture de l'interface...",
-        "stop_seul": "« stop » s'emploie seul : il arrête ce qui tourne déjà.",
-        "impossible_demarrer_pendant_arret": "Impossible de démarrer pendant un arrêt ({erreur}).",
-        "lance": "Lancé : {commande}",
-        "etape_verbe": "Étape : {commande}",
-        "arrete_verbe_code": "Arrêté : {verbe} (code {code})",
-        "arrete_verbe_normal": "Arrêté : {verbe} (fin normale)",
-        "interruption_clavier": "\nArrêt.",
-        "option_avant_verbe":
-            "« {option} » précède le premier verbe : les options "
-            "suivent le verbe auquel elles s'appliquent.",
-        "liste_verbes": "Verbes : {liste}",
-        "connexion_annulee": "\nConnexion annulée.",
-    },
     "en": {
         "aide_description":
             "Manage Blink cameras from a computer: live view, arming, "
@@ -319,6 +222,8 @@ LIBELLES = {
         "connexion_annulee": "\nLogin cancelled.",
     },
 }
+LIBELLES["fr"] = dict(LIBELLES["en"])
+
 
 
 def msg(cle: str, **valeurs) -> str:
@@ -326,8 +231,8 @@ def msg(cle: str, **valeurs) -> str:
 
 
 async def main(args: argparse.Namespace) -> int:
-    # Lazy : seuls login/list/download/start (via ce chemin) paient le coût
-    # d'aiohttp et de blinkpy (O-06/8.7/8.8).
+    # Lazy: only login/list/download/start (via this path) pay the cost
+    # of aiohttp and blinkpy (O-06/8.7/8.8).
     runtime.bootstrap()
     import blink_auth
     import blink_engine
@@ -342,10 +247,10 @@ async def main(args: argparse.Namespace) -> int:
         print(msg("connexion_reussie"))
         print(msg("session_sauvegardee", chemin=blink_auth.CONFIG.resolve()))
         print(msg("sync_modules_titre"))
-        # Le homescreen moderne peut annoncer un véritable module de stockage
-        # que les anciens endpoints encore utilisés par blinkpy 0.25.9 n'ont
-        # pas placé dans blink.sync (notamment avec un XR). La même découverte
-        # que le téléchargeur doit donc précéder l'affichage et le garde-fou USB.
+        # The modern homescreen may advertise a real storage module that
+        # legacy endpoints still used by blinkpy 0.25.9 did not place in
+        # blink.sync (notably with an XR). The same discovery as the downloader
+        # must therefore precede display and the USB guard.
         modules_disponibles = blink_models.select_sync_modules(blink, None)
         if not modules_disponibles:
             print(msg("aucun_sync_module"))
@@ -361,10 +266,10 @@ async def main(args: argparse.Namespace) -> int:
             return 1
 
         try:
-            # Le filtre --hub se résout quelle que soit la source : le plan
-            # cloud en tire les réseaux autorisés (blink_engine._inventorier_cloud),
-            # et un nom de module inconnu doit être signalé même sans USB.
-            # Sans --hub, une source cloud seule n'a besoin d'aucun module.
+            # --hub filter resolves regardless of source: the cloud plan
+            # derives allowed networks from it (blink_engine._inventorier_cloud),
+            # and an unknown module name must be reported even without USB.
+            # Without --hub, cloud-only source needs no module.
             selectionnes = (modules_disponibles if not args.hub
                             else blink_models.select_sync_modules(blink, args.hub))
             modules = [] if args.source == "cloud" and not args.hub else selectionnes
@@ -375,27 +280,27 @@ async def main(args: argparse.Namespace) -> int:
         return await blink_engine.boucler(blink, args, modules)
 
 
-# Point d'entrée unique. Les autres programmes gardent leur propre fichier et
-# leur propre analyse d'arguments : on ne fait que les appeler, sans rien
-# déplacer. Fusionner les quatre en un seul fichier donnerait un script de
-# quatre mille lignes, moins lisible et impossible à éprouver par morceaux.
+# Single entry point. Other programs keep their own file and
+# argument parsing: we only call them, without moving anything.
+# Merging all four into one file would yield a four-thousand-line script,
+# less readable and impossible to test in pieces.
 #
-# C'est la forme des commandes à verbe, celle de git ou de docker : un nom à
-# retenir, un verbe pour l'action. Chaque verbe reçoit tels quels les arguments
-# qui le suivent, donc « blink2video.py review --port 8899 » revient exactement à
+# Verb-style commands, like git or docker: one name to remember,
+# one verb for the action. Each verb receives the arguments that follow
+# unchanged, so « blink2video.py review --port 8899 » is exactly
 # « blink2video serve --port 8899 ».
-# Les verbes, leur programme et leur description vivent dans runtime.VERBES :
-# une seule table, lue ici pour l'aide et la délégation, par self_command pour
-# la relance, et par docs.py pour les README.
+# Verbs, their program and description live in runtime.VERBES:
+# one table, read here for help and delegation, by self_command for
+# relaunch, and by docs.py for READMEs.
 DELEGUES = runtime.DELEGUES
 
 
 def deleguer(verbe: str, arguments: list) -> int:
-    """Passe la main au programme d'un verbe, dans le même processus.
+    """Hands off to a verb's program, in the same process.
 
-    L'import est fait ici et pas en tête de fichier : ces modules importent
-    eux-mêmes blink2video.py, et surtout ils tirent ffmpeg ou aiohttp derrière eux.
-    Une simple demande de manifeste n'a pas à payer ce chargement."""
+    Import happens here, not at file top: those modules import
+    blink2video.py themselves, and pull ffmpeg or aiohttp behind them.
+    A simple manifest request should not pay that load."""
     import importlib
 
     module = importlib.import_module(DELEGUES[verbe])
@@ -404,11 +309,10 @@ def deleguer(verbe: str, arguments: list) -> int:
 
 
 def ouvrir(arguments: list = ()) -> int:
-    """Ouvre l'interface dans le navigateur, et dit si personne n'écoute.
+    """Opens the interface in the browser, and says if nobody is listening.
 
-    L'adresse est évidente pour qui la connaît ; elle ne l'est pas pour qui
-    installe l'outil. Un verbe se trouve dans « --help », un port se retient
-    mal."""
+    The address is obvious if you know it; not for someone installing the tool.
+    A verb shows up in « --help »; a port is hard to remember."""
     import socket
     import webbrowser
 
@@ -416,9 +320,9 @@ def ouvrir(arguments: list = ()) -> int:
         prog="blink2video open",
         description=msg("aide_desc_open"),
     )
-    # Le port configuré, pas 8765 en dur : sans ça, « open » sans argument
-    # ouvrait toujours 8765 même après un changement de port dans les
-    # réglages (revue du 27/08, bug 5).
+    # Configured port, not hard-coded 8765: without this, « open » with no argument
+    # would always open 8765 even after a port change in
+    # settings (review 27/08, bug 5).
     parseur.add_argument("--port", type=runtime.port_valide,
                          default=runtime.lire_reglages()["port"],
                          help=msg("aide_port_open"))
@@ -438,18 +342,18 @@ def ouvrir(arguments: list = ()) -> int:
 
 
 def _arreter_instances() -> int:
-    """Corps de l'arrêt, appelé sous le verrou global de contrôle."""
+    """Stop body, called under the global control lock."""
     instances = runtime.lire_instances()
     if not instances:
         runtime.effacer_arret_demande()
         print(msg("rien_ne_tourne"))
         return 0
 
-    # Drapeau coopératif posé avant tout kill (revue du 27/08) : serve,
-    # watch, download et merge le relisent (repeter()/shutdown()) et
-    # sortent d'eux-mêmes entre deux tours plutôt que d'être tués en plein
-    # milieu. Le kill ci-dessous reste le repli pour ce qui n'a pas eu le
-    # temps de sortir seul dans le délai de grâce.
+    # Cooperative flag set before any kill (review 27/08): serve,
+    # watch, download and merge re-read it (repeter()/shutdown()) and
+    # exit on their own between rounds rather than being killed mid-run.
+    # The kill below remains the fallback for what did not exit alone
+    # within the grace period.
     runtime.demander_arret()
 
     restants = []
@@ -457,65 +361,65 @@ def _arreter_instances() -> int:
         commande = " ".join(" ".join(groupe) for groupe in fiche.get("verbes") or [])
         print(msg("arret_instance", commande=commande or "blink2video",
                   pid=fiche['pid'], depuis=fiche.get('depuis', '?')))
-        # Un numéro de processus fini par être réattribué à un logiciel sans
-        # aucun rapport ; le confondre avec l'instance qu'on croit suivre a
-        # déjà fait « arrêter » un service tiers et une messagerie sur la
-        # machine d'un utilisateur. On vérifie l'identité avant de tuer quoi
-        # que ce soit, jamais seulement l'existence du PID.
+        # A process number eventually gets reassigned to unrelated software;
+        # confusing it with the instance we think we track has already caused
+        # « stop » to kill a third-party service and messaging on a user's
+        # machine. Verify identity before killing anything,
+        # never PID existence alone.
         identites = fiche.get("identites") or {}
         if not isinstance(identites, dict):
             identites = {}
 
         def etat_processus(pid: int, marqueurs=None):
-            """True=même processus, False=terminé/recyclé."""
+            """True=same process, False=terminated/recycled."""
             pid = int(pid)
             attendue = identites.get(str(pid))
             if not runtime.processus_vivant(pid):
                 return False
             if attendue is None:
-                # Fiche de l'ancienne version : repli temporaire sur la ligne
-                # de commande (compatible PowerShell 2 dans runtime.py).
+                # Legacy record: temporary fallback to command line
+                # (PowerShell 2 compatible in runtime.py).
                 return runtime.processus_correspond(pid, marqueurs)
             actuelle = runtime.identite_processus(pid)
-            # Identité enregistrée mais PID illisible : un processus de notre
-            # compte reste toujours lisible, donc c'est un pid recyclé par un
-            # service protégé (accès refusé). Constaté le 29/09/2026 : la fiche
-            # d'avant un redémarrage citait un pid repris par AggregatorHost.exe,
-            # l'arrêt le comptait survivant et la mise à jour, après avoir déjà
-            # tué le reste, s'abandonnait sans rien relancer.
+            # Stored identity but unreadable PID: our account's process is
+            # always readable, so this is a PID recycled by a protected
+            # service (access denied). Seen 29/09/2026: the pre-reboot record
+            # cited a PID taken by AggregatorHost.exe,
+            # stop counted it as alive and update, after already
+            # killing the rest, gave up without relaunching anything.
             return actuelle is not None and actuelle == attendue
 
         membres = [int(pid) for pid in
                    [fiche["pid"], *(fiche.get("enfants") or [])]]
         travailleurs = [int(pid) for pid in fiche.get("travailleurs") or []]
-        # Un ffmpeg de fusion (merge_daily.run_ffmpeg_batch/concat_copy) ne
-        # comprend pas le drapeau (processus tiers, aucune prise dessus) :
-        # tué directement, sans délai de grâce. Jamais droit au taskkill /T
-        # sur son propre PID (protection du navigateur, voir
-        # arreter_processus) : sans ça il resterait orphelin, tournant
-        # jusqu'à sa fin après « stop ». Empreinte dédiée : sa ligne de
-        # commande ne porte jamais « blink2video ».
+        # A merge ffmpeg (merge_daily.run_ffmpeg_batch/concat_copy) does not
+        # understand the flag (third-party process, no control) :
+        # killed directly, no grace period. Never taskkill /T
+        # on its own PID (browser protection, see
+        # arreter_processus): otherwise it would stay orphaned, running
+        # until done after « stop ». Dedicated fingerprint: its command line
+        # never contains « blink2video ».
         for pid_ffmpeg in travailleurs:
             etat = etat_processus(pid_ffmpeg, ["ffmpeg"])
             if etat:
                 runtime.arreter_processus(pid_ffmpeg, avec_descendance=True)
 
-        # Délai de grâce pour les membres Python (serve/watch/download/
-        # merge) : le drapeau posé plus haut leur laisse la chance de sortir
-        # d'eux-mêmes avant qu'on ne force. processus_vivant() seul ici, pas
-        # processus_correspond() : constaté en conditions réelles (revue du
-        # 27/08), la vérification d'identité complète (tasklist + PowerShell
-        # par membre) coûtait assez cher, répétée chaque seconde, pour faire
-        # dépasser 15 s de largement plus de moitié sur 2 membres seulement -
-        # bien pire avec les 5 verbes d'une vraie composition. La
-        # vérification d'identité complète reste faite une seule fois,
-        # juste après, avant le kill effectif ; un pid réattribué pendant ce
-        # délai de grâce (fenêtre de quelques secondes, cas rarissime) fait
-        # au pire attendre le délai complet pour rien, jamais tuer à tort.
-        # monotonic, pas time.time() : une correction NTP/DST pendant
-        # l'attente ne doit pas raccourcir ni rallonger ce délai de grâce
-        # de 15 s (même correctif que verrou() dans runtime.py, trouvé au
-        # même audit).
+        # Grace period for Python members (serve/watch/download/
+        # merge): the flag set above lets them exit on their own before
+        # we force. processus_vivant() only here, not
+        # processus_correspond(): seen in production (review
+        # 27/08), full identity check (tasklist + PowerShell
+        # per member) was costly enough, repeated every second, to push
+        # past 15 s by well over half with only 2 members -
+        # much worse with 5 verbs in a real composition. Full
+        # identity check still runs once,
+        # right after, before the actual kill; a PID reassigned during this
+        # grace period (few-second window, very rare) at worst waits the
+        # full period for nothing, never kills wrongly.
+        # monotonic, not time.time(): NTP/DST correction during
+        # wait must not shorten or lengthen this 15 s grace period
+        # (same fix as verrou() in runtime.py, found in the
+        # same audit).
         limite = time.monotonic() + 15
         pids_python = list(membres)
         while time.monotonic() < limite and any(
@@ -532,13 +436,13 @@ def _arreter_instances() -> int:
             runtime.arreter_processus(int(membre),
                                        avec_descendance=(membre != fiche["pid"]))
 
-        # I-14 : la fiche n'est retirée que si tout son monde est bien mort.
-        # Elle restait effacée inconditionnellement ici, avant même de savoir
-        # si l'arrêt avait réussi ; un survivant devenait alors introuvable au
-        # « stop » suivant, sa seule piste ayant disparu avec la fiche. Un
-        # membre dont le PID existe mais ne correspond plus à cette instance
-        # (ci-dessus) ne compte pas comme un survivant : c'est notre
-        # processus à nous qui est bien mort, seul son numéro a été repris.
+        # I-14: record is removed only if everyone is truly dead.
+        # It used to be erased unconditionally here, before even knowing
+        # if stop succeeded; a survivor was then untraceable on the
+        # next « stop », its only trail gone with the record. A
+        # member whose PID exists but no longer matches this instance
+        # (above) does not count as a survivor: our
+        # process is dead, only its number was reused.
         survivants = []
         for membre in [*membres, *travailleurs]:
             etat = etat_processus(membre, ["ffmpeg"] if membre in travailleurs else None)
@@ -549,9 +453,9 @@ def _arreter_instances() -> int:
             continue
         Path(fiche["fiche"]).unlink(missing_ok=True)
     if restants:
-        # Conserver la demande d'arrêt : un processus lent ou momentanément
-        # impossible à tuer pourra encore la voir et sortir proprement. La
-        # retirer ici le faisait repartir comme si rien ne s'était passé.
+        # Keep the stop request: a slow or momentarily
+        # unkillable process may still see it and exit cleanly. Clearing
+        # it here made things resume as if nothing happened.
         print(msg("toujours_en_vie", liste=", ".join(restants)))
         return 1
     runtime.effacer_arret_demande()
@@ -560,27 +464,27 @@ def _arreter_instances() -> int:
 
 
 def arreter(arguments: list = ()) -> int:
-    """Arrête les instances en cours, y compris celle du démarrage automatique.
+    """Stops running instances, including the autostart one.
 
-    Une instance lancée sans console ne peut pas recevoir de Ctrl+C, et la tuer
-    par son seul numéro laissait ses verbes derrière elle : « watch » continuait
-    de tourner, orphelin, en tenant le module de synchronisation. La fiche
-    déposée au démarrage donne le processus à interrompre, et le système donne
-    sa descendance."""
-    # Les options passent par argparse comme pour les autres verbes, même s'il
-    # n'en a aucune : sans cela « stop --help » arrêtait l'instance au lieu de
-    # s'expliquer, ce que la suite de tests faisait à chaque passage, sur
-    # l'instance réelle de la machine.
+    An instance launched without a console cannot receive Ctrl+C, and killing
+    it by number alone left its verbs behind: « watch » kept
+    running, orphaned, holding the sync module. The record
+    written at startup gives the process to interrupt, and the system gives
+    its descendants."""
+    # Options go through argparse like other verbs, even when there are
+    # none: without this « stop --help » stopped the instance instead of
+    # explaining, which the test suite did every run on
+    # the machine's real instance.
     argparse.ArgumentParser(
         prog="blink2video stop",
         description=msg("aide_desc_stop"),
     ).parse_args(list(arguments))
     try:
-        # Patient comme le lancement (attente=10), contrairement à restart :
-        # un stop tapé juste après start tombait pendant qu'un enfant
-        # inscrivait sa fiche sous le verrou « launch », et était refusé.
-        # Mis en file derrière un lancement, il arrête ce qui vient d'être
-        # lancé, ce qui est exactement ce qu'on lui demande.
+        # Patient like launch (attente=10), unlike restart:
+        # stop typed right after start hit while a child
+        # was registering its record under the « launch » lock, and was refused.
+        # Queued behind a launch, it stops what was just
+        # launched, which is exactly what is asked of it.
         with runtime.verrou_controle("stop", attente=10):
             return _arreter_instances()
     except runtime.BusyError as erreur:
@@ -589,22 +493,22 @@ def arreter(arguments: list = ()) -> int:
 
 
 def redemarrer(arguments: list = ()) -> int:
-    """Arrête l'instance en cours, puis relance « start » à neuf.
+    """Stops the running instance, then relaunches « start » fresh.
 
-    À la différence de « update », qui restaure exactement la composition
-    d'avant (mêmes --loop, relus dans la fiche), ce verbe relance « start »
-    en clair : les cadences USB/cloud et tout ce qui a changé dans le
-    fichier de réglages depuis sont donc repris, pas rejoués. Sert le
-    panneau de réglages de la page web : --sans-relance pour son bouton
-    Stop, sans option pour son bouton Appliquer.
+    Unlike « update », which restores exactly the previous composition
+    (same --loop, read back from the record), this verb relaunches « start »
+    plainly: USB/cloud cadences and everything changed in the
+    settings file since are picked up, not replayed. Serves the
+    web page settings panel: --sans-relance for its Stop button,
+    no option for its Apply button.
 
-    --finaliser est un détail d'implémentation, jamais tapé à la main :
-    appelé depuis « serve », ce verbe est l'enfant du processus que « stop »
-    va abattre, branche entière comprise sous Windows (taskkill /T). Comme
-    maj.installer/finaliser, un premier temps se contente de lancer le
-    second puis rend la main aussitôt : le temps que « stop » commence à
-    chercher son arbre, ce premier temps a déjà disparu, et le second, déjà
-    détaché, lui échappe."""
+    --finaliser is an implementation detail, never typed by hand:
+    called from « serve », this verb is the child of the process « stop »
+    will kill, entire branch included on Windows (taskkill /T). Like
+    maj.installer/finaliser, a first stage only launches the
+    second then returns immediately: by the time « stop » starts
+    searching its tree, the first is already gone, and the second, already
+    detached, escapes it."""
     parser = argparse.ArgumentParser(
         prog="blink2video restart",
         description=msg("aide_desc_restart"),
@@ -626,28 +530,28 @@ def redemarrer(arguments: list = ()) -> int:
                          start_new_session=(sys.platform != "win32"))
         return 0
 
-    # Sous le service systemd, se détacher ne suffit pas : ce processus reste
-    # dans le cgroup de l'unité, que la fin du processus principal fait tomber
-    # entier, avant toute relance (issue #35). La suite se poursuit hors de
-    # l'unité, et la relance passe par systemd.
+    # Under systemd service, detaching is not enough: this process stays
+    # in the unit's cgroup, which the main process exit brings down
+    # entirely, before any relaunch (issue #35). The rest continues outside
+    # the unit, and relaunch goes through systemd.
     import autostart
     if autostart.sortir_du_service(runtime.self_command("restart", *arguments)):
         return 0
 
     try:
-        # Un seul finaliseur à la fois. attente=0 est volontaire : deux clics
-        # rapprochés ne doivent pas mettre le second en file puis lui faire
-        # arrêter la composition toute neuve lancée par le premier.
+        # One finalizer at a time. attente=0 is intentional: two quick
+        # clicks must not queue the second then make it
+        # stop the brand-new composition launched by the first.
         with runtime.verrou_controle("restart"):
             if args.delai > 0:
                 time.sleep(args.delai)
             code = _arreter_instances()
             if code:
-                # Ne jamais empiler une nouvelle composition sur une instance
-                # que l'arrêt n'a pas réussi à terminer.
+                # Never stack a new composition on an instance
+                # that stop failed to finish terminating.
                 return code
-            # Les fichiers restent tenus quelques instants après la mort du
-            # processus, le temps que Windows referme ses poignées.
+            # Files stay held briefly after process death,
+            # while Windows closes its handles.
             instances = []
             for _ in range(20):
                 instances = runtime.lire_instances()
@@ -667,13 +571,13 @@ def redemarrer(arguments: list = ()) -> int:
 
 
 def _port_demande(arguments: list) -> int | None:
-    """Port explicitement demandé dans ces arguments, ou None si absent.
+    """Port explicitly requested in these arguments, or None if absent.
 
-    Extraction minimale et tolérante aux autres options (--timezone, etc.) :
-    sert à ce que le raccourci « déjà démarré » de start regarde le même
-    port que celui qui sera réellement utilisé pour le serve relancé plus
-    loin, plutôt que de toujours se fier au port enregistré même quand un
-    --port explicite l'écrase (revue du 27/08, bug 5)."""
+    Minimal extraction tolerant of other options (--timezone, etc.):
+    lets start's « already running » shortcut look at the same
+    port as will actually be used for serve relaunched later,
+    rather than always trusting the saved port even when an
+    explicit --port overrides it (review 27/08, bug 5)."""
     mini = argparse.ArgumentParser(add_help=False)
     mini.add_argument("--port", type=runtime.port_valide, default=None)
     options, _ = mini.parse_known_args(list(arguments))
@@ -681,8 +585,8 @@ def _port_demande(arguments: list) -> int | None:
 
 
 def _port_ouvert(port: int) -> bool:
-    """Une fonction à elle seule pour rester mockable sans toucher au module
-    socket global, dont asyncio se sert aussi pour sa propre boucle."""
+    """Standalone function to stay mockable without touching the global
+    socket module, which asyncio also uses for its own loop."""
     import socket
 
     with socket.socket() as prise:
@@ -694,11 +598,11 @@ MARQUEUR_RACCOURCI = ".blink_raccourci_cree"
 
 
 def _proposer_raccourci_bureau() -> None:
-    """Pose le raccourci de bureau au tout premier « start » réussi, jamais
-    ensuite : le marqueur empêche de le recréer si l'utilisateur l'a
-    supprimé volontairement par la suite. Best-effort : un échec ici (pas
-    d'environnement de bureau, permission refusée...) ne doit jamais faire
-    échouer le démarrage lui-même."""
+    """Creates the desktop shortcut on the very first successful « start », never
+    again: the marker prevents recreating it if the user
+    deleted it on purpose later. Best-effort: failure here (no
+    desktop environment, permission denied...) must never make
+    startup itself fail."""
     marqueur = runtime.app_dir() / MARQUEUR_RACCOURCI
     if marqueur.exists():
         return
@@ -715,43 +619,43 @@ def _proposer_raccourci_bureau() -> None:
 
 def accueillir(etat: dict, supplement: list, delai: float = 600.0,
                configuration_initiale: bool = False) -> int:
-    """Onboarding : connexion Blink puis, sur une installation neuve,
-    validation des réglages avant de laisser « start » continuer.
+    """Onboarding: Blink sign-in then, on a fresh install,
+    settings validation before letting « start » continue.
 
-    Le serveur ouvert ici est temporaire : une fois la connexion réussie, il
-    est arrêté et « start » relance la composition complète, serve compris,
-    pour ne pas avoir à faire rejoindre un processus déjà en cours à la
-    supervision normale. Le coût est un bref redémarrage de l'interface,
-    invisible à l'usage sauf onglet déjà ouvert à ce moment précis.
+    The server opened here is temporary: once sign-in succeeds, it
+    is stopped and « start » relaunches the full composition, serve included,
+    so we need not attach an already-running process to
+    normal supervision. Cost is a brief interface restart,
+    invisible in use except for a tab already open at that moment.
 
-    Deux variables d'environnement, lues nulle part ailleurs que dans les
-    tests et jamais documentées côté utilisateur : BLINK_ONBOARDING_TIMEOUT
-    raccourcit l'attente (le délai réel d'un humain qui lit un e-mail de code
-    2FA n'a pas sa place dans une suite automatisée), BLINK_NO_BROWSER
-    supprime l'ouverture réelle d'un navigateur, que la suite de tests ne
-    doit jamais déclencher (section 12.5).
+    Two environment variables, read nowhere else except in
+    tests and never documented for users: BLINK_ONBOARDING_TIMEOUT
+    shortens the wait (real human time to read a 2FA code email
+    has no place in an automated suite), BLINK_NO_BROWSER
+    skips actually opening a browser, which the test suite must
+    never trigger (section 12.5).
 
-    En mode configuration initiale, seul ``serve --initial-setup`` tourne :
-    aucun worker download/watch/merge n'existe encore. Le parent attend le
-    marqueur écrit par /api/reglages, arrête ce serveur temporaire, puis lance
-    la composition complète depuis la racine de stockage désormais choisie."""
+    In initial-setup mode, only ``serve --initial-setup`` runs:
+    no download/watch/merge worker exists yet. The parent waits for the
+    marker written by /api/reglages, stops this temporary server, then launches
+    the full composition from the now-chosen storage root."""
     import os
     import webbrowser
 
     delai = float(os.environ.get("BLINK_ONBOARDING_TIMEOUT", delai))
-    # Même bloc fixe que la composition complète (runtime.standard() : port,
-    # fuseau et hôte de confiance enregistrés), suivi du supplément tapé à la
-    # main, qui l'emporte (argparse retient la dernière occurrence). Sans lui,
-    # le serveur temporaire partait sur le 8765 codé en dur de serve.py alors
-    # que l'utilisateur avait choisi un autre port dans les réglages - souvent
-    # précisément parce que 8765 était pris : session expirée + port
-    # personnalisé = connexion impossible (audit du 2026-09-24).
+    # Same fixed block as full composition (runtime.standard(): port,
+    # timezone and trusted host saved), followed by hand-typed supplement,
+    # which wins (argparse keeps the last occurrence). Without it,
+    # the temporary server started on serve.py's hard-coded 8765 while
+    # the user had chosen another port in settings - often
+    # precisely because 8765 was taken: expired session + custom
+    # port = impossible sign-in (audit 2026-09-24).
     options_serveur = [*runtime.standard()[1:runtime.LONGUEUR_BLOC_SERVE],
                        *supplement]
-    # Le parseur minimal commun comprend les deux formes argparse,
-    # ``--port 9000`` et ``--port=9000``. Une seconde extraction manuelle
-    # vivait auparavant ici : la forme avec ``=`` lançait bien serve sur le
-    # port demandé, mais l'onboarding sondait et ouvrait encore 8765.
+    # Shared minimal parser understands both argparse forms,
+    # ``--port 9000`` and ``--port=9000``. A second manual extraction
+    # used to live here: the ``=`` form did launch serve on the
+    # requested port, but onboarding still probed and opened 8765.
     port = _port_demande(options_serveur)
 
     connexion_requise = not bool(etat.get("authenticated"))
@@ -783,10 +687,10 @@ def accueillir(etat: dict, supplement: list, delai: float = 600.0,
         print(msg("interface_arretee_avant", etape=etape, code=processus.returncode))
         return processus.returncode or 1
 
-    # Propriétaire jusqu'au bout (5.16) : sur toute issue, ce serveur
-    # temporaire est arrêté avant de rendre la main. Sur succès, « start »
-    # relance juste après la composition complète, serve compris, plutôt que
-    # de faire rejoindre ce processus déjà en cours à la supervision normale.
+    # Owner to the end (5.16): on any exit, this temporary server
+    # is stopped before returning. On success, « start »
+    # relaunches right after the full composition, serve included, rather than
+    # attaching this already-running process to normal supervision.
     try:
         limite = time.monotonic() + delai
         pret = False
@@ -827,16 +731,16 @@ def accueillir(etat: dict, supplement: list, delai: float = 600.0,
                 print(msg("connexion_reussie_resume", resume=resume))
                 connexion_annoncee = True
                 if configuration_initiale:
-                    # La saisie du code 2FA ne doit pas consommer le temps
-                    # laissé pour lire et valider le panneau qui suit.
+                    # Entering the 2FA code must not consume the time
+                    # left to read and validate the panel that follows.
                     limite = time.monotonic() + delai
             if authentifie and not configuration_initiale:
                 return 0
             if authentifie and runtime.configuration_initiale_effectuee():
-                # /api/reglages pose le marqueur juste avant d'envoyer sa
-                # réponse. Cette marge lui laisse le temps d'être transmise et
-                # lue par un navigateur lent (notamment sous Windows 7) avant
-                # que le finally ci-dessous coupe le serveur temporaire.
+                # /api/reglages sets the marker just before sending its
+                # response. This margin lets it be delivered and
+                # read by a slow browser (especially on Windows 7) before
+                # the finally below shuts down the temporary server.
                 time.sleep(0.75)
                 print(msg("reglages_initiaux_enregistres"))
                 return 0
@@ -853,11 +757,11 @@ def accueillir(etat: dict, supplement: list, delai: float = 600.0,
 
 
 def _groupe_persistant(groupe: list) -> bool:
-    """Vrai si ce groupe reste actif jusqu'à un arrêt explicite.
+    """True if this group stays active until an explicit stop.
 
-    ``argparse`` accepte aussi bien ``--loop 10`` que ``--loop=10``. Garder
-    cette reconnaissance à un seul endroit évite qu'une commande soit lancée
-    en boucle tout en étant classée comme ponctuelle par le superviseur.
+    ``argparse`` accepts both ``--loop 10`` and ``--loop=10``. Keeping
+    this recognition in one place avoids a command being launched
+    in a loop while classified as one-shot by the supervisor.
     """
     if not groupe:
         return False
@@ -872,26 +776,26 @@ def _groupe_persistant(groupe: list) -> bool:
 
 
 def _sortie_propre_sur_sigterm() -> None:
-    """Fait d'un SIGTERM une sortie de code 0 pour le superviseur.
+    """Turns SIGTERM into exit code 0 for the supervisor.
 
-    Sous launchd, seule une sortie de code 0 compte comme voulue : tué par le
-    SIGTERM de « stop », le superviseur passait pour planté, et l'agent de
-    démarrage automatique le relançait aussitôt, défaisant l'arrêt, la mise à
-    jour et « Appliquer » (issue #31, vérifié sur un runner macOS). Un simple
-    gestionnaire de signal ne suffirait pas : l'icône de la barre des menus
-    retient le fil principal dans AppKit, où Python ne l'exécuterait pas. Le
-    signal est donc bloqué, puis attendu par un fil dédié (sigwait).
+    Under launchd, only exit code 0 counts as intentional: killed by
+    « stop »'s SIGTERM, the supervisor looked crashed, and the autostart
+    agent relaunched it immediately, undoing stop, update
+    and « Apply » (issue #31, verified on a macOS runner). A simple
+    signal handler would not suffice: the menu bar icon
+    holds the main thread in AppKit, where Python would not run it. The
+    signal is therefore blocked, then waited on by a dedicated thread (sigwait).
 
-    Appelée après le lancement des enfants et avant la création de tout fil :
-    ceux-ci héritent du blocage, les enfants déjà lancés non. Tout processus
-    blink2video lancé plus tard le lève à son démarrage
-    (runtime.debloquer_sigterm). « stop » arrête lui-même les enfants, d'après
-    leurs fiches : sortir sans attendre suffit, et une attente plus longue que
-    son délai de grâce finirait en SIGKILL, que launchd relancerait."""
+    Called after launching children and before creating any thread:
+    those inherit the block, already-launched children do not. Any
+    blink2video process launched later clears it at startup
+    (runtime.debloquer_sigterm). « stop » stops children itself, from
+    their records: exiting without waiting is enough, and waiting longer than
+    its grace period would end in SIGKILL, which launchd would relaunch."""
     import os
     import signal
     if not hasattr(signal, "pthread_sigmask"):
-        return  # Windows : taskkill n'envoie pas de signal.
+        return  # Windows: taskkill does not send a signal.
     signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
 
     def attendre() -> None:
@@ -902,10 +806,10 @@ def _sortie_propre_sur_sigterm() -> None:
 
 
 def _migrer_agents_macos() -> None:
-    """Remet à jour un agent launchd posé par une version antérieure (voir
-    autostart.migrer_agents_macos). launchd lance le superviseur : c'est donc
-    lui qui, au premier démarrage d'une nouvelle version, corrige l'agent qui
-    l'a lancé. Jamais au prix du démarrage lui-même."""
+    """Updates a launchd agent installed by an older version (see
+    autostart.migrer_agents_macos). launchd launches the supervisor: so
+    on first start of a new version, it fixes the agent that
+    launched it. Never at the cost of startup itself."""
     if sys.platform != "darwin":
         return
     try:
@@ -916,16 +820,16 @@ def _migrer_agents_macos() -> None:
 
 
 def executer(groupes: list) -> int:
-    """Exécute les verbes cités, ensemble.
+    """Runs the cited verbs together.
 
-    Un seul verbe est traité dans ce processus, ce qui garde la sortie et le
-    code de retour directs. Plusieurs sont lancés côte à côte et attendus : ils
-    s'arrêtent ensemble, faute de quoi un Ctrl+C laisserait derrière lui des
-    programmes sans personne pour les arrêter."""
+    A single verb is handled in this process, keeping output and
+    return code direct. Several are launched side by side and awaited: they
+    stop together, otherwise Ctrl+C would leave
+    programs with nobody to stop them."""
     if len(groupes) == 1 and groupes[0][0] == "start":
-        # L'aide doit s'afficher, pas déclencher la configuration : sans ce
-        # traitement, « start --help » lançait les boucles et ne rendait jamais
-        # la main, ce que la suite de tests a montré en se bloquant dessus.
+        # Help must display, not trigger setup: without this
+        # handling, « start --help » launched loops and never
+        # returned, which the test suite showed by hanging on it.
         if {"-h", "--help"} & set(groupes[0][1:]):
             print(msg("start_aide_usage"))
             print()
@@ -936,47 +840,47 @@ def executer(groupes: list) -> int:
             print(msg("start_aide_options"))
             print(msg("start_aide_stop"))
             return 0
-        # « start » n'est pas un travail de plus : c'est le nom de la
-        # composition recommandée, options comprises. Les options données après
-        # lui s'ajoutent au premier verbe, « serve », d'où le --port qui marche.
+        # « start » is not another job: it is the name of the
+        # recommended composition, options included. Options given after
+        # it append to the first verb, « serve », hence working --port.
         supplement = groupes[0][1:]
-        # Calculé avant le verrou : le raccourci "déjà démarré" ci-dessous
-        # comme le repli BusyError plus bas doivent tous deux regarder le
-        # port explicitement demandé, pas seulement celui enregistré ; et le
-        # repli en a besoin même quand l'acquisition du verrou échoue avant
-        # d'avoir pu le calculer lui-même (revue du 27/08, bug 5).
+        # Computed before the lock: the "already running" shortcut below
+        # and the BusyError fallback further down must both look at the
+        # explicitly requested port, not only the saved one; and the
+        # fallback needs it even when lock acquisition fails before
+        # it could compute it itself (review 27/08, bug 5).
         port_demande = _port_demande(supplement)
-        # E-01 : la session enregistrée est réellement testée avant de lancer
-        # quoi que ce soit de permanent, pas seulement vérifiée présente sur
-        # disque (5.3, 5.4). Si elle manque ou n'est plus valide, l'interface
-        # s'ouvre seule d'abord, avec la page de connexion prête, et les
-        # boucles de fond n'apparaissent qu'après un succès confirmé (5.12,
+        # E-01: saved session is actually tested before launching
+        # anything permanent, not only checked present on
+        # disk (5.3, 5.4). If missing or invalid, the interface
+        # opens alone first, with the sign-in page ready, and background
+        # loops appear only after confirmed success (5.12,
         # 5.15, 5.16).
         #
-        # Le verrou couvre tout ce bloc, jusqu'au lancement effectif des
-        # processus : un raccourci bureau cliqué deux fois de suite (ou un
-        # double-clic Explorer qui part deux fois) lance sinon deux « start »
-        # en parallèle, tous deux passant la vérification du port avant que
-        # le premier n'ait fini de démarrer. Le second cède la place plutôt
-        # que de tenter un démarrage concurrent.
+        # Lock covers this whole block, until processes actually launch:
+        # a desktop shortcut clicked twice in a row (or Explorer double-click
+        # firing twice) otherwise launches two « start »
+        # in parallel, both passing port check before
+        # the first finishes starting. The second yields rather
+        # than attempting concurrent startup.
         try:
             with runtime.verrou("start", "start", attente=0):
-                # Une instance écoute déjà : « start » se comporte alors
-                # comme « open », sans rien relancer. Le même raccourci
-                # (bureau ou autostart) sert donc aussi bien à démarrer
-                # qu'à rouvrir l'interface déjà en place, sans avoir à
-                # composer deux commandes séparées ni à ouvrir une seconde
-                # fenêtre de console pour le vérifier.
+                # An instance is already listening: « start » then behaves
+                # like « open », without relaunching. The same shortcut
+                # (desktop or autostart) thus both starts
+                # and reopens the interface already running, without
+                # composing two separate commands or opening a second
+                # console window to check.
                 port = port_demande or runtime.lire_reglages()["port"]
                 if _port_ouvert(port):
                     return ouvrir(["--port", str(port)])
 
-                # Décidé AVANT la connexion : sur une installation neuve,
-                # celle-ci crée blink_auth.json. Si on évaluait ensuite les
-                # traces d'une ancienne installation, cette session toute
-                # fraîche ferait sauter à tort le panneau initial. Le marqueur
-                # « en attente » de runtime garde aussi cette décision après
-                # une fermeture du navigateur au milieu du parcours.
+                # Decided BEFORE sign-in: on a fresh install,
+                # sign-in creates blink_auth.json. If we then evaluated
+                # traces from an old install, this brand-new
+                # session would wrongly skip the initial panel. runtime's
+                # « pending » marker also keeps this decision after
+                # closing the browser mid-flow.
                 configuration_initiale = runtime.configuration_initiale_requise()
                 runtime.bootstrap()
                 import blink_auth
@@ -988,12 +892,12 @@ def executer(groupes: list) -> int:
                     if code != 0:
                         return code
                 composition = runtime.standard()
-                # Le bloc fixe (serve, --port, valeur, --timezone, valeur,
-                # --trusted-host, valeur) précède toujours le supplément : un
-                # « --port »/« --timezone »/« --trusted-host » tapé à la main
-                # arrive donc après celui, déjà présent, de la configuration
-                # enregistrée, et l'emporte (argparse retient la dernière
-                # occurrence d'une option).
+                # Fixed block (serve, --port, value, --timezone, value,
+                # --trusted-host, value) always precedes supplement: a
+                # hand-typed « --port »/« --timezone »/« --trusted-host »
+                # therefore comes after the one already in saved
+                # configuration, and wins (argparse keeps the last
+                # occurrence of an option).
                 n = runtime.LONGUEUR_BLOC_SERVE
                 code = executer(runtime.decouper_verbes(
                     [*composition[:n], *supplement, *composition[n:]]))
@@ -1020,10 +924,10 @@ def executer(groupes: list) -> int:
     if len(groupes) == 1:
         verbe, *arguments = groupes[0]
         if verbe in DELEGUES:
-            # « update » ne s'inscrit pas : une fiche sert à retrouver ce qu'il
-            # faut arrêter, et la mise à jour est précisément ce qui arrête tout
-            # le reste. Inscrite, elle se trouvait elle-même dans la liste et se
-            # tuait au premier « stop », en silence et à mi-chemin.
+            # « update » does not register: a record finds what to
+            # stop, and update is precisely what stops everything
+            # else. Registered, it found itself in the list and
+            # killed itself on the first « stop », silently and mid-way.
             if verbe != "update":
                 try:
                     with runtime.verrou_controle("launch", attente=10):
@@ -1033,10 +937,10 @@ def executer(groupes: list) -> int:
                     return 1
             return deleguer(verbe, arguments)
         if _groupe_persistant(groupes[0]):
-            # Un download lancé seul ne passe pas par le superviseur de la
-            # branche multi-verbes. Sans fiche, ``stop`` concluait donc « rien
-            # ne tourne » alors que la boucle restait active. Publier le parent
-            # courant suffit, comme pour un verbe délégué lancé seul.
+            # A download launched alone does not go through the multi-verb
+            # branch supervisor. Without a record, ``stop`` thus concluded « nothing
+            # running » while the loop stayed active. Publishing the current
+            # parent is enough, like a delegated verb launched alone.
             try:
                 with runtime.verrou_controle("launch", attente=10):
                     runtime.inscrire_instance(groupes)
@@ -1046,19 +950,19 @@ def executer(groupes: list) -> int:
         sys.argv = ["blink2video", verbe, *arguments]
         return asyncio.run(main(parse_args()))
 
-    # Ce qui se termine s'enchaîne, ce qui ne se termine pas tourne à côté.
-    # « serve » porte un --loop implicite : il ne rend jamais la main, comme
-    # tout verbe à qui on demande de se répéter. Les autres font un passage et
-    # s'arrêtent, donc les faire tourner en même temps n'aurait aucun sens :
-    # l'assemblage démarrerait pendant que le téléchargement écrit encore.
+    # What finishes chains; what does not runs alongside.
+    # « serve » carries an implicit --loop: it never returns, like
+    # any verb asked to repeat. Others run once and
+    # stop, so running them together would make no sense:
+    # merge would start while download is still writing.
     persistant = [g for g in groupes if _groupe_persistant(g)]
     ponctuels = [g for g in groupes if g not in persistant]
 
     lances = []
     try:
-        # Section courte seulement : publier la fiche et ses enfants comme un
-        # seul lancement face à stop/restart. Le verrou est libéré avant la
-        # surveillance, qui peut durer des jours.
+        # Short section only: publish the record and its children as one
+        # launch for stop/restart. Lock is released before
+        # monitoring, which may last days.
         with runtime.verrou_controle("launch", attente=10):
             runtime.inscrire_instance(groupes)
             try:
@@ -1066,22 +970,22 @@ def executer(groupes: list) -> int:
                     lances.append((verbe, runtime.demarrer(
                         runtime.self_command(verbe, *arguments), cwd=str(runtime.app_dir()),
                         creationflags=runtime.flags_enfant(),
-                        # Sa propre session hors Windows : « stop » peut alors tuer son
-                        # groupe, ffmpeg compris, sans emporter le terminal qui a lancé
-                        # l'ensemble.
+                        # Its own session off Windows: « stop » can then kill its
+                        # group, ffmpeg included, without taking the terminal that launched
+                        # the whole set.
                         start_new_session=(sys.platform != "win32"))))
                     print(msg("lance", commande=f"{verbe} {' '.join(arguments)}".rstrip()))
             except Exception:
-                # Un verbe de la composition a échoué à démarrer (ex. OSError) :
-                # ceux déjà lancés avant lui ne doivent jamais devenir des
-                # orphelins invisibles pour stop. inscrire_instance(groupes,
-                # [...]) n'est atteint qu'après la boucle complète - sans ce
-                # rollback, la fiche déjà écrite juste au-dessus (sans enfants)
-                # ne référence que ce process superviseur, qui va lui-même se
-                # terminer sous peu à cause de cette même exception, laissant
-                # le premier enfant tourner indéfiniment sans que stop ne le
-                # voie (trouvé en auditant ce fichier, vérifié par exécution
-                # réelle : mock du 2e Popen en échec).
+                # A composition verb failed to start (e.g. OSError):
+                # those already launched before it must never become
+                # orphans invisible to stop. inscrire_instance(groupes,
+                # [...]) is only reached after the full loop - without this
+                # rollback, the record already written just above (no children)
+                # only references this supervisor process, which will itself
+                # exit soon because of the same exception, leaving
+                # the first child running indefinitely with stop not
+                # seeing it (found auditing this file, verified by real
+                # execution: mock 2nd Popen failure).
                 for _, p in lances:
                     runtime.arreter_processus(p.pid, avec_descendance=True)
                 raise
@@ -1092,10 +996,10 @@ def executer(groupes: list) -> int:
     _sortie_propre_sur_sigterm()
     _migrer_agents_macos()
 
-    # Surveillés ensemble plutôt qu'attendus l'un après l'autre : un verbe qui
-    # meurt à la première seconde doit se voir tout de suite, et non à la fin
-    # d'une boucle qui tournera des jours. Les autres continuent, l'interface
-    # qui tombe n'étant pas une raison d'arrêter la surveillance.
+    # Monitored together rather than awaited one after another: a verb that
+    # dies in the first second must be seen immediately, not at the end
+    # of a loop that will run for days. Others continue; the interface
+    # going down is not a reason to stop monitoring.
     pire = 0
     annonces = set()
 
@@ -1111,15 +1015,15 @@ def executer(groupes: list) -> int:
                   else msg("arrete_verbe_normal", verbe=verbe))
 
     def surveiller(sur_fin=None) -> None:
-        # Purge des fiches d'instances mortes sans passage par « stop » (kill
-        # externe, plantage, coupure de courant) : lire_instances() les
-        # nettoie déjà comme effet de bord de sa lecture, mais rien ne
-        # l'appelait plus tant que la session tourne ici sans redémarrer,
-        # parfois des jours (constaté en réel, 2026-09-01 : fiches vieilles de
-        # plusieurs jours toujours dans .blink_run). C'est ce tour, pas
-        # relever_arrets() ni un_tour() d'un verbe, qui vit aussi longtemps
-        # que la session : la responsabilité reste ici plutôt que dispersée
-        # dans un verbe dont le rôle documenté est autre chose.
+        # Purge dead instance records without going through « stop » (external
+        # kill, crash, power loss): lire_instances() already
+        # cleans them as a side effect of reading, but nothing
+        # called it while the session runs here without restarting,
+        # sometimes for days (seen in production, 2026-09-01: records days old
+        # still in .blink_run). This loop, not
+        # relever_arrets() nor a verb's un_tour(), lives as long
+        # as the session: responsibility stays here rather than spread
+        # into a verb whose documented role is something else.
         MENAGE_INSTANCES_SECONDES = 600
         prochain_menage = time.monotonic() + MENAGE_INSTANCES_SECONDES
         while any(processus.poll() is None for _, processus in lances):
@@ -1128,25 +1032,25 @@ def executer(groupes: list) -> int:
                 runtime.lire_instances(journal=print)
                 prochain_menage = time.monotonic() + MENAGE_INSTANCES_SECONDES
             time.sleep(1)
-        # Le dernier processus (ou tous, s'ils ont fini avant notre premier
-        # passage) rend la condition du while fausse. Il faut donc une collecte
-        # terminale explicite, faute de quoi son code de sortie disparaît et un
-        # échec isolé est annoncé comme un succès.
+        # The last process (or all, if they finished before our first
+        # pass) makes the while condition false. An explicit final
+        # collection is therefore needed, otherwise its exit code vanishes and an
+        # isolated failure is reported as success.
         relever_arrets()
         if sur_fin:
             sur_fin()
 
-    # Repli sur le port configuré, pas 8765 en dur (même défaut incohérent
-    # que le bug 5, revue du 27/08) : n'intervient que si serve tourne sans
-    # --port explicite dans ses arguments, ce qui n'arrive plus via start
-    # (composition toujours pourvue) mais reste possible pour un « serve »
-    # tapé seul.
+    # Fallback to configured port, not hard-coded 8765 (same inconsistent default
+    # as bug 5, review 27/08): only applies if serve runs without
+    # explicit --port in its arguments, which no longer happens via start
+    # (composition always provided) but remains possible for « serve »
+    # typed alone.
     port = runtime.lire_reglages()["port"]
     for verbe, *arguments in persistant:
-        # Même lecture que le serveur : la dernière occurrence de --port
-        # l'emporte, et la forme --port=9555 compte aussi. start place les
-        # options enregistrées avant les explicites : la première occurrence
-        # envoyait l'icône sur l'ancien port (audit du 26/09/2026, B05).
+        # Same reading as the server: last --port occurrence
+        # wins, and --port=9555 form counts too. start places
+        # saved options before explicit ones: the first occurrence
+        # sent the icon to the old port (audit 26/09/2026, B05).
         demande = _port_demande(arguments) if verbe == "serve" else None
         if demande is not None:
             port = demande
@@ -1154,27 +1058,27 @@ def executer(groupes: list) -> int:
     import tray
 
     def nettoyer_lances() -> None:
-        # Arrêt coopératif d'abord (revue du 27/08) : le drapeau laisse
-        # chaque verbe finir son tour en cours puis sortir de lui-même -
-        # entre deux tours de repeter() (watch/download/merge) ou par
-        # shutdown() entre deux requêtes (serve) - plutôt que d'être tué en
-        # plein milieu. arreter_processus(avec_descendance=True) ne sert
-        # plus qu'en repli, passé le délai de grâce, pour ce qui n'a pas eu
-        # le temps de sortir seul. ffmpeg (que merge ne pilote pas de façon
-        # coopérative, processus tiers) y passe presque toujours par ce
-        # chemin, tué avec son parent via /T - .terminate() seul, avant ce
-        # correctif, ne touchait que le processus immédiat, ne tuait jamais
-        # ses enfants, et n'attendait pas la fin réelle (bug 6).
+        # Cooperative stop first (review 27/08): the flag lets
+        # each verb finish its current round then exit on its own -
+        # between repeter() rounds (watch/download/merge) or via
+        # shutdown() between requests (serve) - rather than being killed
+        # mid-run. arreter_processus(avec_descendance=True) is only
+        # fallback, past the grace period, for what did not have
+        # time to exit alone. ffmpeg (which merge does not drive
+        # cooperatively, third-party process) almost always goes through this
+        # path, killed with its parent via /T - .terminate() alone, before this
+        # fix, only touched the immediate process, never killed
+        # its children, and did not wait for real exit (bug 6).
         #
-        # Appelée directement par le menu Arrêter/Redémarrer de l'icône de
-        # zone de notification (tray.executer, plus bas), pas seulement
-        # depuis ce finally : passer par un « restart » détaché tout seul
-        # laissait des processus vivants sur Windows 7 sans qu'on ait pu
-        # établir pourquoi (icône disparue, rien derrière) - direct et
-        # synchrone, ça ne dépend plus de ce second processus. Idempotente
-        # (poll() déjà non-None ne refait rien) : l'appeler deux fois (ici et
-        # depuis le finally) ne coûte qu'un aller-retour inutile si la
-        # première a déjà tout nettoyé.
+        # Called directly from the notification area icon Stop/Restart menu
+        # (tray.executer, below), not only
+        # from this finally: going through a detached « restart » alone
+        # left live processes on Windows 7 with no clear
+        # reason (icon gone, nothing behind) - direct and
+        # synchronous, it no longer depends on that second process. Idempotent
+        # (poll() already non-None does nothing): calling twice (here and
+        # from finally) only costs a useless round trip if the
+        # first already cleaned everything.
         runtime.demander_arret()
         limite = time.monotonic() + 15
         while time.monotonic() < limite and any(p.poll() is None for _, p in lances):
@@ -1182,9 +1086,9 @@ def executer(groupes: list) -> int:
         for _, processus in lances:
             if processus.poll() is None:
                 runtime.arreter_processus(processus.pid, avec_descendance=True)
-        # taskkill est normalement synchrone, mais vérifier le résultat plutôt
-        # que l'espérer. Si un processus résiste, garder le drapeau et la fiche
-        # permet à un prochain stop de le retrouver au lieu de l'orpheliner.
+        # taskkill is normally synchronous, but verify the result rather
+        # than hoping. If a process resists, keeping the flag and record
+        # lets the next stop find it instead of orphaning it.
         limite_forcee = time.monotonic() + 5
         while (time.monotonic() < limite_forcee
                and any(p.poll() is None for _, p in lances)):
@@ -1192,15 +1096,15 @@ def executer(groupes: list) -> int:
         if not any(p.poll() is None for _, p in lances):
             runtime.effacer_arret_demande()
 
-    # Toute la vie des processus persistants est couverte, étapes ponctuelles
-    # comprises : une interruption (Ctrl+C) ou un échec de lancement pendant
-    # l'une d'elles laissait tourner les persistants, sans plus personne pour
-    # les arrêter (audit du 26/09/2026, B06). Sous POSIX, ils ont leur propre
-    # session : le signal du terminal ne les atteint pas.
+    # Entire lifetime of persistent processes is covered, one-shot steps
+    # included: interruption (Ctrl+C) or launch failure during
+    # one of them left persistents running, with nobody left to
+    # stop them (audit 26/09/2026, B06). On POSIX, they have their own
+    # session: the terminal signal does not reach them.
     pire_ponctuel = 0
     try:
-        # Les passages uniques, l'un après l'autre, dans l'ordre où ils sont
-        # cités.
+        # One-shot passes, one after another, in the order they are
+        # cited.
         for verbe, *arguments in ponctuels:
             print(msg("etape_verbe", commande=f"{verbe} {' '.join(arguments)}".rstrip()))
             resultat = runtime.lancer(
@@ -1211,10 +1115,10 @@ def executer(groupes: list) -> int:
         if not lances:
             return pire_ponctuel
 
-        # L'icône de zone de notification (Ouvrir/Redémarrer/Arrêter) exige
-        # le thread principal sous macOS : la surveillance des verbes passe
-        # alors sur un thread à part, qui referme l'icône si l'un d'eux
-        # meurt de lui-même (crash), pour ne pas laisser une icône morte.
+        # Notification area icon (Open/Restart/Stop) requires
+        # the main thread on macOS: verb monitoring moves
+        # to a separate thread, which closes the icon if one of them
+        # dies on its own (crash), to avoid leaving a dead icon.
         if tray.disponible():
             fin = threading.Event()
             veilleur = threading.Thread(target=surveiller,
@@ -1223,54 +1127,54 @@ def executer(groupes: list) -> int:
             try:
                 tray.executer(port, fin, nettoyer_lances)
             except Exception:
-                # L'icône a échoué en cours de route (backend Linux qui se
-                # dérobe, par exemple) : le thread de surveillance, lui,
-                # continue, on se contente de l'attendre.
+                # Icon failed mid-run (Linux backend vanishing,
+                # for example): the monitoring thread
+                # continues; we just wait for it.
                 pass
             veilleur.join()
         else:
             surveiller()
     except KeyboardInterrupt:
-        # Sans processus persistant, rien à nettoyer ici : l'interruption
-        # remonte comme avant.
+        # With no persistent process, nothing to clean here: interruption
+        # propagates as before.
         if not lances:
             raise
         print(msg("interruption_clavier"))
     finally:
-        # Jamais sans enfant : nettoyer_lances() pose le drapeau d'arrêt
-        # commun, que d'autres processus blink2video liraient.
+        # Never without children: nettoyer_lances() sets the shared stop
+        # flag, which other blink2video processes would read.
         if lances:
             nettoyer_lances()
     return max(pire, pire_ponctuel)
 
 
 def route(argv: list) -> int:
-    """Dispatch pur à partir de sys.argv[1:] : une fonction ordinaire plutôt
-    que du code coincé dans « if __name__ », pour rester testable sans passer
-    par un sous-processus.
+    """Pure dispatch from sys.argv[1:]: an ordinary function rather
+    than code stuck in « if __name__ », to stay testable without a
+    subprocess.
 
-    E-01/5.1 : une liste vide emprunte exactement le même chemin que
-    « start » (préflight compris), pour qu'une installation neuve n'ait plus
-    à découvrir « login » ni « start ». --help et --version gardent leur
-    sens : seule une liste réellement vide déclenche ce court-circuit,
-    jamais une option isolée."""
-    # --bootstrap= n'est déclaré par aucun parseur de verbe : retiré ici,
-    # avant tout parse_args() en aval, sans quoi argparse le rejette comme
-    # argument inconnu avant que bootstrap() ait pu le lire (revue du
-    # 27/08, bug 4 - reproductible avec « download --bootstrap=none »).
+    E-01/5.1: an empty list takes exactly the same path as
+    « start » (preflight included), so a fresh install no longer
+    has to discover « login » or « start ». --help and --version keep their
+    meaning: only a truly empty list triggers this shortcut,
+    never a lone option."""
+    # --bootstrap= is declared by no verb parser: removed here,
+    # before any downstream parse_args(), otherwise argparse rejects it as
+    # unknown argument before bootstrap() could read it (review
+    # 27/08, bug 4 - reproducible with « download --bootstrap=none »).
     argv = runtime.extraire_mode_bootstrap(argv)
     if not argv:
         return executer(runtime.decouper_verbes(["start"]))
-    # « autostart » vient nécessairement en tête : il n'exécute rien, il
-    # ordonnance ce qui suit. Les autres verbes se citent dans n'importe
-    # quel ordre, chacun suivi de ses options.
+    # « autostart » must come first: it executes nothing, it
+    # schedules what follows. Other verbs may appear in any
+    # order, each followed by its options.
     if argv[0] == "autostart":
         return deleguer("autostart", argv[1:])
     if argv[0] in runtime.VERBES:
         return executer(runtime.decouper_verbes(argv))
-    # Une option avant le premier verbe n'appartient à personne :
-    # « blink2video --loop 5 merge » se lisait jusqu'ici comme une commande
-    # racine qui boucle sur rien, et tournait indéfiniment sans rien faire.
+    # An option before the first verb belongs to nobody:
+    # « blink2video --loop 5 merge » used to read as a root command
+    # looping on nothing, and ran indefinitely doing nothing.
     if argv[0].startswith("-") and argv[0] not in ("-h", "--help", "--version"):
         print(msg("option_avant_verbe", option=argv[0]))
         print(msg("liste_verbes", liste=", ".join(runtime.VERBES)))

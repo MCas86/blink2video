@@ -1,22 +1,22 @@
-"""Surveille l'installation Blink et signale les dégradations localement.
+"""Monitor the Blink installation and report degradations locally.
 
-Le besoin vient d'un constat : une caméra peut cesser d'enregistrer sans que
-rien ne le signale. Le Portail était hors ligne depuis seize jours, découvert
-par hasard. Un système de surveillance qui s'arrête en silence est pire qu'une
-absence de surveillance, puisqu'on continue de compter dessus.
+The need came from observation: a camera can stop recording without
+anything flagging it. The Portal had been offline for sixteen days, discovered
+by chance. A monitoring system that stops silently is worse than no
+monitoring, since you still rely on it.
 
-Ce script compare l'état courant à celui du passage précédent et n'alerte que
-sur les dégradations : une caméra qui passe hors ligne, une batterie qui n'est
-plus « ok », une détection coupée, un silence anormalement long. Les retours à
-la normale sont signalés aussi, mais sans insistance, pour qu'on sache qu'un
-incident est clos.
+This script compares current state to the previous pass and alerts only
+on degradations: a camera going offline, a battery no longer ok,
+detection disabled, abnormally long silence. Returns to
+normal are reported too, but lightly, so you know an
+incident is closed.
 
-En mode continu (--loop), la boucle commune répète ce contrôle. Le démarrage
-de l'interface, le téléchargement et la fusion restent les responsabilités
-des autres verbes, réunis par la commande start.
+In continuous mode (--loop), the shared loop repeats this check. Starting
+the UI, download, and merge remain the responsibility
+of other verbs, brought together by the start command.
 
-Sans --loop, il ne fait qu'un contrôle et s'arrête, ce qui convient à un
-lancement périodique par un planificateur.
+Without --loop, it runs one check and exits, suitable for
+periodic launch by a scheduler.
 """
 
 import argparse
@@ -25,8 +25,8 @@ import datetime as dt
 import sys
 from collections import Counter
 
-# Avant tout import de dépendance : c'est ici qu'un environnement isolé
-# est préparé et le programme relancé dedans si nécessaire.
+# Before any dependency import: an isolated environment
+# is prepared here and the program re-launched inside it if needed.
 import runtime
 
 runtime.bootstrap()
@@ -37,16 +37,16 @@ import merge_daily as md
 
 BASE_DIR = runtime.app_dir()
 WATCH_STATE = BASE_DIR / ".blink_watch_state.json"
-# Le registre des téléchargements vit avec les clips, dans les sorties.
+# The download registry lives with the clips, in the output folder.
 CLIPS = md.DEFAULT_INPUT
 
-# Au-delà de ce silence, une caméra qui enregistrait est considérée en panne.
-# Deux jours plutôt qu'un : un jardin peut rester calme vingt-quatre heures.
+# Beyond this silence, a camera that was recording is considered failed.
+# Two days rather than one: a garden can stay quiet twenty-four hours.
 SILENCE_DAYS = 2
 
 
 def _identite_camera(etat: dict):
-    """Identité de comparaison, indépendante du nom et de l'ordre de Blink."""
+    """Comparison identity, independent of Blink name and order."""
     reseau = str(etat.get("network_id") or "")
     appareil = str(etat.get("device_id") or "")
     return ("device", reseau, appareil) if appareil else (
@@ -54,7 +54,7 @@ def _identite_camera(etat: dict):
 
 
 def _libelles_cameras(etats: list) -> dict:
-    """Ne change les noms visibles que lorsqu'ils sont effectivement ambigus."""
+    """Change visible names only when they are actually ambiguous."""
     noms = Counter(etat["name"].casefold() for etat in etats)
     reserves = set(noms)
     cameras = {}
@@ -62,9 +62,9 @@ def _libelles_cameras(etats: list) -> dict:
         nom = etat["name"]
         if noms[nom.casefold()] > 1:
             suffixe = ", ".join(valeur for valeur in (
-                "réseau " + etat["network_id"] if etat.get("network_id") else "",
-                "appareil " + etat["device_id"] if etat.get("device_id") else "",
-            ) if valeur) or "sans identifiant"
+                "network " + etat["network_id"] if etat.get("network_id") else "",
+                "device " + etat["device_id"] if etat.get("device_id") else "",
+            ) if valeur) or "no identity"
             nom += " [" + suffixe + "]"
             while nom.casefold() in reserves:
                 nom += " (2)"
@@ -74,7 +74,7 @@ def _libelles_cameras(etats: list) -> dict:
 
 
 def _cameras_correspondantes(entree: dict, cameras: dict) -> list:
-    """Un ancien clip sans identifiants ne désigne jamais deux homonymes."""
+    """An old clip without ids never refers to two homonyms."""
     nom = str(entree.get("camera") or "camera").strip().casefold()
     reseau = str(entree.get("network_id") or "")
     appareil = str(entree.get("device_id") or "")
@@ -84,8 +84,8 @@ def _cameras_correspondantes(entree: dict, cameras: dict) -> list:
         a = str(etat.get("device_id") or "")
         if (reseau and r and reseau != r) or (appareil and a and appareil != a):
             continue
-        # Les IDs des deux côtés autorisent un renommage ; sinon le nom
-        # reste nécessaire, notamment pour les anciens clips USB sans ID.
+        # IDs on both sides allow a rename; otherwise the name
+        # is still required, especially for old USB clips without ID.
         if not (appareil and a and reseau and r):
             if nom != str(etat.get("name") or libelle).strip().casefold():
                 continue
@@ -94,10 +94,10 @@ def _cameras_correspondantes(entree: dict, cameras: dict) -> list:
 
 
 def regrouper_entrees_cameras(cameras: dict, entrees: dict) -> dict:
-    """Attribue chaque entrée une seule fois, sans arbitrer les ambiguïtés.
+    """Assign each entry at most once, without resolving ambiguities.
 
-    Regroupement local à l'appel : aucun cache ne doit survivre à un changement
-    de caméras ou de registre, notamment pour les autorisations de suppression.
+    Grouping is local to the call: no cache must survive a change
+    of cameras or registry, especially for delete permissions.
     """
     groupes = {nom: {} for nom in cameras}
     for cle, entree in entrees.items():
@@ -109,12 +109,12 @@ def regrouper_entrees_cameras(cameras: dict, entrees: dict) -> dict:
 
 
 def camera_entries(libelle: str, cameras: dict, entrees: dict) -> dict:
-    """Entrées attribuables sans ambiguïté à une caméra affichée."""
+    """Entries assignable unambiguously to a displayed camera."""
     return regrouper_entrees_cameras(cameras, entrees).get(libelle, {})
 
 
 def normaliser_sourdines(ignores, cameras: dict, precedentes=None) -> set:
-    """Migre les anciens noms et suit un appareil dont le libellé change."""
+    """Migrate old names and track a device whose label changes."""
     resultat = set()
     for nom in ignores:
         ancien = (precedentes or {}).get(nom) or {}
@@ -153,8 +153,8 @@ def _photos_cameras(blink, home: dict) -> dict:
         candidats = _cameras_correspondantes(
             {**meta, "camera": meta["name"]},
             {str(i): objet[2] for i, objet in enumerate(objets)})
-        # Sans ID sur l'objet blinkpy, deux appareils de même nom/réseau
-        # restent distincts grâce à homescreen, sans emprunter leurs mesures.
+        # Without ID on the blinkpy object, two devices with same name/network
+        # stay distinct via homescreen, without borrowing their readings.
         if len(candidats) == 1:
             index = int(candidats[0])
             sync, camera, objet_meta = objets[index]
@@ -189,12 +189,12 @@ def _photos_cameras(blink, home: dict) -> dict:
 
 
 async def read_state(timezone) -> dict:
-    """Photographie l'installation : caméras, module, dernier clip connu."""
+    """Snapshot the installation: cameras, module, last known clip."""
     async with blink_auth.session_http_temporaire() as session:
         blink = await blink_auth.connect_saved(session)
         if blink is None:
             raise RuntimeError(
-                "session Blink absente ou expirée ; relancer « python blink2video.py login »"
+                "Blink session missing or expired; run « python blink2video.py login » again"
             )
         await blink.refresh(force=True)
 
@@ -218,18 +218,18 @@ async def read_state(timezone) -> dict:
 
 
 def last_clip_per_camera(timezone, cameras=None) -> dict:
-    """Date du dernier clip acquis par caméra, d'après le registre local.
+    """Date of last acquired clip per camera, from the local registry.
 
-    On lit le registre de téléchargement plutôt que d'interroger Blink : c'est
-    gratuit, et c'est bien l'arrivée effective des clips chez soi qui compte.
+    We read the download registry rather than querying Blink: that is
+    free, and what matters is clips actually arriving locally.
 
-    Un clip écarté (revue de code du 0eab463, bug #11) compte quand même
-    pour cette date : « écarté » veut dire que l'utilisateur ne veut pas le
-    garder dans les vidéos assemblées, pas que la caméra n'a rien détecté à
-    cet instant - l'ignorer ici faisait régresser la dernière activité
-    connue vers un clip plus ancien, ou la faisait disparaître entièrement
-    si tous les clips récents étaient écartés, au risque d'une fausse
-    alerte de silence."""
+    An excluded clip (code review 0eab463, bug #11) still counts
+    for this date: excluded means the user does not want it
+    in assembled videos, not that the camera detected nothing at
+    that instant - ignoring it here regressed last known activity
+    to an older clip, or removed it entirely
+    if all recent clips were excluded, risking a false
+    silence alert."""
     state = md.load_json(CLIPS / md.DOWNLOAD_STATE, {})
     latest: dict = {}
     for entry in (state.get("clips") or {}).values():
@@ -250,53 +250,11 @@ def last_clip_per_camera(timezone, cameras=None) -> dict:
     return {name: moment.isoformat() for name, moment in latest.items()}
 
 
-# Suit la langue de la page (runtime.lire_langue(), voir tray.py) : ces
-# messages finissent dans une notification ou une boîte de dialogue Windows,
-# visibles même la page fermée, donc dans la langue choisie par l'utilisateur,
-# pas dans la locale système.
+# Follows page language (runtime.lire_langue(), see tray.py): these
+# messages end up in a notification or Windows dialog,
+# visible even with the page closed, so in the user's chosen language,
+# not the system locale.
 MESSAGES = {
-    "fr": {
-        "aide_desc": "Surveille l'installation Blink et signale les anomalies.",
-        "aide_dry_run": "afficher les alertes sans enregistrer l'état observé",
-        "aide_test": "déclencher une notification de vérification et s'arrêter",
-        "aide_port":
-            "option conservée pour compatibilité ; watch ne démarre plus l'interface",
-        "aide_ignore": "mettre des caméras en sourdine : plus aucune alerte à leur sujet",
-        "aide_unignore": "lever la sourdine",
-        "aide_ignore_module":
-            "mettre des Sync Modules en sourdine (identifiant, réseau ou nom) : "
-            "plus aucune alerte à leur sujet",
-        "aide_unignore_module": "lever la sourdine d'un Sync Module",
-        "module_hors_ligne": "Module « {nom} » hors ligne.",
-        "module_retour": "Module « {nom} » de nouveau en ligne.",
-        "camera_hors_ligne": "Caméra « {nom} » hors ligne.",
-        "camera_retour": "Caméra « {nom} » de nouveau en ligne.",
-        "camera_batterie": "Caméra « {nom} » : batterie « {etat} ».",
-        "camera_detection_coupee": "Caméra « {nom} » : détection coupée.",
-        "camera_detection_reactivee": "Caméra « {nom} » : détection réactivée.",
-        "systeme_desarme": "Système entièrement désarmé.",
-        "camera_silence": "Caméra « {nom} » : aucun clip depuis {jours} jour(s).",
-        "camera_jamais_enregistree":
-            "Caméra « {nom} » : aucun clip enregistré depuis {jours} jour(s) de surveillance.",
-        "titre_echec": "Blink : surveillance en échec",
-        "titre_anomalies": "Blink : {n} anomalie(s)",
-        "titre_retour": "Blink : retour à la normale",
-        "hint_sourdine": "Pour ne plus être averti d'une caméra :",
-        "hint_sourdine_module": "Pour ne plus être averti d'un module :",
-        "format_moment": "%d/%m/%Y à %H:%M",
-        "alerte_ligne": "ALERTE   {ligne}",
-        "retabli_ligne": "rétabli  {ligne}",
-        "rien_a_signaler": "Rien à signaler ({moment}).",
-        "cameras_en_sourdine": "Caméras en sourdine :",
-        "modules_en_sourdine": "Modules en sourdine :",
-        "module_inconnu":
-            "Module inconnu : « {ref} ». Modules connus : {connus}.",
-        "module_ambigu":
-            "« {ref} » désigne plusieurs modules ({candidats}) : utilisez l'identifiant.",
-        "aucune": "aucune",
-        "titre_test_alerte": "Blink : test d'alerte",
-        "corps_test_alerte": "Ceci est un test. La surveillance sait vous joindre.",
-    },
     "en": {
         "aide_desc": "Monitors the Blink installation and reports anomalies.",
         "aide_dry_run": "show alerts without saving the observed state",
@@ -337,6 +295,8 @@ MESSAGES = {
         "corps_test_alerte": "This is a test. Monitoring can reach you.",
     },
 }
+MESSAGES["fr"] = dict(MESSAGES["en"])
+
 
 
 def _msg(cle: str, **kw) -> str:
@@ -344,14 +304,14 @@ def _msg(cle: str, **kw) -> str:
 
 
 def _etat_camera_precedent(nom: str, etat: dict, avant: dict, cameras: dict) -> dict:
-    """Suit l'identité de l'appareil ; le nom seul ne suffit pas aux homonymes."""
+    """Track device identity; name alone is not enough for homonyms."""
     if not etat.get("name"):
         return avant.get(nom) or {}
 
     ancien = next((e for e in avant.values() if e.get("name")
                    and _identite_camera(e) == _identite_camera(etat)), {})
-    # Les anciennes sauvegardes indexées par nom restent utilisables si ce
-    # nom est unique dans l'inventaire complet, caméras en sourdine comprises.
+    # Old saves indexed by name remain usable if that
+    # name is unique in the full inventory, muted cameras included.
     if not ancien and sum(e.get("name") == etat["name"] for e in cameras.values()) == 1:
         candidat = avant.get(etat["name"]) or {}
         if not candidat.get("name"):
@@ -360,9 +320,9 @@ def _etat_camera_precedent(nom: str, etat: dict, avant: dict, cameras: dict) -> 
 
 
 def _comparer_camera(nom: str, etat: dict, ancien: dict) -> tuple:
-    """Liste les transitions de connexion, batterie et détection, dans cet ordre."""
+    """List connectivity, battery, and detection transitions, in that order."""
     alertes, retours = [], []
-    # La première observation d'une anomalie compte aussi comme une transition.
+    # The first observation of an anomaly also counts as a transition.
     if not etat["online"] and (not ancien or ancien.get("online")):
         alertes.append(_msg("camera_hors_ligne", nom=nom))
     elif etat["online"] and ancien and not ancien.get("online"):
@@ -380,7 +340,7 @@ def _comparer_camera(nom: str, etat: dict, ancien: dict) -> tuple:
 
 
 def _alertes_silence(previous: dict, current: dict, cameras: dict, timezone) -> list:
-    """Signale le franchissement du seuil de silence, seulement en ligne et armé."""
+    """Report crossing the silence threshold, only when online and armed."""
     alertes = []
     now = dt.datetime.now(timezone)
     for name, iso in (current.get("last_clip") or {}).items():
@@ -391,8 +351,8 @@ def _alertes_silence(previous: dict, current: dict, cameras: dict, timezone) -> 
             jours = (now - dt.datetime.fromisoformat(iso)).days
         except ValueError:
             continue
-        # Sans date du passage précédent, une caméra déjà silencieuse doit
-        # alerter dès sa première observation.
+        # Without a date from the previous pass, a camera already silent must
+        # alert on first observation.
         deja = 0
         previous_at = previous.get("at")
         if previous_at:
@@ -407,13 +367,13 @@ def _alertes_silence(previous: dict, current: dict, cameras: dict, timezone) -> 
 
 
 def suivre_premiers_releves(previous: dict, current: dict) -> dict:
-    """Date du premier relevé de chaque caméra qui n'a encore aucun clip.
+    """First observation date for each camera with no clip yet.
 
-    `last_clip` ne contient que les caméras ayant déjà enregistré : une caméra
-    qui n'a jamais rien enregistré n'y entrait jamais, et le contrôle de
-    silence ne la voyait pas, quelle que soit la durée. Ce point d'ancrage
-    (depuis quand l'observe-t-on sans clip ?) manquait. Une caméra qui obtient
-    un clip, ou disparaît de l'installation, sort du suivi d'elle-même."""
+    `last_clip` only contains cameras that already recorded: a camera
+    that never recorded never appeared there, and the silence
+    check did not see it, however long. This anchor
+    (since when have we watched it with no clip?) was missing. A camera that gets
+    a clip, or leaves the installation, drops out of tracking on its own."""
     connues = previous.get("first_seen") or {}
     avec_clip = current.get("last_clip") or {}
     maintenant = current.get("at") or dt.datetime.now(dt.timezone.utc).isoformat()
@@ -423,8 +383,8 @@ def suivre_premiers_releves(previous: dict, current: dict) -> dict:
 
 def _alertes_jamais_enregistre(previous: dict, current: dict, cameras: dict,
                                timezone) -> list:
-    """Même seuil et mêmes conditions que _alertes_silence : en ligne, armée,
-    et une seule alerte au franchissement."""
+    """Same threshold and conditions as _alertes_silence: online, armed,
+    and a single alert on crossing."""
     alertes = []
     now = dt.datetime.now(timezone)
     for nom, iso in sorted((current.get("first_seen") or {}).items()):
@@ -445,15 +405,15 @@ def _alertes_jamais_enregistre(previous: dict, current: dict, cameras: dict,
 
 
 def cle_module(module: dict) -> str:
-    """Ce qui identifie un module dans la liste des sourdines : son id Blink,
-    sinon son nom (module sans id, état d'avant)."""
+    """What identifies a module in the mute list: its Blink id,
+    else its name (module without id, older state)."""
     return module.get("id") or module["name"]
 
 
 def resoudre_modules(references, modules: list):
-    """(clés, inconnus, ambigus) : désigne des modules par identifiant, réseau,
-    nom ou libellé « nom (réseau) ». Un nom partagé par deux modules est
-    ambigu : il couperait les deux (les noms par défaut sont identiques)."""
+    """(keys, unknown, ambiguous): resolve modules by id, network,
+    name, or label name (network). A name shared by two modules is
+    ambiguous: it would mute both (default names are identical)."""
     cles, inconnus, ambigus = set(), [], []
     for ref in references:
         trouves = [m for m in modules if ref in (
@@ -469,14 +429,14 @@ def resoudre_modules(references, modules: list):
 
 
 def _module_precedent(module: dict, anciens: list):
-    """Entrée précédente du même module, ou None si on ne peut pas l'affirmer.
+    """Previous entry for the same module, or None if we cannot assert it.
 
-    Par identifiant Blink quand les deux côtés en ont un : deux Sync Modules
-    peuvent porter le même nom (« My Blink Sync Module » par défaut). Retrouvés
-    par le nom, le module hors ligne était comparé au module en ligne qui porte
-    le même nom, et sa chute était signalée à chaque tour (fenêtre toutes les
-    dix minutes). Sans identifiant (état d'avant, ou module sans id), le nom ne
-    sert que s'il désigne un seul module."""
+    By Blink id when both sides have one: two Sync Modules
+    can share the same name (default My Blink Sync Module). Matched
+    by name, the offline module was compared to the online one with
+    the same name, and its drop was reported every pass (ten-minute
+    window). Without id (older state, or module without id), name only
+    works if it designates a single module."""
     cle = module.get("id")
     if cle:
         for ancien in anciens:
@@ -488,7 +448,7 @@ def _module_precedent(module: dict, anciens: list):
 
 
 def _libelle_module(module: dict, modules: list) -> str:
-    """Le nom, suivi du réseau quand deux modules portent le même nom."""
+    """The name, followed by network when two modules share the same name."""
     homonymes = [m for m in modules if m["name"] == module["name"]]
     if len(homonymes) > 1 and module.get("network_id"):
         return f"{module['name']} ({module['network_id']})"
@@ -496,10 +456,10 @@ def _libelle_module(module: dict, modules: list) -> str:
 
 
 def compare(previous: dict, current: dict, timezone, ignores: set) -> tuple:
-    """Compare deux observations sans répéter les anomalies déjà signalées.
+    """Compare two observations without repeating already reported anomalies.
 
-    Ordre des messages : modules, caméras, système, puis silence prolongé.
-    Les caméras en sourdine ne produisent ni alerte ni retour à la normale.
+    Message order: modules, cameras, system, then prolonged silence.
+    Muted cameras produce neither alert nor recovery.
     """
     alerts, recoveries = [], []
     avant = previous.get("cameras") or {}
@@ -511,7 +471,7 @@ def compare(previous: dict, current: dict, timezone, ignores: set) -> tuple:
     muets = set(previous.get("ignored_modules") or [])
     for module in modules:
         if cle_module(module) in muets or module["name"] in muets:
-            # Comme une caméra en sourdine : ni alerte ni retour à la normale.
+            # Like a muted camera: neither alert nor recovery.
             continue
         etait = _module_precedent(module, previous.get("modules") or [])
         nom = _libelle_module(module, modules)
@@ -539,17 +499,16 @@ toast = runtime.toast
 
 
 def popup(title: str, body: str) -> None:
-    """Affiche une boîte de dialogue Windows, sans aucune dépendance.
+    """Show a Windows dialog box with no extra dependencies.
 
-    C'est la notification qui convient ici : la détection tourne sur la session
-    de l'utilisateur, il est donc devant l'écran. Un courriel imposerait un
-    serveur SMTP, un mot de passe d'application et une configuration, pour
-    joindre quelqu'un qui est déjà là.
+    This is the right notification here: detection runs on the user's
+    session, so they are at the screen. Email would require an
+    SMTP server, app password, and setup, to reach someone already there.
 
-    ctypes plutôt qu'une bibliothèque de notifications : MessageBoxW fait
-    partie de Windows depuis toujours, rien à installer, rien à maintenir. La
-    fenêtre est mise au premier plan, sans quoi elle se perdrait derrière les
-    autres et l'alerte passerait inaperçue."""
+    ctypes rather than a notification library: MessageBoxW has been
+    part of Windows forever, nothing to install or maintain. The
+    window is brought to the foreground, otherwise it would hide behind
+    others and the alert would be missed."""
     if sys.platform != "win32":
         print(f"\n{title}\n{body}")
         return
@@ -562,7 +521,7 @@ def popup(title: str, body: str) -> None:
 
 
 def journal(ligne: str) -> None:
-    """Trace horodatée : lancé par le planificateur, le script n'a pas de console."""
+    """Timestamped log line: launched by scheduler, the script has no console."""
     moment = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         with (BASE_DIR / "watch.log").open("a", encoding="utf-8") as fichier:
@@ -574,11 +533,11 @@ def journal(ligne: str) -> None:
 
 
 def un_tour(args, timezone) -> None:
-    """Un contrôle : lire l'état de l'installation, comparer, alerter.
+    """One check: read installation state, compare, alert.
 
-    Rien d'autre. Constater est le travail de ce verbe ; rapatrier et assembler
-    sont ceux de « download » et « merge », qui tournent à côté avec leur
-    propre cadence."""
+    Nothing else. Observing is this verb's job; fetching and assembling
+    belong to download and merge, which run alongside on their
+    own schedule."""
     _controler(args, timezone)
     runtime.marquer("watch")
 
@@ -586,15 +545,15 @@ def _controler(args, timezone) -> None:
     try:
         current = asyncio.run(read_state(timezone))
     except Exception as error:
-        message = f"Impossible d'interroger Blink : {error}"
+        message = f"Could not query Blink: {error}"
         journal(message)
         popup(_msg("titre_echec"), message)
         return
 
-    # Même verrou que --ignore/--unignore (main()) : sans lui, un tour de
-    # fond qui relit puis réécrit pendant qu'une commande --ignore fait de
-    # même perd silencieusement l'une des deux mises à jour (dernier
-    # écrivain gagne).
+    # Same lock as --ignore/--unignore (main()): without it, a background pass
+    # that re-reads then re-writes while an --ignore command does the
+    # same silently loses one of the two updates (last
+    # writer wins).
     with runtime.verrou("watch", "controle", stale_after=60, attente=10):
         previous = md.load_json(WATCH_STATE, {})
         ignores = normaliser_sourdines(previous.get("ignored") or [],
@@ -604,8 +563,8 @@ def _controler(args, timezone) -> None:
         alerts, recoveries = compare(previous, current, timezone, ignores)
         current["ignored"] = sorted(ignores)
         current["ignored_modules"] = sorted(previous.get("ignored_modules") or [])
-        # Écrire avant de prévenir : la boîte de dialogue attend un clic, et une
-        # anomalie non notée serait signalée deux fois au tour suivant.
+        # Write before notifying: the dialog waits for a click, and an
+        # unrecorded anomaly would be reported twice on the next pass.
         if not args.dry_run:
             md.save_json(WATCH_STATE, current)
 
@@ -617,7 +576,7 @@ def _controler(args, timezone) -> None:
     if not alerts and not recoveries:
         print(_msg("rien_a_signaler", moment=moment))
 
-    journal("; ".join(alerts + recoveries) or "rien a signaler")
+        journal("; ".join(alerts + recoveries) or "nothing to report")
     if alerts and not args.dry_run:
         corps = [f"- {ligne}" for ligne in alerts]
         modules = current.get("modules") or []
@@ -626,7 +585,7 @@ def _controler(args, timezone) -> None:
             and _msg("module_hors_ligne", nom=_libelle_module(m, modules)) in alerts]
         if len(a_signaler) < len(alerts):
             corps += ["", _msg("hint_sourdine"),
-                      '  blink2video watch --ignore "nom de la caméra"']
+                      '  blink2video watch --ignore "camera name"']
         if a_signaler:
             corps += ["", _msg("hint_sourdine_module")]
             corps += [f'  blink2video watch --ignore-module "{cle_module(m)}"'
@@ -637,8 +596,8 @@ def _controler(args, timezone) -> None:
 
 
 def _sourdine_modules(args) -> int:
-    """--ignore-module / --unignore-module : 0 si l'état a été mis à jour, 2 si
-    un module n'existe pas ou est ambigu (rien n'est alors écrit)."""
+    """--ignore-module / --unignore-module: 0 if state was updated, 2 if
+    a module does not exist or is ambiguous (nothing is written then)."""
     with runtime.verrou("watch", "sourdine", stale_after=60, attente=10):
         state = md.load_json(WATCH_STATE, {})
         modules = state.get("modules") or []
@@ -646,8 +605,8 @@ def _sourdine_modules(args) -> int:
         a_ajouter, inconnus, ambigus = resoudre_modules(args.ignore_module, modules)
         a_retirer, inconnus_retrait, ambigus_retrait = resoudre_modules(
             args.unignore_module, modules)
-        # Lever la sourdine d'une clé encore enregistrée reste possible même si
-        # le module a disparu de l'installation.
+        # Unmuting a key still on record remains possible even if
+        # the module left the installation.
         for ref in list(inconnus_retrait):
             if ref in muets:
                 a_retirer.add(ref)
@@ -703,19 +662,19 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     try:
         from zoneinfo import ZoneInfo
-    except ImportError:  # Python 3.8 (build Windows 7, voir build-win7.yml) : pas de zoneinfo en stdlib.
+    except ImportError:  # Python 3.8 (Windows 7 build, see build-win7.yml): no zoneinfo in stdlib.
         from backports.zoneinfo import ZoneInfo
 
     args = parse_args()
     timezone = ZoneInfo(args.timezone)
 
-    # Les sourdines modifient la configuration puis le contrôle se poursuit :
-    # une option doit préciser la manière dont la commande travaille, pas la
-    # détourner de son objet. C'est le même parti que « merge --exclude », qui
-    # écarte un clip puis assemble.
+    # Mute options change configuration then the check continues:
+    # an option should specify how the command works, not
+    # divert it from its purpose. Same approach as merge --exclude, which
+    # excludes a clip then merges.
     if args.ignore or args.unignore:
-        # Même verrou que _controler() : un tour de fond peut être en train
-        # de relire/réécrire WATCH_STATE pendant qu'on modifie la sourdine.
+        # Same lock as _controler(): a background pass may be
+        # re-reading/re-writing WATCH_STATE while mute is changed.
         with runtime.verrou("watch", "sourdine", stale_after=60, attente=10):
             state = md.load_json(WATCH_STATE, {})
             cameras = state.get("cameras") or {}
@@ -735,8 +694,8 @@ def main() -> int:
         popup(_msg("titre_test_alerte"), _msg("corps_test_alerte"))
         return 0
 
-    # Ce programme contrôle l'état, rien de plus, conformément à son nom. La
-    # répétition est une option commune à tous les verbes, pas un verbe.
+    # This program checks state, nothing more, as its name says. Repetition
+    # is an option shared by all verbs, not a verb itself.
     return runtime.repeter(
         lambda: un_tour(args, timezone),
         args.loop, journal,

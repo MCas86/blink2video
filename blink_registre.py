@@ -1,11 +1,11 @@
-"""Registre incrémental des clips acquis : chargement, fusion, identité,
-corrélation USB/cloud, réparation d'un média absent ou tronqué.
+"""Incremental registry of acquired clips: load, merge, identity,
+USB/cloud correlation, repair of missing or truncated media.
 
-Extrait de blink2video.py à l'étape 8 (AUDIT-2026-08-13.md, section 20, 8.3).
-Ne connaît ni la session Blink, ni comment un clip se télécharge : uniquement
-comment le savoir, l'identifier et l'écrire de façon durable."""
+Extracted from blink2video.py at step 8 (AUDIT-2026-08-13.md, section 20, 8.3).
+Knows neither the Blink session nor how a clip is downloaded: only
+how to know it, identify it, and persist it durably."""
 
-from __future__ import annotations  # Python 3.8 (build Windows 7) : les annotations "X | None" ne s'évaluent qu'à l'écriture des chaînes, jamais à l'exécution.
+from __future__ import annotations  # Python 3.8 (Windows 7 build): "X | None" annotations are evaluated only when strings are written, never at runtime.
 
 import bisect
 import datetime as dt
@@ -14,8 +14,6 @@ import json
 import os
 import stat as stat_module
 from pathlib import Path
-
-from nico579_commons import atomique
 
 import runtime
 
@@ -32,34 +30,18 @@ OUTPUT = runtime.dossier_sorties() / "Blink_Clips"
 STATE_FILENAME = ".blink_download_state.json"
 STATE_V1_BACKUP_FILENAME = ".blink_download_state.v1.backup.json"
 
-# Registre absent : distinct de tout contenu JSON possible, « null » compris.
-_ABSENT = object()
-
 
 def load_download_state(output: Path) -> dict:
-    """Charge le registre incrémental placé dans le dossier de destination.
-
-    Absent, il est vide : c'est une installation neuve. Présent mais
-    momentanément inaccessible, il ne l'est surtout pas. Sous Windows, une
-    lecture échoue en PermissionError pendant qu'un autre processus remplace
-    le fichier (la boucle cloud le réécrit chaque minute), et ce refus passait
-    ici pour une corruption : le 2026-10-17, une passe USB a ainsi vu un
-    registre vide, puis retéléchargé et annoncé comme nouveaux six clips déjà
-    acquis. nico579_commons.atomique.lire_json réessaie ce refus passager et
-    lève s'il persiste : une passe interrompue (_faire_passage le signale, la
-    suivante réessaie) vaut mieux qu'un registre vide, qui fait tout
-    retélécharger et, relu avant une écriture, effacerait l'historique.
-
-    Seul un contenu invalide suit encore la stratégie du registre vide (I-10)."""
+    """Load the incremental registry in the destination folder."""
     state_file = output / STATE_FILENAME
+    if not state_file.exists():
+        return {"version": 1, "clips": {}}
     try:
-        state = atomique.lire_json(state_file, _ABSENT, tolerer_corrompu=False)
-        if state is _ABSENT:
-            return {"version": 1, "clips": {}}
+        state = json.loads(state_file.read_text(encoding="utf-8"))
         if not isinstance(state, dict):
-            raise ValueError("la racine JSON doit être un objet")
+            raise ValueError("JSON root must be an object")
         if state.get("version") not in (1, 2) or not isinstance(state.get("clips"), dict):
-            raise ValueError("format inconnu")
+            raise ValueError("unknown format")
         valides = {}
         ignores = 0
         for cle, entree in state["clips"].items():
@@ -75,18 +57,18 @@ def load_download_state(output: Path) -> dict:
             except ValueError:
                 ignores += 1
                 continue
-            # Migration v1 additive : les anciennes clés et archives restent
-            # intactes. Les métadonnées nouvelles permettent les recherches
-            # sans dépendre du nom de fichier ni de l'ID USB renuméroté.
+            # Additive v1 migration: legacy keys and archives stay
+            # intact. New metadata enables lookups
+            # without relying on filename or renumbered USB ID.
             entree.setdefault("source", "usb")
             entree.setdefault("network_id", "")
             entree.setdefault("device_id", "")
             entree.setdefault("remote_id", "")
             entree.setdefault("sync_id", str(cle).split(":", 1)[0])
-            # .strip() : même raison que dans state_key() plus bas (nom USB
-            # avec espace parasite sans device_id). N'affecte que les vieilles
-            # entrées v1 sans camera_identity du tout : setdefault ne touche
-            # jamais une entrée qui en a déjà un, migrée ou non.
+            # .strip(): same reason as in state_key() below (USB name
+            # with stray space without device_id). Only affects old
+            # v1 entries with no camera_identity at all: setdefault never
+            # touches an entry that already has one, migrated or not.
             camera_identite = (
                 f"device:{entree['device_id']}" if entree["device_id"]
                 else f"name:{str(entree.get('camera') or 'camera').strip().casefold()}"
@@ -106,29 +88,30 @@ def load_download_state(output: Path) -> dict:
         state["clips"] = valides
         state["version"] = 2
         return state
+    except OSError:
+        categorie = "file"
     except json.JSONDecodeError:
-        categorie = "données JSON"
+        categorie = "JSON data"
     except ValueError:
-        categorie = "schéma JSON"
+        categorie = "JSON schema"
     print(
-        f"  ! État incrémental illisible [{categorie}] ; "
-        "les fichiers existants seront vérifiés."
+        f"  ! Incremental state unreadable [{categorie}]; "
+        "existing files will be checked."
     )
     return {"version": 1, "clips": {}}
 
 
 def save_download_state(output: Path, state: dict) -> None:
-    """Enregistre le registre incrémental, sans écraser le travail d'un autre.
+    """Save the incremental registry without overwriting another worker's changes.
 
-    Deux boucles écrivent désormais ici, l'une pour la clé USB toutes les dix
-    minutes, l'autre pour le cloud toutes les minutes. Écrire sa propre copie
-    en bloc ferait perdre les clips que l'autre vient d'ajouter : on relit donc
-    le fichier juste avant d'écrire, et on superpose ses propres entrées. Une
-    entrée n'est jamais retirée par ce chemin, seulement ajoutée ou mise à
-    jour, ce qui rend la superposition sûre.
+    Two loops now write here: one for USB every ten minutes, the other for
+    cloud every minute. Writing one's own copy in one shot would drop clips the
+    other just added: so the file is re-read just before writing, and one's own
+    entries are merged on top. An entry is never removed on this path, only
+    added or updated, which makes merging safe.
 
-    Le remplacement reste atomique : un plantage en cours d'écriture laisse
-    l'ancien registre intact plutôt qu'un fichier tronqué."""
+    Replacement stays atomic: a crash mid-write leaves the old registry intact
+    rather than a truncated file."""
     output.mkdir(parents=True, exist_ok=True)
     state_file = output / STATE_FILENAME
     with runtime.verrou("registre", "ecriture", stale_after=60, attente=10):
@@ -137,62 +120,56 @@ def save_download_state(output: Path, state: dict) -> None:
 
 
 def _sauvegarder_registre_v1(state_file: Path) -> None:
-    """Conserve une copie unique du registre v1 avant sa première migration."""
+    """Keep a single copy of the v1 registry before its first migration."""
     backup = state_file.with_name(STATE_V1_BACKUP_FILENAME)
-    # Même lecture retentée que load_download_state(). Un refus qui persiste
-    # remonte tel quel : rien ne dit alors qu'une migration était en jeu.
-    try:
-        ancien = atomique.lire_json(state_file, None, tolerer_corrompu=False)
-    except json.JSONDecodeError as erreur:
-        raise OSError(
-            "migration v2 annulée : sauvegarde du registre v1 impossible"
-        ) from erreur
-    if not isinstance(ancien, dict) or ancien.get("version") != 1:
+    if not state_file.exists():
         return
     try:
         brut = state_file.read_bytes()
+        ancien = json.loads(brut)
+        if not isinstance(ancien, dict) or ancien.get("version") != 1:
+            return
         if backup.exists():
             sauvegarde = backup.read_bytes()
             chargee = json.loads(sauvegarde)
             if not isinstance(chargee, dict) or chargee.get("version") != 1:
-                raise OSError("sauvegarde v1 invalide")
+                raise OSError("invalid v1 backup")
             return
         temporaire = backup.with_suffix(backup.suffix + ".tmp")
         temporaire.write_bytes(brut)
         temporaire.replace(backup)
         if backup.read_bytes() != brut:
-            raise OSError("sauvegarde v1 non vérifiable")
+            raise OSError("unverifiable v1 backup")
     except (OSError, json.JSONDecodeError) as erreur:
         raise OSError(
-            "migration v2 annulée : sauvegarde du registre v1 impossible"
+            "v2 migration cancelled: cannot back up the v1 registry"
         ) from erreur
 
 
 def _exclusion_a_retenir(precedente: dict, entree: dict) -> tuple:
-    """État d'exclusion (excluded, excluded_at) à retenir pour un clip que
-    la fusion trouve des deux côtés.
+    """Exclusion state (excluded, excluded_at) to keep for a clip found
+    on both sides during merge.
 
-    La décision d'exclusion/réintégration (posée par set_excluded(), jamais
-    par le téléchargeur) est un état à part : sur ce champ précis, seule la
-    décision la plus récente doit l'emporter, dans les deux sens - une
-    priorité fixe à excluded=True protégeait une exclusion contre une copie
-    de downloader périmée, mais laissait une réintégration se faire défaire
-    par cette même copie arrivée après coup (revue du 27/08, bug 2).
+    The exclude/re-include decision (made by set_excluded(), never
+    by the downloader) is separate state: for this field alone, only the
+    most recent decision must win, both ways - a fixed priority for
+    excluded=True protected an exclusion against a stale downloader copy,
+    but let a re-inclusion be undone by that same copy arriving later
+    (review 27/08, bug 2).
 
-    Un excluded_at absent d'un côté ne prouve rien sur l'ordre réel : il
-    peut s'agir d'une entrée neuve qui ne connaît pas ce champ, ou d'une
-    donnée antérieure à son introduction. Un côté daté l'emporte donc
-    toujours sur un côté muet ; seul le cas où aucun des deux n'est daté
-    retombe sur le repli historique (B-04) : ne jamais laisser une copie
-    muette annuler une exclusion active."""
+    A missing excluded_at on one side proves nothing about real order: it
+    may be a new entry that does not know this field, or data from before
+    it was introduced. A dated side therefore always beats a silent one;
+    only when neither is dated do we fall back to historical behavior (B-04):
+    never let a silent copy cancel an active exclusion."""
     disque_exclu = bool(precedente.get("excluded"))
     entrant_exclu = bool(entree.get("excluded"))
     depuis_disque = precedente.get("excluded_at")
     depuis_entrant = entree.get("excluded_at")
 
-    # Même lorsque les booléens coïncident, la date la plus récente doit
-    # survivre : la faire reculer autoriserait ensuite une décision opposée
-    # périmée à gagner lors d'une autre sauvegarde de téléchargement.
+    # Even when booleans match, the most recent date must
+    # survive: rolling it back would let a stale opposite decision
+    # win on a later download save.
     if depuis_disque and depuis_entrant:
         if depuis_disque > depuis_entrant:
             return disque_exclu, depuis_disque
@@ -205,7 +182,7 @@ def _exclusion_a_retenir(precedente: dict, entree: dict) -> tuple:
 
 
 def _ecrire_registre(state_file: Path, state: dict) -> None:
-    """Superpose ses propres entrées à celles déjà sur disque, atomiquement."""
+    """Merge one's own entries onto those already on disk, atomically."""
     output = state_file.parent
     fusionne = dict(state)
     disque = load_download_state(output)
@@ -224,33 +201,34 @@ def _ecrire_registre(state_file: Path, state: dict) -> None:
     fusionne["version"] = max(
         2, int(disque.get("version") or 1), int(state.get("version") or 1),
     )
-    # Remplacement retenté : sous Windows, il est refusé tant qu'un lecteur
-    # (la page, l'autre boucle) tient le registre ouvert.
-    atomique.ecrire_json(state_file, fusionne)
+    temporary = state_file.with_suffix(".tmp")
+    temporary.write_text(json.dumps(fusionne, indent=2, ensure_ascii=False),
+                         encoding="utf-8")
+    temporary.replace(state_file)
     _invalider_index_registre(state)
     state["version"] = fusionne["version"]
     state["clips"] = fusionne.get("clips", state.get("clips"))
 
 
 def state_key(sync, clip, source: str = "usb") -> str:
-    """Identifie la provenance sans la confondre avec la corrélation.
+    """Identify provenance without conflating it with correlation.
 
-    Une identité USB contient module, réseau, caméra et instant, mais jamais
-    l'ID du manifeste : le Sync Module le renumérote lors d'une réindexation.
-    Une identité cloud ajoute au contraire l'ID distant du média, immuable
-    lorsqu'il est fourni par l'API. Le rapprochement USB/cloud reste une
-    opération séparée, tolérante sur l'instant.
+    A USB identity includes module, network, camera, and instant, but never
+    manifest ID: the Sync Module renumbers it on reindex.
+    A cloud identity adds the remote media ID instead, immutable
+    when provided by the API. USB/cloud matching remains a
+    separate operation, tolerant on instant.
 
-    Faute de ``device_id`` dans les objets USB de blinkpy 0.25, leur nom API
-    original est le repli documenté ; un renommage de caméra USB ne peut donc
-    pas être reconnu avec certitude."""
+    With no ``device_id`` on blinkpy 0.25 USB objects, their original API
+    name is the documented fallback; a USB camera rename therefore
+    cannot be recognized with certainty."""
     created = clip_datetime_utc(clip).isoformat()
-    # .strip() avant .casefold() : cohérent avec camera_setting_key ci-dessous
-    # et CloudClip.__init__ (blink_models.py). Un objet USB blinkpy 0.25 sans
-    # device_id peut renvoyer un nom avec un espace parasite en tête/fin (vu
-    # en réel sur le registre de production, 38 clips "jardin " isolés du
-    # reste de l'historique de la même caméra entre le 07 et le 11/08) ; sans
-    # ce trim, cet espace crée une identité de corrélation séparée.
+    # .strip() before .casefold(): consistent with camera_setting_key below
+    # and CloudClip.__init__ (blink_models.py). A blinkpy 0.25 USB object without
+    # device_id may return a name with stray leading/trailing space (seen
+    # in production registry, 38 "jardin " clips isolated from
+    # the same camera's history between 07 and 11/08); without
+    # this trim, that space creates a separate correlation identity.
     camera = _identifiant_camera(clip) or f"name:{str(clip.name).strip().casefold()}"
     identite = json.dumps(
         [
@@ -268,7 +246,7 @@ def state_key(sync, clip, source: str = "usb") -> str:
 
 
 def camera_setting_key(sync, clip) -> str:
-    """Clé stable d'un réglage destructif propre à une caméra."""
+    """Stable key for a camera-specific destructive setting."""
     network_id = _identifiant_reseau(clip, sync)
     device_id = _identifiant_camera(clip)
     material = (
@@ -286,7 +264,7 @@ def camera_setting_key(sync, clip) -> str:
 
 
 def camera_setting_key_from_entry(entry: dict) -> str:
-    """Même clé à partir d'une entrée persistée du registre."""
+    """Same key from a persisted registry entry."""
     network_id = str(entry.get("network_id") or "")
     device_id = str(entry.get("device_id") or "")
     material = (
@@ -305,11 +283,11 @@ def camera_setting_key_from_entry(entry: dict) -> str:
 
 def remember_download(state: dict, sync, hub_name: str, clip, output: Path,
                       target: Path, source: str = "usb") -> None:
-    """Marque un clip comme acquis uniquement lorsque son fichier existe.
+    """Mark a clip as acquired only when its file exists.
 
-    La provenance est notée : une caméra couverte par un abonnement enregistre
-    dans le cloud, une autre sur la clé du module. L'interface le montre par
-    caméra, ce qui évite de chercher pourquoi telle caméra ne produit rien."""
+    Provenance is recorded: a subscription-covered camera records
+    in the cloud, another on the module key. The UI shows this per
+    camera, avoiding guesswork about why a given camera produces nothing."""
     _invalider_index_registre(state)
     state["version"] = 2
     state.setdefault("clips", {})[state_key(sync, clip, source)] = {
@@ -323,9 +301,9 @@ def remember_download(state: dict, sync, hub_name: str, clip, output: Path,
         "device_id": _identifiant_camera(clip),
         "remote_id": str(getattr(clip, "id", "")),
         "sync_id": str(getattr(sync, "sync_id", "")),
-        # .strip() : même raison que dans state_key() (nom USB avec espace
-        # parasite sans device_id) - écrit à chaque nouveau téléchargement,
-        # le site le plus important à protéger des trois de ce fichier.
+        # .strip(): same reason as in state_key() (USB name with stray
+        # space without device_id) - written on every new download,
+        # the most important site to protect of the three in this file.
         "camera_identity": (
             f"device:{_identifiant_camera(clip)}" if _identifiant_camera(clip)
             else f"name:{str(clip.name).strip().casefold()}"
@@ -341,7 +319,7 @@ def remember_download(state: dict, sync, hub_name: str, clip, output: Path,
 
 def _chemin_entree(output: Path, entry: dict, *, index=None,
                    cle: str | None = None) -> Path | None:
-    """Résout un média du registre uniquement à l'intérieur de ``output``."""
+    """Resolve a registry media path only inside ``output``."""
     brut = entry.get("path")
     if not isinstance(brut, str) or not brut.strip():
         return None
@@ -371,7 +349,7 @@ def _chemin_entree(output: Path, entry: dict, *, index=None,
 
 
 class _ClipConnu:
-    """Entrée du registre présentée comme un clip, pour le rapprochement."""
+    """Registry entry presented as a clip, for matching."""
 
     def __init__(self, entree: dict):
         self.name = entree.get("camera") or "camera"
@@ -379,18 +357,18 @@ class _ClipConnu:
         self.id = entree.get("remote_id") or 0
         self.device_id = entree.get("device_id") or ""
         self.network_id = entree.get("network_id") or ""
-        # Provenance et identifiant distant, pour meme_evenement_cloud().
+        # Provenance and remote id, for meme_evenement_cloud().
         self.source = entree.get("source") or "usb"
         self.remote_id = str(entree.get("remote_id") or "")
 
 
 def _identifiants_cloud_distincts(connu, clip) -> bool:
-    """Vrai si l'entrée cloud ``connu`` et le clip cloud ``clip`` portent deux
-    identifiants distants différents : ce sont alors deux médias, quel que
-    soit leur écart dans le temps (audit du 26/09/2026, B01). Une entrée USB
-    garde dans remote_id son numéro de manifeste, que le Sync Module
-    renumérote : il n'est jamais comparable à un identifiant cloud. Une
-    vieille entrée sans identifiant reste rapprochée par l'instant seul."""
+    """True if cloud entry ``connu`` and cloud clip ``clip`` carry two
+    different remote ids: then they are two media, regardless
+    of time gap (audit 26/09/2026, B01). A USB entry
+    keeps manifest number in remote_id, which the Sync Module
+    renumbers: it is never comparable to a cloud id. An
+    old entry without id is still matched by instant alone."""
     if getattr(connu, "source", "") != "cloud":
         return False
     gauche = str(getattr(connu, "remote_id", "") or "")
@@ -399,14 +377,14 @@ def _identifiants_cloud_distincts(connu, clip) -> bool:
 
 
 def meme_evenement_cloud(connu, clip, sync=None) -> bool:
-    """Une entrée connue peut-elle être le même événement que ce clip cloud ?
-    Même caméra à la tolérance près, sauf deux identifiants cloud différents."""
+    """Can a known entry be the same event as this cloud clip?
+    Same camera within tolerance, except two different cloud ids."""
     return (_meme_camera(connu, clip, sync_droite=sync)
             and not _identifiants_cloud_distincts(connu, clip))
 
 
 class _IndexRegistre:
-    """Vue temporelle éphémère d'un registre, jamais incluse dans son JSON."""
+    """Ephemeral temporal view of a registry, never included in its JSON."""
 
     def __init__(self, state: dict):
         self.state = state
@@ -443,7 +421,7 @@ _CACHE_INDEX_REGISTRE = None
 
 
 def _invalider_index_registre(state: dict) -> None:
-    """Oublie la vue éphémère avant toute mutation interne du registre."""
+    """Drop the ephemeral view before any internal registry mutation."""
     global _CACHE_INDEX_REGISTRE
     if (
         _CACHE_INDEX_REGISTRE is not None
@@ -453,7 +431,7 @@ def _invalider_index_registre(state: dict) -> None:
 
 
 def _index_registre(state: dict) -> _IndexRegistre:
-    """Réutilise un unique index hors JSON pour les recherches successives."""
+    """Reuse a single non-JSON index for successive lookups."""
     global _CACHE_INDEX_REGISTRE
     clips = state.get("clips")
     taille = len(clips) if isinstance(clips, dict) else 0
@@ -472,7 +450,7 @@ def _trouver_entree(state: dict, sync, clip,
                     index: _IndexRegistre | None = None,
                     source: str = "usb",
                     ) -> tuple[str | None, dict | None]:
-    """Trouve au plus une entrée corrélée, avec priorité aux tombstones."""
+    """Find at most one correlated entry, tombstones taking priority."""
     cle_exacte = state_key(sync, clip, source)
     entry = None if cle_exacte in (consumed or ()) else state["clips"].get(cle_exacte)
     if isinstance(entry, dict) and entry.get("excluded"):
@@ -481,8 +459,8 @@ def _trouver_entree(state: dict, sync, clip,
     index = index or _index_registre(state)
     instant = clip_datetime_utc(clip)
     marge = dt.timedelta(seconds=2)
-    # Avec une clé exacte ordinaire, seule une ancienne tombstone peut avoir
-    # priorité. Ne pas rescanner les médias ordinaires préserve le chemin rapide.
+    # With an ordinary exact key, only an old tombstone can take
+    # priority. Not rescanning ordinary media preserves the fast path.
     if isinstance(entry, dict):
         temporels = index.tombstones
         instants = index.instants_tombstones
@@ -514,13 +492,13 @@ def _trouver_entree(state: dict, sync, clip,
 
 
 def _hub_compatible(entry: dict, sync) -> bool:
-    """Faux seulement si les deux hubs sont connus et clairement différents.
+    """False only if both hubs are known and clearly different.
 
-    _meme_camera() compare des network_id, absents des vieilles entrées USB
-    (blinkpy 0.25 ne les exposait pas) : sans second signal, le rapprochement
-    retombe alors sur le seul nom de caméra et confondrait deux hubs
-    homonymes. Le nom de hub, lui, est renseigné dès le premier
-    remember_download() et reste disponible sur ces mêmes vieilles entrées."""
+    _meme_camera() compares network_id, missing from old USB entries
+    (blinkpy 0.25 did not expose them): without a second signal, matching
+    falls back to camera name alone and would confuse two
+    homonymous hubs. Hub name, however, is set from the first
+    remember_download() and remains on those same old entries."""
     hub_connu = str(entry.get("hub") or "").strip().casefold()
     hub_courant = str(getattr(sync, "name", "") or "").strip().casefold()
     return not hub_connu or not hub_courant or hub_connu == hub_courant
@@ -528,14 +506,14 @@ def _hub_compatible(entry: dict, sync) -> bool:
 
 def _apparier_registre(state: dict, sync, clips: list,
                        index: _IndexRegistre | None = None) -> dict:
-    """Associe en lot chaque clip USB à au plus une entrée du registre."""
+    """Batch-match each USB clip to at most one registry entry."""
     index = index or _index_registre(state)
     correspondances = {}
     cles_prises = set()
     clips_pris = set()
 
-    # Une exclusion est une décision utilisateur absolue, même si une entrée
-    # ordinaire possède par ailleurs une clé de source exacte pour le clip.
+    # Exclusion is an absolute user decision, even if an ordinary entry
+    # otherwise has an exact source key for the clip.
     tombstones = [
         (cle, entry, connu)
         for cle, entry, connu, _ in index.valides
@@ -556,8 +534,8 @@ def _apparier_registre(state: dict, sync, clips: list,
             cles_prises.add(cle)
             clips_pris.add(indice_clip)
 
-    # Pour le reste, une identité de source exacte est plus forte qu'une
-    # corrélation tolérante.
+    # For the rest, exact source identity beats
+    # tolerant correlation.
     for indice_clip, clip in enumerate(clips):
         if indice_clip in clips_pris:
             continue
@@ -603,14 +581,14 @@ def is_downloaded(state: dict, sync, clip, target: Path,
                   consumed: set[str] | None = None,
                   index: _IndexRegistre | None = None,
                   source: str = "usb") -> bool:
-    """Un clip est acquis si le registre et le fichier non vide sont présents.
+    """A clip is acquired if the registry and a non-empty file are present.
 
-    Exception : un clip marqué « exclu » compte comme acquis même sans fichier.
-    C'est une pierre tombale, posée par `merge_daily.py --exclude`, qui dit
-    « écarté volontairement, ne pas rapatrier » ; sans elle, supprimer le
-    fichier ne ferait que provoquer un nouveau téléchargement. Même principe
-    que le fichier d'archive de yt-dlp (--download-archive, hérité de
-    youtube-dl) : on retient l'identifiant, pas la présence du média."""
+    Exception: a clip marked excluded counts as acquired even without a file.
+    That is a tombstone, set by `merge_daily.py --exclude`, meaning
+    deliberately skipped, do not fetch again; without it, deleting the
+    file would only trigger a new download. Same idea
+    as yt-dlp's archive file (--download-archive, inherited from
+    youtube-dl): remember the id, not media presence."""
     index = index or _index_registre(state)
     cle_entree, entry = _trouver_entree(
         state, sync, clip, consumed, index, source,
@@ -654,7 +632,7 @@ def is_downloaded(state: dict, sync, clip, target: Path,
 
 
 def _entree_acquise(output: Path, entree: dict) -> bool:
-    """Une tombstone reste connue ; un média ordinaire doit exister et être entier."""
+    """A tombstone stays known; ordinary media must exist and be complete."""
     if not isinstance(entree, dict):
         return False
     if entree.get("excluded"):

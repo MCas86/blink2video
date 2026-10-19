@@ -313,7 +313,7 @@ class ProgressionGlobaleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, 0)
         self.assertEqual(progression[-1], (2, 2))
         self.assertIn("[2/2] 100%", sortie.getvalue())
-        self.assertIn("Suppression impossible", sortie.getvalue())
+        self.assertIn("Could not delete from the Sync Module", sortie.getvalue())
 
     async def test_planificateur_commence_global_puis_respecte_les_deux_cadences(self):
         horloge = {"t": 0.0}
@@ -397,7 +397,7 @@ class ProgressionRuntimeTests(unittest.TestCase):
 
     def test_fin_n_n_reste_affichable_sans_rester_active(self):
         runtime.travail(
-            "Téléchargement des clips", 1, 1, cle="phase.download_clips",
+            "Downloading clips", 1, 1, cle="phase.download_clips",
         )
         runtime.fin_travail(conserver=10)
 
@@ -411,13 +411,13 @@ class ProgressionRuntimeTests(unittest.TestCase):
         with mock.patch.object(runtime, "processus_vivant", return_value=True):
             with mock.patch.object(runtime.os, "getpid", return_value=101):
                 runtime.travail(
-                    "Téléchargement des clips", 4, 4,
+                    "Downloading clips", 4, 4,
                     cle="phase.download_clips",
                 )
                 runtime.fin_travail(conserver=10)
             with mock.patch.object(runtime.os, "getpid", return_value=202):
                 runtime.travail(
-                    "Assemblage des vidéos", 1, 3,
+                    "Assembling videos", 1, 3,
                     cle="phase.merge_videos",
                 )
 
@@ -498,7 +498,7 @@ class ProgressionRuntimeTests(unittest.TestCase):
 
     def test_echec_du_snapshot_terminal_ne_laisse_pas_un_faux_actif(self):
         runtime.travail(
-            "Téléchargement des clips", 1, 1, cle="phase.download_clips",
+            "Downloading clips", 1, 1, cle="phase.download_clips",
         )
         with mock.patch.object(runtime, "_ecrire_fiche_travail", return_value=False):
             runtime.fin_travail(conserver=10)
@@ -564,7 +564,7 @@ class ProgressionInterfaceTests(unittest.TestCase):
         self.assertEqual(self._commandes_actualisation(
             None, dict(runtime.REGLAGES_DEFAUT, merge_jour=False),
             authentifie=False, evenements=evenements), [])
-        self.assertIn("fusion est désactivée", evenements[0]["line"])
+        self.assertIn("merging is disabled", evenements[0]["line"])
         self.assertEqual(evenements[-1], {"done": True, "ok": True})
 
     def test_actualiser_sans_session_conserve_la_fusion_si_activee(self):

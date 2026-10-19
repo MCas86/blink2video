@@ -1,23 +1,23 @@
-"""Demultiplexeur MPEG-TS minimal : assez de ISO/IEC 13818-1 pour isoler
-le flux elementaire H.264 depuis un flux Blink, sans passer par PyAV.
+"""Minimal MPEG-TS demultiplexer: enough of ISO/IEC 13818-1 to isolate
+the H.264 elementary stream from a Blink stream, without going through PyAV.
 
-PAT (PID 0) -> PID du PMT -> PMT -> PID video (stream_type 0x1B = H.264)
--> reassemblage en un flux elementaire continu (concatenation des charges
-utiles PES sur ce PID, entete PES saute a chaque nouveau paquet PES, son
-PTS retenu au passage - cf. plus bas) -> decoupage en NAL units des que
-leur fin est connue (prochain start code vu), sans attendre qu'un paquet
-PES ou une image entiere soit complet - une image-cle peut peser plusieurs
-dizaines de Ko, largement plus qu'un seul paquet TS (188 octets), alors que
-SPS/PPS tiennent en une poignee d'octets tout au debut.
+PAT (PID 0) -> PMT PID -> PMT -> video PID (stream_type 0x1B = H.264)
+-> reassembly into a continuous elementary stream (concatenation of PES
+payloads on that PID, PES header skipped at each new PES packet, its
+PTS retained along the way - see below) -> split into NAL units as soon as
+their end is known (next start code seen), without waiting for a PES packet
+or a whole frame to be complete - a key frame can weigh several
+tens of KB, far more than a single TS packet (188 bytes), whereas
+SPS/PPS fit in a handful of bytes right at the start.
 
-Le PTS de chaque paquet PES (ITU-T H.222.0, 2.4.3.7) est extrait et associe
-aux NAL units qui en proviennent : un horodatage improvise a la reception
-(plutot que celui, reel, encode par la camera a la capture) rend la lecture
-saccadee des que le reseau livre par rafales plutot qu'a cadence reguliere
-(constate en reel, 2026-09-03) - le recepteur perd alors l'information de
-rythme dont il a besoin pour lisser l'affichage. Commodite : le PTS MPEG
-est deja cadence a 90 kHz, la meme horloge que WebRTC utilise pour la
-video RTP - aucune conversion a faire, juste le lire correctement."""
+The PTS of each PES packet (ITU-T H.222.0, 2.4.3.7) is extracted and associated
+with the NAL units that come from it: an improvised timestamp at reception
+(rather than the real one encoded by the camera at capture) makes playback
+jerky as soon as the network delivers in bursts rather than at a steady rate
+(observed in the wild, 2026-09-03) - the receiver then loses the timing
+information it needs to smooth display. Convenience: the MPEG PTS
+is already clocked at 90 kHz, the same clock WebRTC uses for
+RTP video - no conversion needed, just read it correctly."""
 
 from typing import Optional
 
@@ -28,14 +28,14 @@ class DemuxeurTSVideo:
         self.video_pid = None
         self._flux_elementaire = bytearray()
         self._reste_ts = b""
-        # [(position_dans_flux_elementaire, pts), ...], position croissante.
+        # [(position_in_elementary_stream, pts), ...], increasing position.
         self._marques_pts: list = []
 
     def alimenter(self, data: bytes) -> list:
-        """Digere un bloc quelconque (0, 1 ou plusieurs paquets TS de 188
-        octets, potentiellement mal aligne). Renvoie les (pts_ou_None,
-        nal_bytes) nouvellement disponibles, dans l'ordre - nal_bytes en
-        Annexe B, start code 4 octets inclus."""
+        """Digests an arbitrary block (0, 1 or several 188-byte TS packets,
+        potentially misaligned). Returns the newly available (pts_or_None,
+        nal_bytes), in order - nal_bytes in Annex B, 4-byte start code
+        included."""
         data = self._reste_ts + data
         i, n = 0, len(data)
         while i + 188 <= n:
@@ -65,11 +65,11 @@ class DemuxeurTSVideo:
             self._pmt(payload, pusi)
         elif self.video_pid is not None and pid == self.video_pid:
             if pusi:
-                # Nouveau paquet PES : ses premiers octets sont son entete
-                # (00 00 01 + stream_id + longueur + flags + longueur des
-                # donnees optionnelles), a sauter avant d'atteindre les
-                # donnees elementaires H.264 elles-memes. Le PTS, quand
-                # present, y est aussi.
+                # New PES packet: its first bytes are its header
+                # (00 00 01 + stream_id + length + flags + optional data
+                # length), to be skipped before reaching the
+                # H.264 elementary data itself. The PTS, when
+                # present, is there too.
                 if len(payload) >= 9 and payload[0:3] == b"\x00\x00\x01":
                     pts = self._pts_depuis_entete_pes(payload)
                     if pts is not None:
@@ -82,9 +82,9 @@ class DemuxeurTSVideo:
 
     @staticmethod
     def _pts_depuis_entete_pes(payload: bytes) -> Optional[int]:
-        """PTS brut (33 bits, horloge 90 kHz) depuis l'entete PES optionnel,
-        si le drapeau PTS_DTS_flags l'annonce present (ITU-T H.222.0,
-        2.4.3.7, tableau 2-21)."""
+        """Raw PTS (33 bits, 90 kHz clock) from the optional PES header,
+        if the PTS_DTS_flags flag announces it present (ITU-T H.222.0,
+        2.4.3.7, table 2-21)."""
         if len(payload) < 14:
             return None
         pts_dts_flags = (payload[7] >> 6) & 0x3
@@ -115,7 +115,7 @@ class DemuxeurTSVideo:
         if trouve is None:
             return
         section, section_length = trouve
-        i, fin = 8, 3 + section_length - 4  # -4 : CRC32 en fin de section
+        i, fin = 8, 3 + section_length - 4  # -4: CRC32 at end of section
         while i + 4 <= fin and i + 4 <= len(section):
             program_number = (section[i] << 8) | section[i + 1]
             pid = ((section[i + 2] & 0x1F) << 8) | section[i + 3]
@@ -130,8 +130,8 @@ class DemuxeurTSVideo:
         if trouve is None:
             return
         section, section_length = trouve
-        # Une PMT comprend au minimum l'en-tête fixe et son CRC. Ignorer
-        # une table incomplète avant tout accès ou choix de PID vidéo.
+        # A PMT includes at least the fixed header and its CRC. Ignore
+        # an incomplete table before any access or video PID choice.
         if section[0] != 0x02 or section_length < 13 or len(section) < 3 + section_length:
             return
         program_info_length = ((section[10] & 0x0F) << 8) | section[11]
@@ -150,8 +150,8 @@ class DemuxeurTSVideo:
             self.video_pid = video_pid
 
     def _pts_a(self, position: int) -> Optional[int]:
-        """Dernier PTS marque a une position <= `position` (sans le
-        consommer : plusieurs NAL units de la meme image le partagent)."""
+        """Last PTS marked at a position <= `position` (without
+        consuming it: several NAL units of the same frame share it)."""
         pts = None
         for p, v in self._marques_pts:
             if p <= position:
@@ -161,9 +161,9 @@ class DemuxeurTSVideo:
         return pts
 
     def _extraire_nal_completes(self) -> list:
-        """Emet toute NAL unit dont la fin est connue (un prochain start
-        code a ete vu) avec son PTS, garde la derniere - potentiellement
-        encore incomplete - en tampon pour le prochain appel."""
+        """Emits every NAL unit whose end is known (a next start
+        code has been seen) with its PTS, keeps the last - potentially
+        still incomplete - in the buffer for the next call."""
         buf = self._flux_elementaire
         premier = buf.find(b"\x00\x00\x01")
         if premier == -1:
@@ -173,8 +173,8 @@ class DemuxeurTSVideo:
         suivant = buf.find(b"\x00\x00\x01", debut_nal)
         while suivant != -1:
             fin = suivant
-            # start code a 4 octets : le 0x00 juste avant appartient au
-            # separateur, pas a cette NAL unit.
+            # 4-byte start code: the 0x00 just before belongs to the
+            # separator, not to this NAL unit.
             if fin > debut_nal and buf[fin - 1] == 0:
                 fin -= 1
             if fin > debut_nal:
@@ -186,14 +186,14 @@ class DemuxeurTSVideo:
             suivant = buf.find(b"\x00\x00\x01", debut_nal)
         limite = debut_nal - 3
         del buf[:limite]
-        # Garder aussi le dernier marqueur avant `limite`, replace a 0 : il
-        # reste le PTS en vigueur pour la NAL retenue (potentiellement
-        # incomplete, en tete du tampon apres coupure). Sans lui, une NAL
-        # trop grosse pour completer en un seul alimenter() (une image-cle
-        # depasse largement 65536 octets) perdait son PTS des que ce
-        # marqueur passait, a tort, pour perime (constate en reel : pile
-        # les plus grosses images, jamais les petites qui completent d'un
-        # coup - lecture saccadee, 2026-09-03).
+        # Also keep the last marker before `limite`, repositioned at 0: it
+        # remains the current PTS for the retained NAL (potentially
+        # incomplete, at the head of the buffer after the cut). Without it, a NAL
+        # too large to complete in a single alimenter() (a key frame
+        # far exceeds 65536 bytes) lost its PTS as soon as this
+        # marker was wrongly treated as stale (observed in the wild: only
+        # the largest frames, never the small ones that complete in one
+        # go - jerky playback, 2026-09-03).
         report = None
         gardees = []
         for p, v in self._marques_pts:
@@ -207,13 +207,13 @@ class DemuxeurTSVideo:
         return resultats
 
     def finaliser(self) -> list:
-        """Force l'extraction de la toute dernière NAL unit encore en
-        tampon, jamais émise par _extraire_nal_completes() faute d'un
-        prochain start code pour en confirmer la fin - qui ne viendra
-        jamais puisque le flux TS s'arrête là. À appeler une seule fois, à
-        la fin normale du flux (sans quoi la dernière image reçue reste
-        perdue dans ce tampon, jamais transmise ni à l'affichage ni à
-        l'enregistrement)."""
+        """Forces extraction of the very last NAL unit still in
+        the buffer, never emitted by _extraire_nal_completes() for lack of a
+        next start code to confirm its end - which will never come
+        since the TS stream stops there. Call once only, at
+        the normal end of the stream (otherwise the last received frame stays
+        lost in this buffer, never passed to display or
+        recording)."""
         buf = self._flux_elementaire
         premier = buf.find(b"\x00\x00\x01")
         debut_nal = premier + 3
@@ -227,20 +227,20 @@ class DemuxeurTSVideo:
 
 
 def type_nal(nal_avec_start_code: bytes) -> int:
-    """nal_unit_type (5 bits bas) du premier octet apres le start code."""
+    """nal_unit_type (low 5 bits) of the first byte after the start code."""
     i = 3 if nal_avec_start_code[2] == 1 else 4
     return nal_avec_start_code[i] & 0x1F
 
 
 def debut_unite_acces(nal_avec_start_code: bytes) -> bool:
-    """Vrai si cette NAL ouvre forcément une nouvelle unité d'accès quand
-    l'unité en cours contient déjà une tranche (ITU-T H.264 §7.4.1.2.3).
+    """True if this NAL necessarily opens a new access unit when
+    the current unit already contains a slice (ITU-T H.264 §7.4.1.2.3).
 
-    SEI, SPS, PPS, AUD et types 14 à 18 précèdent toujours la première
-    tranche de leur image. Une tranche (types 1 et 5) ouvre une nouvelle
-    image si first_mb_in_slice vaut 0, codé ue(v) par le seul bit « 1 » :
-    premier bit après l'en-tête NAL. Les tranches suivantes d'une même
-    image (first_mb_in_slice > 0) commencent par un bit 0."""
+    SEI, SPS, PPS, AUD and types 14 to 18 always precede the first
+    slice of their frame. A slice (types 1 and 5) opens a new
+    frame if first_mb_in_slice is 0, coded ue(v) by the single « 1 » bit:
+    first bit after the NAL header. Later slices of the same
+    frame (first_mb_in_slice > 0) start with a 0 bit."""
     i = 3 if nal_avec_start_code[2] == 1 else 4
     type_ = nal_avec_start_code[i] & 0x1F
     if type_ in (6, 7, 8, 9) or 14 <= type_ <= 18:

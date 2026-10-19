@@ -1,20 +1,20 @@
-"""Vérifie qu'une installation fonctionne réellement, chez l'utilisateur.
+"""Checks that an installation actually works, on the user's machine.
 
-Distinct de tests.py, qui éprouve le code sur un service d'intégration. Celui-ci
-répond à une autre question : « est-ce que ça marche sur *cette* machine ? ».
-Il s'adresse à quelqu'un qui vient d'installer l'outil et veut le savoir avant
-de compter dessus.
+Distinct from tests.py, which exercises the code against an integration service.
+This one answers a different question: « does it work on *this* machine? ».
+It is aimed at someone who just installed the tool and wants to know before
+relying on it.
 
-Il produit donc une vraie vidéo horodatée qu'on peut ouvrir et regarder, fait
-apparaître une vraie notification, et dit ce qu'il en est de la session Blink et
-du démarrage automatique. Il ne touche ni à vos clips, ni à vos vidéos : tout se
-passe dans un dossier temporaire, sauf la vidéo de démonstration, laissée à
-l'endroit indiqué pour que vous puissiez la regarder.
+It therefore produces a real timestamped video that can be opened and watched,
+shows a real notification, and reports on the Blink session and
+autostart. It touches neither your clips nor your videos: everything
+happens in a temporary folder, except the demo video, left at
+the indicated location so you can watch it.
 
     blink2video smoketest
-    blink2video smoketest --keep    conserve le dossier de travail
-    blink2video smoketest --webrtc --report rapport.json
-        teste H.264/ICE/DTLS/SRTP localement, sans compte ni caméra
+    blink2video smoketest --keep    keep the working folder
+    blink2video smoketest --webrtc --report report.json
+        test H.264/ICE/DTLS/SRTP locally, without account or camera
 """
 
 import argparse
@@ -28,43 +28,6 @@ from pathlib import Path
 import runtime
 
 LIBELLES = {
-    "fr": {
-        "aide_desc": "Vérifie qu'une installation fonctionne réellement, chez l'utilisateur.",
-        "aide_keep": "conserver le dossier de travail au lieu de l'effacer",
-        "aide_webrtc": "diagnostic WebRTC local seul, sans caméra ni notification",
-        "aide_report": "écrire le résultat WebRTC dans ce fichier JSON",
-        "erreur_report_sans_webrtc": "--report exige --webrtc",
-        "marque_ok": "ok  ",
-        "marque_echec": "ECHEC",
-        "controle_installation_titre": "Contrôle de l'installation\n",
-        "video_titre": "Vidéo",
-        "ffmpeg_trouve": "ffmpeg trouvé",
-        "ffmpeg_incrustation": "ffmpeg sait incruster du texte",
-        "ffmpeg_incrustation_detail": "sans cela les vidéos sortiraient sans horodatage",
-        "police_trouvee": "police trouvée",
-        "clip_essai_fabrique": "clip d'essai fabriqué, entièrement noir",
-        "video_horodatee_produite": "vidéo horodatée produite",
-        "heure_dessinee": "l'heure est réellement dessinée dans l'image",
-        "pixels_allumes_detail": "{allumes} pixels allumés dans la zone du cartouche",
-        "a_regarder": "        à regarder : {chemin}",
-        "dossier_travail_conserve": "        dossier de travail conservé : {chemin}",
-        "notification_titre": "\nNotification",
-        "toast_corps": "Contrôle d'installation : ceci est un essai.",
-        "notification_envoyee": "notification envoyée",
-        "notification_envoyee_detail":
-            "elle doit apparaître à l'écran ; sinon, voir les limites du README",
-        "compte_blink_titre": "\nCompte Blink",
-        "session_enregistree": "session enregistrée",
-        "session_absente_detail":
-            "lancez « blink2video login » ; sans elle, ni téléchargement ni direct",
-        "clips_deja_recuperes": "clips déjà récupérés",
-        "clips_compte_detail": "{n} clip(s) dont {m} écarté(s)",
-        "clips_aucun_detail": "aucun ; lancez « blink2video download »",
-        "demarrage_auto_titre": "\nDémarrage automatique",
-        "indetermine": "  indéterminé : {erreur}",
-        "points_a_regarder": "{n} point(s) à regarder.",
-        "installation_operationnelle": "Installation opérationnelle.",
-    },
     "en": {
         "aide_desc": "Checks that an installation actually works, on the user's machine.",
         "aide_keep": "keep the working folder instead of deleting it",
@@ -103,6 +66,8 @@ LIBELLES = {
         "installation_operationnelle": "Installation working.",
     },
 }
+LIBELLES["fr"] = dict(LIBELLES["en"])
+
 
 
 def _(cle: str, **valeurs) -> str:
@@ -125,7 +90,7 @@ def constat(ok: bool, intitule: str, detail: str = "") -> bool:
 
 
 def pixels_allumes(ffmpeg: str, video: Path) -> int:
-    """Compte les pixels clairs dans le bas de l'image, où s'écrit l'heure."""
+    """Counts the light pixels at the bottom of the image, where the time is written."""
     resultat = runtime.lancer(
         [ffmpeg, "-hide_banner", "-loglevel", "error", "-ss", "1",
          "-i", str(video), "-frames:v", "1",
@@ -172,8 +137,8 @@ def main() -> int:
     travail = Path(tempfile.mkdtemp(prefix="blink_smoketest_"))
     demonstration = runtime.dossier_sorties() / "smoketest.mp4"
     try:
-        # Un clip noir : tout pixel allumé dans le bas de l'image ne pourra
-        # venir que de l'horodatage, ce qui rend la preuve indiscutable.
+        # A black clip: any lit pixel at the bottom of the image can only
+        # come from the timestamp, which makes the proof indisputable.
         source = travail / "source.mp4"
         runtime.lancer(
             [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
@@ -188,7 +153,7 @@ def main() -> int:
         import datetime as dt
         try:
             from zoneinfo import ZoneInfo
-        except ImportError:  # Python 3.8 (build Windows 7, voir build-win7.yml) : pas de zoneinfo en stdlib.
+        except ImportError:  # Python 3.8 (Windows 7 build, see build-win7.yml): no zoneinfo in stdlib.
             from backports.zoneinfo import ZoneInfo
 
         fuseau = ZoneInfo(args.timezone)
@@ -246,7 +211,7 @@ def main() -> int:
 
 
 def diagnostic_webrtc(rapport=None) -> int:
-    """Utilisable dans un bundle sans console et sans Python installé."""
+    """Usable in a console-less bundle without Python installed."""
     from webrtc_probe import verifier_webrtc
 
     try:

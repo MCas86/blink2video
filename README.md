@@ -1,4 +1,4 @@
-***English** | [Français](README.fr.md)*
+**English** (this fork is English-only; see [README.fr.md](README.fr.md) for a pointer)
 
 # blink2video
 
@@ -237,8 +237,9 @@ location / {
 ```
 
 Put your own authentication (basic auth, a client certificate, an access
-list) in front of either, the proxy is what's reachable from the network,
-blink2video itself still has none.
+list) in front of either, the proxy is what's reachable from the network.
+For **per-friend camera allowlists** with Cloudflare Access (email login,
+admin keeps the Blink account), see [docs/CLOUDFLARE_ACCESS.md](docs/CLOUDFLARE_ACCESS.md).
 
 With a mesh VPN (Tailscale, WireGuard) instead of a public domain, the same
 rewrite still applies, the check only ever looks at the `Host` header, never
@@ -306,17 +307,6 @@ The page, at `127.0.0.1:8765`, has six views:
   view stops on its own: as soon as you close or reload the tab, after
   5 minutes at most in any case (a server-side cap, whatever the browser
   does), or earlier if you set "Auto-stop live view" in Settings.
-  The "Rotation…" button shows the cameras one after another in
-  fullscreen, for a wall screen for instance: each one stays for the
-  number of seconds you choose (30 by default), counted from its first
-  image, then the next one takes over, and the rotation starts again.
-  Offline and hidden cameras are skipped, you can leave others out, and
-  you can limit it to hours of the day; outside them it waits without
-  waking anything. Esc or "Stop" ends it. Each turn wakes the camera, so
-  battery cameras drain fast, and while it runs the local storage (USB)
-  downloads wait for a pause or the end, since the Sync Module relays one
-  thing at a time. These settings are kept in the browser, like the
-  thumbnail size.
 - **Clips**: newest first, with a preview and an "Écarter" button that removes a
   clip from every assembled video.
 - **Daily, Weekly, Monthly**: the assembled videos. Daily can also be grouped

@@ -1,23 +1,21 @@
-"""Interface locale pour visionner les clips Blink et les écarter ou les reprendre.
+"""Local interface to watch Blink clips and discard or restore them.
 
-Pourquoi un petit serveur HTTP et pas un fichier HTML autonome : une page
-ouverte en file:// ne peut ni déplacer un fichier ni écrire un registre. Elle
-ne saurait produire qu'une liste à recopier à la main, c'est-à-dire la moitié
-d'un outil. Il faut donc un processus local, et une fois qu'il existe, autant
-qu'il serve aussi les vidéos.
+Why a small HTTP server instead of a standalone HTML file: a page opened
+via file:// can neither move a file nor write a registry. It could only
+produce a list to copy by hand — half a tool. So a local process is
+needed, and once it exists, it might as well serve the videos too.
 
-Pourquoi pas une fenêtre Tk : Tk ne lit pas de vidéo. Il faudrait déléguer à un
-lecteur externe, et la boucle « je regarde, je juge, je passe au suivant » se
-casse à chaque clip. La balise <video> d'un navigateur donne gratuitement la
-lecture, le défilement, la vitesse et le plein écran.
+Why not a Tk window: Tk does not play video. You would have to hand off
+to an external player, and the “watch, judge, next” loop breaks on every
+clip. A browser <video> tag gives playback, scrubbing, speed and
+fullscreen for free.
 
-Rien d'autre que la bibliothèque standard n'est requis, et toutes les décisions
-(exclure, réintégrer) sont déléguées à merge_daily.py : cette interface ne
-réimplémente aucune règle, elle appelle les mêmes fonctions que la ligne de
-commande.
+Nothing beyond the standard library is required, and all decisions
+(exclude, restore) are delegated to merge_daily.py: this interface
+reimplements no rules; it calls the same functions as the command line.
 """
 
-from __future__ import annotations  # Python 3.8 (build Windows 7) : les annotations "X | None" ne s'évaluent qu'à l'écriture des chaînes, jamais à l'exécution.
+from __future__ import annotations  # Python 3.8 (Windows 7 build): "X | None" annotations are evaluated only when stringified, never at runtime.
 
 import argparse
 import asyncio
@@ -46,61 +44,16 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-except ImportError:  # Python 3.8 (build Windows 7, voir build-win7.yml) : pas de zoneinfo en stdlib.
+except ImportError:  # Python 3.8 (Windows 7 build, see build-win7.yml): no zoneinfo in stdlib.
     from backports.zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-# Avant tout import de dépendance : c'est ici qu'un environnement isolé
-# est préparé et le programme relancé dedans si nécessaire.
+# Before any dependency import: an isolated environment is prepared here
+# and the program is relaunched inside it if needed.
 from nico579_commons import serveweb
 
 import runtime
 
 LIBELLES = {
-    "fr": {
-        "aide_desc":
-            "Interface locale pour visionner les clips Blink, en écarter et en "
-            "reprendre.",
-        "aide_hub": "nom du Sync Module Blink ; tous les modules si omis",
-        "aide_thumbs": "cache des vignettes ; jetable, refabriqué à la demande",
-        "aide_trusted_host":
-            "noms d'hôte, adresses ou sous-réseaux CIDR supplémentaires, "
-            "séparés par des virgules, acceptés comme Host en plus de la boucle "
-            "locale : pour un tunnel privé (Tailscale, WireGuard) ou un LAN de "
-            "confiance lié directement à cette instance avec BLINK_BIND, sans "
-            "reverse proxy devant. Réglable aussi depuis la page (Réglages)",
-        "aide_open_browser": "ouvrir la page dans le navigateur au démarrage",
-        "vignette_erreur": "[vignette] {identity} : {type}: {erreur}",
-        "ecarter_lot_erreur": "Écarter (lot) : {erreur}",
-        "erreur_generique": "Erreur : {erreur}",
-        "echec_ecoute_port": "Impossible d'écouter sur le port {port} : {erreur}",
-        "autre_instance_deja":
-            "Un autre « blink2video serve » tourne sans doute déjà. Arrêtez-le, "
-            "choisissez un autre port avec --port.",
-        "interface_disponible": "Interface disponible sur {url}   (Ctrl+C pour arrêter)",
-        "attention_blink_bind":
-            "Attention : BLINK_BIND={bind} - interface aussi joignable "
-            "depuis le reste du réseau sur le port {port}, sans "
-            "authentification. À réserver à un réseau de confiance.",
-        "attention_trusted_host":
-            "Attention : hôte de confiance réglé sur {hote} - interface "
-            "aussi joignable sous ce nom, sans authentification. À réserver "
-            "à un tunnel privé (Tailscale, WireGuard) lié à cette adresse "
-            "avec BLINK_BIND.",
-        "interruption_arret": "\nArrêt.",
-        "snapshot_commande_refusee": "Blink a refusé la commande de photo.",
-        "snapshot_non_confirme": "Blink n'a pas confirmé la photo.",
-        "snapshot_image_indisponible":
-            "La caméra a pris la photo, mais Blink ne l'a pas encore publiée. "
-            "Réessayez dans un instant.",
-        "webhook_camera_manquante": "Paramètre « camera » manquant.",
-        "webhook_jeton_invalide": "Jeton de webhook invalide ou manquant.",
-        "webhook_camera_inconnue": "Caméra inconnue : {camera}.",
-        "webhook_systeme_inconnu": "Système inconnu : {systeme}.",
-        "webhook_nom_ambigu": "Plusieurs éléments portent ce nom : {nom}. Renommez-en un dans l'application Blink.",
-        "webhook_cible": "Indiquez exactement une cible : camera ou system.",
-        "webhook_armed_invalide": "Paramètre armed attendu : true ou false.",
-        "webhook_camera_hors_ligne": "La caméra « {camera} » est hors ligne : armement non tenté.",
-    },
     "en": {
         "aide_desc": "Local interface to watch Blink clips, discard some and bring them back.",
         "aide_hub": "Blink Sync Module name; all modules if omitted",
@@ -145,6 +98,7 @@ LIBELLES = {
         "webhook_camera_hors_ligne": "Camera \u201c{camera}\u201d is offline: arming not attempted.",
     },
 }
+LIBELLES["fr"] = dict(LIBELLES["en"])
 
 
 def msg(cle: str, **valeurs) -> str:
@@ -153,6 +107,7 @@ def msg(cle: str, **valeurs) -> str:
 
 runtime.bootstrap()
 
+import access_control
 import autostart
 import blink_auth
 import blink_engine
@@ -166,40 +121,39 @@ import watch
 
 BASE_DIR = runtime.app_dir()
 
-# Un identifiant de clip est un chemin relatif « caméra/mois/fichier.mp4 ».
-# Tout ce qui arrive du navigateur est confronté au registre avant d'ouvrir
-# quoi que ce soit : aucun chemin fabriqué à la main n'est servi.
+# A clip identity is a relative path "camera/month/file.mp4".
+# Everything that arrives from the browser is checked against the registry
+# before opening anything: no hand-crafted path is ever served.
 IDENTITY = re.compile(r"^[\w.\- ]+(/[\w.\- ]+)*\.mp4$")
-# Photos (issue GitHub #9) : un seul niveau (caméra/fichier.jpg), jamais
-# imbriquées comme les clips - pas de raison de l'être.
+# Photos (GitHub issue #9): a single level (camera/file.jpg), never
+# nested like clips — no reason for them to be.
 IDENTITY_SNAPSHOT = re.compile(r"^[\w.\- ]+/[\w.\- ]+\.jpg$")
 
-# Avancement annoncé par blink2video.py et merge_daily.py, et titres de phase émis
-# par blink_engine.py (« === STOCKAGE LOCAL === », « === CLOUD DE L'ABONNEMENT === »).
+# Progress announced by blink2video.py and merge_daily.py, and phase headings
+# emitted by blink_engine.py ("=== LOCAL STORAGE ===", "=== SUBSCRIPTION CLOUD ===").
 PROGRESS = re.compile(r"\[(\d+)/(\d+)\]")
-# Ligne d'avancement à l'intérieur d'un clip : « [3/24] 45% », rien d'autre.
+# Progress line inside a clip: "[3/24] 45%", nothing else.
 INNER = re.compile(r"^\s*\[\d+/\d+\]\s+(\d+)%\s*$")
 HEADING = re.compile(r"^=== (.+?) ===$")
 
-# Limite le nombre d'extractions de vignettes simultanées (voir send_thumb) :
-# le navigateur les réclame toutes d'un coup à chaque changement de filtre, un
-# nombre fixe évite de saturer la machine pour autant de ffmpeg à la fois.
-# Fixé à 2 à l'origine, beaucoup trop bas pour une machine multi-cœurs
-# actuelle : passer d'un préréglage large (mois, déjà en cache) à un plus
-# étroit mais couvrant des clips jamais vus (aujourd'hui, cette semaine)
-# mettait chaque vignette manquante en attente derrière seulement deux
-# extractions à la fois, le spinner natif du lecteur tournant sur chacune le
-# temps de son tour (constaté en réel, 2026-08-27). Une extraction reste bien
-# plus légère qu'un encodage complet (une seule image, pas de vidéo entière) :
-# le nombre de cœurs est un plafond raisonnable, pas un risque comparable.
+# Caps concurrent thumbnail extractions (see send_thumb): the browser
+# requests them all at once on every filter change; a fixed limit avoids
+# saturating the machine with that many ffmpeg processes at once.
+# Originally fixed at 2, far too low for a modern multi-core machine:
+# switching from a wide preset (month, already cached) to a narrower one
+# covering never-seen clips (today, this week) queued every missing
+# thumbnail behind only two extractions at a time, the player's native
+# spinner spinning on each until its turn (observed in practice, 2026-08-27).
+# An extraction is much lighter than a full encode (one image, not a whole
+# video): the core count is a reasonable ceiling, not a comparable risk.
 THUMB_SLOTS = threading.Semaphore(min(8, os.cpu_count() or 4))
 
-# Un verrou par miniature, pas un seul global qui sérialiserait toutes les
-# vignettes de toutes les caméras entre elles : sans lui, deux requêtes
-# concurrentes pour LA MÊME miniature (deux onglets sur la même page)
-# partagent le même fichier temporaire clip.tmp.jpg, et l'une peut le
-# renommer vers la destination finale avant que l'autre n'ait fini de s'en
-# servir (FileNotFoundError, constaté en réel).
+# One lock per thumbnail, not a single global that would serialize every
+# thumbnail of every camera against each other: without it, two concurrent
+# requests for THE SAME thumbnail (two tabs on the same page) share the
+# same temporary file clip.tmp.jpg, and one can rename it to the final
+# destination before the other has finished using it
+# (FileNotFoundError, observed in practice).
 _VERROUS_MINIATURE: dict = {}
 _VERROU_CREATION_MINIATURE = threading.Lock()
 
@@ -209,67 +163,64 @@ def _verrou_miniature(cle: str) -> threading.Lock:
         return _VERROUS_MINIATURE.setdefault(cle, threading.Lock())
 
 
-# Le Sync Module ne traite qu'une commande à la fois et refuse les suivantes
-# avec « System is busy ». Inutile de le lui demander : mesuré, son état publié
-# est identique au repos et pendant un direct (busy reste vide, status reste
-# « online »), et le lui demander coûte treize secondes, plus cher que de tenter
-# la commande. On tient donc le compte localement, puisque c'est nous qui
-# l'occupons : ce jeton est pris par un direct comme par une actualisation, ce
-# qui les empêche de se marcher dessus.
+# The Sync Module handles only one command at a time and rejects the next
+# with "System is busy". No point asking it: measured, its published state
+# is identical at rest and during a live view (busy stays empty, status stays
+# "online"), and asking costs thirteen seconds — more expensive than trying
+# the command. So we track occupancy locally, since we are the ones using
+# it: this token is taken by a live view and by a refresh alike, which
+# keeps them from stepping on each other.
 #
-# Il ne couvre évidemment pas un autre client, l'application mobile par
-# exemple : là seul le refus renseigne, d'où la reprise avec attente croissante
-# côté blink2video.py.
+# It obviously does not cover another client, e.g. the mobile app: there
+# only the rejection informs us, hence the retry with growing backoff in
+# blink2video.py.
 MODULE_SLOT = threading.Semaphore(1)
-# Diagnostic seul : dit qui tient MODULE_SLOT et depuis quand, pour qu'un 409
-# distingue « occupé, ça va se libérer » d'« occupé depuis 20 minutes, ça sent
-# la fuite » sans avoir à redémarrer le serveur pour le savoir.
+# Diagnostic only: says who holds MODULE_SLOT and since when, so a 409 can
+# distinguish "busy, will free soon" from "busy for 20 minutes, smells like
+# a leak" without restarting the server to find out.
 MODULE_SLOT_INFO: dict = {}
-# /api/attente-module (plus bas) : combien de temps un client peut attendre
-# une confirmation que MODULE_SLOT est libre avant d'être informé que ça
-# prend plus longtemps que prévu. Un peu au-delà du plafond interne de
-# _stop_stream (asyncio.wait_for(feed, timeout=20)) : pas de raison de
-# couper avant que le nettoyage serveur lui-même abandonne.
+# /api/attente-module (below): how long a client may wait for confirmation
+# that MODULE_SLOT is free before being told it is taking longer than
+# expected. A bit beyond the internal ceiling of _stop_stream
+# (asyncio.wait_for(feed, timeout=20)): no reason to cut off before the
+# server-side cleanup itself gives up.
 ATTENTE_MODULE_MAX_SECONDS = 25
 
-# hub_lock("direct") (send_live_mse/send_offer_webrtc, plus bas) échouait
-# jusqu'ici instantanément (attente=0 implicite) s'il tombait sur le
-# téléchargement de fond (clips USB/cloud) déjà en train de parler au Sync
-# Module - alors que celui-ci ne le retient souvent que quelques secondes.
-# Un échec instantané coûtait alors tout un cycle de reprise côté page
-# (échec, 3s d'attente, negociation WebRTC entière refaite), plutôt qu'une
-# simple attente ici, sur la même requête - exactement le cas que
-# runtime.verrou() documente pour son paramètre attente (constaté en réel,
-# 2026-09-04 : bascules de caméra ressenties comme "instables").
+# hub_lock("direct") (send_live_mse/send_offer_webrtc, below) used to fail
+# instantly here (implicit wait=0) if it hit the background download
+# (USB/cloud clips) already talking to the Sync Module — even though the
+# Module often only holds it for a few seconds. An instant failure then
+# cost a full retry cycle on the page (failure, 3s wait, entire WebRTC
+# negotiation redone), rather than a simple wait here on the same request —
+# exactly the case runtime.verrou() documents for its wait parameter
+# (observed in practice, 2026-09-04: camera switches felt "unstable").
 ATTENTE_HUB_MAX_SECONDS = 20
 
-# La photo confirmée peut mettre encore un peu de temps à paraître chez Blink.
-# MODULE_SLOT reste pris pendant cette attente, partagée avec les directs et
-# les téléchargements : ne pas prolonger le sondage au-delà de ce plafond.
+# The confirmed photo may still take a little time to appear at Blink.
+# MODULE_SLOT stays held during this wait, shared with live views and
+# downloads: do not extend polling beyond this ceiling.
 ATTENTE_MEDIA_SNAPSHOT_SECONDS = 18
 INTERVALLE_MEDIA_SNAPSHOT_SECONDS = 2
 
-# Bascule pilotée par le bouton d'enregistrement de la page (JS,
-# /api/direct-enregistrement plus bas) : un seul direct actif à la fois
-# (MODULE_SLOT), donc un seul drapeau global suffit, lu par send_live_mse et
-# blink_webrtc._PisteH264 pour savoir s'il faut écrire sur le disque
-# maintenant. Effacé au début de chaque nouveau direct (send_live_mse,
-# send_offer_webrtc) : ouvrir un direct ne doit jamais hériter en silence de
-# l'état laissé par le précédent.
+# Toggle driven by the page's record button (JS, /api/direct-enregistrement
+# below): only one live view active at a time (MODULE_SLOT), so a single
+# global flag is enough, read by send_live_mse and blink_webrtc._PisteH264
+# to know whether to write to disk now. Cleared at the start of each new
+# live view (send_live_mse, send_offer_webrtc): opening a live view must
+# never silently inherit the state left by the previous one.
 ENREGISTREMENT_DIRECT_ACTIF = threading.Event()
 
-# La session existe dès l'admission HTTP, avant le réveil et la création du
-# pc. L'identifiant aléatoire vient de l'onglet et change à chaque tentative.
-# Le verrou protège les transitions entre les threads HTTP et BLINK.loop.
+# The session exists from HTTP admission, before wake-up and pc creation.
+# The random id comes from the tab and changes on every attempt.
+# The lock protects transitions between the HTTP threads and BLINK.loop.
 DIRECT_WEBRTC_SESSION: dict = {}
 DIRECT_WEBRTC_SESSION_LOCK = threading.Lock()
-# Même rôle pour MSE, en plus simple : send_live_mse() tourne en code
-# synchrone dans son propre thread HTTP, pas sur une boucle asyncio - pas de
-# "loop"/"interrompre" à retenir, juste l'Event que sa boucle d'envoi
-# vérifie elle-même à chaque tour (voir _demander_arret_direct). Sans ça, un
-# navigateur fermé pendant un silence de la caméra n'était détecté qu'à la
-# prochaine écriture - jamais si la caméra restait muette, le module pouvait
-# donc rester occupé jusqu'à LIVE_MAX_SECONDS (300 s, bug réel).
+# Same role for MSE, simpler: send_live_mse() runs synchronous code in its
+# own HTTP thread, not on an asyncio loop — no "loop"/"interrompre" to keep,
+# just the Event that its send loop checks itself each turn (see
+# _demander_arret_direct). Without that, a browser closed during a camera
+# silence was only detected on the next write — never if the camera stayed
+# mute, so the module could stay busy until LIVE_MAX_SECONDS (300 s, real bug).
 DIRECT_MSE_SESSION: dict = {}
 DIRECT_ARRETS_RECENTS: dict = {}
 DIRECT_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{16,64}\Z")
@@ -282,7 +233,7 @@ WEBRTC_START_MAX_SECONDS = (
 
 
 def _purger_arrets_direct() -> None:
-    """Appelé sous DIRECT_WEBRTC_SESSION_LOCK ; mémoire bornée."""
+    """Called under DIRECT_WEBRTC_SESSION_LOCK; bounded memory."""
     maintenant = time.monotonic()
     for identifiant, expiration in list(DIRECT_ARRETS_RECENTS.items()):
         if expiration <= maintenant:
@@ -292,15 +243,14 @@ def _purger_arrets_direct() -> None:
 
 
 def _demander_arret_direct(session_id: str) -> bool:
-    """Annule la tentative WebRTC ou MSE désignée, sans attendre BLINK.lock.
+    """Cancel the designated WebRTC or MSE attempt, without waiting for BLINK.lock.
 
-    Une annulation WebRTC peut arriver avant son offre sur une autre
-    connexion HTTP ; la conserver brièvement (DIRECT_ARRETS_RECENTS)
-    empêche cette offre tardive de réveiller la caméra. MSE n'a pas cette
-    fenêtre : sa requête GET est la tentative elle-même, il suffit de
-    positionner son Event - la boucle d'envoi (send_live_mse) le vérifie
-    elle-même à chaque tour, pas de "loop"/"interrompre" à réveiller
-    puisqu'elle ne tourne pas sur asyncio."""
+    A WebRTC cancellation can arrive before its offer on another HTTP
+    connection; keeping it briefly (DIRECT_ARRETS_RECENTS) prevents that
+    late offer from waking the camera. MSE has no such window: its GET
+    request is the attempt itself, so setting its Event is enough — the
+    send loop (send_live_mse) checks it each turn, with no "loop"/
+    "interrompre" to wake since it does not run on asyncio."""
     if not DIRECT_SESSION_ID.fullmatch(session_id):
         return False
     with DIRECT_WEBRTC_SESSION_LOCK:
@@ -324,12 +274,12 @@ def _demander_arret_direct(session_id: str) -> bool:
         loop.call_soon_threadsafe(webrtc_holder["interrompre"])
     return True
 
-# Reglage de la page web (webrtc par defaut) depuis le 2026-09-03 - a
-# remplace la variable d'environnement BLINK_DIRECT_WEBRTC, experimentale,
-# une fois WebRTC valide en usage reel (BACKLOG.md). Lu une fois au
-# demarrage, comme tous les autres reglages (port, fuseau...) : un
-# changement redemarre deja le serveur (/api/reglages cote JS). Retombe sur
-# MSE si aiortc n'est pas installe, meme "webrtc" choisi.
+# Web page setting (webrtc by default) since 2026-09-03 — replaced the
+# experimental BLINK_DIRECT_WEBRTC environment variable once WebRTC was
+# validated in real use (BACKLOG.md). Read once at startup, like all other
+# settings (port, timezone...): a change already restarts the server
+# (/api/reglages on the JS side). Falls back to MSE if aiortc is not
+# installed, even when "webrtc" is chosen.
 WEBRTC_ACTIF = (runtime.lire_reglages()["live_protocol"] == "webrtc") and blink_webrtc.DISPONIBLE
 
 
@@ -345,59 +295,59 @@ def _slot_rendu() -> None:
 def _slot_occupe_message() -> str:
     quoi = MODULE_SLOT_INFO.get("quoi")
     if not quoi:
-        return "Le module est deja occupe (direct ou actualisation)."
+        return "The module is already busy (live view or refresh)."
     depuis = time.monotonic() - MODULE_SLOT_INFO.get("depuis", time.monotonic())
     camera = MODULE_SLOT_INFO.get("camera") or ""
     cible = f" ({camera})" if camera else ""
-    return (f"Le module est deja occupe : {quoi}{cible}, depuis "
+    return (f"The module is already busy: {quoi}{cible}, for "
             f"{depuis:.0f}s.")
-# Plafond d'une session de direct. Blink la ferme lui-même au bout d'environ
-# six minutes de vidéo : son relais coupe la connexion, mesuré le 2026-09-28
-# sur une Mini et une Outdoor (356 à 375 s de flux, 6:01 selon ffmpeg), sans
-# qu'il faille jamais « Continuer ». Sept minutes le laissent aller au bout,
-# et restent un filet si ce relais ne fermait jamais. Au-delà, la case
-# « Direct continu » de la page ouvre une nouvelle session.
+# Ceiling for a live-view session. Blink itself closes it after about six
+# minutes of video: its relay cuts the connection, measured 2026-09-28 on a
+# Mini and an Outdoor (356 to 375 s of stream, 6:01 per ffmpeg), without
+# ever needing "Continuer". Seven minutes lets it run to the end, and remains
+# a safety net if that relay never closed. Beyond that, the page's
+# "Continuous live" checkbox opens a new session.
 LIVE_MAX_SECONDS = 420
-# Délai accordé à la première image. Une caméra sur batterie doit se réveiller,
-# donc on est patient ; au-delà on considère qu'elle ne répondra pas.
+# Time allowed for the first frame. A battery camera must wake up, so we are
+# patient; beyond that we consider it will not respond.
 LIVE_FIRST_FRAME_SECONDS = 40
-# Plafond de chaque attente dans la boucle d'envoi MSE, pour que l'arrêt
-# explicite demandé via DIRECT_MSE_SESSION (voir _demander_arret_direct)
-# soit revérifié à cette cadence plutôt que seulement une fois LIVE_MAX_SECONDS
-# écoulé - sans changer le comportement d'un flux actif (les blocs arrivent
-# bien avant cette seconde de toute façon).
+# Ceiling for each wait in the MSE send loop, so an explicit stop requested
+# via DIRECT_MSE_SESSION (see _demander_arret_direct) is rechecked at this
+# cadence rather than only once LIVE_MAX_SECONDS has elapsed — without
+# changing behavior of an active stream (blocks arrive well before this
+# second anyway).
 LIVE_MSE_ARRET_POLL_SECONDS = 1.0
 
-# Aucune vignette n'est redemandée d'elle-même : elle est récupérée une fois,
-# puis conservée jusqu'à ce qu'on clique sur Actualiser. Une image qui change
-# seule sous les yeux, sans qu'on l'ait demandé, n'est pas un service rendu.
+# No thumbnail is re-requested on its own: it is fetched once, then kept
+# until Actualiser is clicked. An image that changes by itself under your
+# eyes, without being asked for, is not a service rendered.
 
 
-# md.safe_name directement : safe_file() était une troisième copie du même
-# nettoyage, dérivée des deux autres (revue de code du 0eab463, bug #5).
+# md.safe_name directly: safe_file() was a third copy of the same cleanup,
+# derived from the other two (code review of 0eab463, bug #5).
 safe_file = md.safe_name
 
-# Où sauver une copie d'un direct (WebRTC ou MSE) pendant qu'il joue, à côté
-# de Blink_Clips et consorts (runtime.DOSSIERS_SORTIES).
+# Where to save a copy of a live view (WebRTC or MSE) while it plays, next to
+# Blink_Clips and related folders (runtime.DOSSIERS_SORTIES).
 DOSSIER_DIRECT = runtime.dossier_sorties() / "Blink_Direct"
 
-# Photos prises à la demande (bouton, ou webhook externe - issue GitHub #9),
-# distinctes des clips de détection : une caméra désarmée le jour n'en génère
-# aucun, mais peut quand même répondre à une prise de vue explicite.
+# On-demand photos (button, or external webhook — GitHub issue #9), distinct
+# from detection clips: a camera disarmed during the day generates none, but
+# can still respond to an explicit snapshot.
 DOSSIER_SNAPSHOTS = runtime.dossier_sorties() / "Blink_Snapshots"
 WEBHOOK_SNAPSHOT_ROUTE = "/webhook/snapshot"
-# Etat des cameras et armement pour les scripts (issue #40), meme secret que la
-# photo : un seul a retenir, decision de Nico et de Markus le 2026-09-30.
+# Camera and arming state for scripts (issue #40), same secret as the photo:
+# only one to remember, decision by Nico and Markus on 2026-09-30.
 WEBHOOK_STATUS_ROUTE = "/webhook/status"
 WEBHOOK_ARM_ROUTE = "/webhook/arm"
-# Un POST sur /webhook/arm n'a pas de corps utile (tout passe par l'URL) : on
-# le lit pour ne pas desynchroniser une connexion persistante, jusqu'a cette
-# taille, au-dela on ferme la connexion.
+# A POST on /webhook/arm has no useful body (everything goes through the URL):
+# we still read it so as not to desynchronize a persistent connection, up to
+# this size; beyond that we close the connection.
 _CORPS_WEBHOOK_MAX = 65536
 
 
 def _booleen_webhook(valeur):
-    """true/false, 1/0, on/off, yes/no, oui/non (casse indifferente), None sinon."""
+    """true/false, 1/0, on/off, yes/no, oui/non (case-insensitive), None otherwise."""
     v = (valeur or "").strip().casefold()
     if v in ("true", "1", "on", "yes", "oui"):
         return True
@@ -407,9 +357,9 @@ def _booleen_webhook(valeur):
 
 
 def _camera_pour_webhook(camera: dict, systeme) -> dict:
-    """Ce qu'un script voit d'une camera : les champs que Blink donne, tels
-    quels, et null quand une camera ne les rapporte pas (tous les modeles n'ont
-    ni batterie ni tension ni wifi). Pas de numero de serie."""
+    """What a script sees of a camera: the fields Blink provides, as-is, and
+    null when a camera does not report them (not all models have battery,
+    voltage, or wifi). No serial number."""
     return {
         "name": camera.get("name"),
         "system": systeme,
@@ -428,9 +378,9 @@ def _camera_pour_webhook(camera: dict, systeme) -> dict:
 
 
 def etat_webhook(etat: dict, camera: str = ""):
-    """Etat des systemes et des cameras pour /webhook/status, depuis le meme
-    system_state() que la page. Avec `camera`, seulement celle-la ; None si ce
-    nom ne correspond a aucune camera."""
+    """System and camera state for /webhook/status, from the same
+    system_state() as the page. With `camera`, only that one; None if the
+    name matches no camera."""
     systemes = []
     trouvee = False
     for systeme in etat.get("systems") or []:
@@ -455,22 +405,21 @@ def etat_webhook(etat: dict, camera: str = ""):
 
 
 def _chemin_enregistrement_direct(name: str) -> Path:
-    """Chemin du fichier où sauver le direct d'une caméra en cours.
+    """Path of the file where to save the live view of a camera in progress.
 
-    Même convention que target_path() (blink_models.py) pour les clips de
-    détection : caméra/mois en dossiers, puis
-    horodatage_caméra_identifiant_empreinte.mp4 - demandé explicitement pour
-    qu'un enregistrement du direct ne se distingue pas visuellement d'un clip
-    de détection dans l'arborescence (2026-09-04). target_path() elle-même
-    n'est pas réutilisée : elle est bâtie autour d'un clip.id fourni par
-    l'API Blink, qu'un direct n'a pas. `identifiant` en tient lieu, sans
-    prétendre venir de l'API : les secondes depuis l'epoch UTC, un entier
-    d'une longueur proche de celle d'un identifiant Blink réel plutôt qu'un
-    horodatage qui ferait doublon avec le premier segment du nom. `suffixe`
-    reprend exactement le mécanisme de target_path() (empreinte JSON, SHA256,
-    12 caractères) : une seule caméra ne peut de toute façon avoir qu'un
-    direct ouvert à la fois (MODULE_SLOT), la collision n'est pas la
-    motivation ici, seule la cohérence visuelle avec les clips l'est."""
+    Same convention as target_path() (blink_models.py) for detection clips:
+    camera/month as folders, then
+    timestamp_camera_id_fingerprint.mp4 — requested explicitly so a live
+    recording is not visually distinct from a detection clip in the tree
+    (2026-09-04). target_path() itself is not reused: it is built around a
+    clip.id from the Blink API, which a live view does not have.
+    `identifiant` stands in for it, without claiming to come from the API:
+    seconds since the UTC epoch, an integer of a length close to a real Blink
+    id rather than a timestamp that would duplicate the first name segment.
+    `suffixe` reuses target_path()'s mechanism exactly (JSON fingerprint,
+    SHA256, 12 characters): a camera can only have one live view open at a
+    time anyway (MODULE_SLOT), so collision is not the motivation here —
+    only visual consistency with clips."""
     maintenant = dt.datetime.now(dt.timezone.utc)
     horodatage = maintenant.strftime("%Y-%m-%d_%H-%M-%SZ")
     camera = safe_file(name)
@@ -488,11 +437,11 @@ def read_entries(paths: dict) -> dict:
 
 
 def nombre_clips_connus(entries: dict) -> int:
-    """Clips du registre comptés comme total_known["clip"] de collect() :
-    la page compare les deux pour annoncer les nouveaux clips (audit du
-    26/09/2026, B03). Compter aussi une entrée illisible, que la galerie
-    ignore, annoncerait un « nouveau » clip à chaque sondage et relancerait
-    sans fin l'actualisation automatique."""
+    """Registry clips counted as collect()'s total_known["clip"]:
+    the page compares the two to announce new clips (audit of
+    26/09/2026, B03). Also counting an unreadable entry that the gallery
+    ignores would announce a "new" clip on every poll and restart
+    automatic refresh forever."""
     total = 0
     for entry in entries.values():
         try:
@@ -506,25 +455,24 @@ def nombre_clips_connus(entries: dict) -> int:
 
 ETIQUETTES_SOURCE = {"usb": "local", "cloud": "cloud"}
 
-# Un seul réassemblage à la fois : deux assemblages simultanés de la même
-# journée écriraient le même fichier.
+# Only one reassembly at a time: two simultaneous assemblies of the same
+# day would write the same file.
 REASSEMBLAGE = threading.Lock()
 
-# Écarter un clip ne touche que le registre. Lui donner son propre verrou plutôt
-# que celui de l'actualisation : sinon un clic pendant un téléchargement attend
-# la fin de ce téléchargement, et le bouton semble bloqué une minute entière.
+# Excluding a clip only touches the registry. Give it its own lock rather
+# than the refresh one: otherwise a click during a download waits for that
+# download to finish, and the button appears stuck for a full minute.
 REGISTRE = threading.Lock()
 
 
 def provenances(entrees: dict) -> dict:
-    """Où sont enregistrés les clips de chaque caméra, par caméra.
+    """Where each camera's clips are stored, per camera.
 
-    Constaté plutôt que déduit : c'est la provenance des clips réellement
-    rapatriés, pas une lecture des réglages du compte. Une caméra couverte par
-    un abonnement dit « cloud », une autre « USB », et l'absence des deux se
-    voit aussi, ce qui explique une caméra qui ne produit rien. Les entrées
-    antérieures à cette distinction viennent forcément de la clé, seule source
-    existante alors."""
+    Observed rather than deduced: it is the provenance of clips actually
+    retrieved, not a reading of account settings. One camera covered by a
+    "cloud" subscription, another "USB", and the absence of both also shows,
+    which explains a camera that produces nothing. Entries earlier than this
+    distinction necessarily come from the key, the only source then."""
     vues = {}
     for entree in entrees.values():
         camera = str(entree.get("camera") or "").strip()
@@ -535,11 +483,11 @@ def provenances(entrees: dict) -> dict:
 
 
 def suppression_auto_choices(entrees: dict) -> list:
-    """Caméras réglables, indexées par leur identité persistée et non leur nom.
+    """Configurable cameras, indexed by their persisted identity not their name.
 
-    Usage interne uniquement (résolution nom -> clé(s) pour la route
-    /api/suppression-auto) : la page n'affiche jamais ces clés, seulement le
-    nom des caméras actuelles (état de watch.py)."""
+    Internal use only (name -> key(s) resolution for the
+    /api/suppression-auto route): the page never shows these keys, only the
+    names of current cameras (watch.py state)."""
     choices = {}
     for entry in entrees.values():
         if not isinstance(entry, dict) or not entry.get("camera"):
@@ -554,33 +502,33 @@ def suppression_auto_choices(entrees: dict) -> list:
 
 
 def suppression_auto_keys() -> set:
-    """Ignore les anciens noms ambigus jusqu'à leur migration explicite."""
+    """Ignore old ambiguous names until their explicit migration."""
     return {
         value for value in runtime.lire_suppression_auto()
         if value.startswith("camera-v2-")
     }
 
 
-# (clé du fichier registre, identités) de la dernière lecture : voir
-# known_identities(). Un tuple remplacé d'un bloc, jamais muté, suffit entre
-# les threads du serveur.
+# (registry file key, identities) from the last read: see
+# known_identities(). A tuple replaced as a whole, never mutated, is enough
+# between server threads.
 _IDENTITES_CONNUES: tuple = (None, frozenset())
 
 
 def known_identities(paths: dict) -> frozenset:
-    """Chemins de clips que le registre reconnaît, sans rien mesurer.
+    """Clip paths the registry recognizes, without measuring anything.
 
-    Séparé de collect() à dessein : la validation d'une requête média passe par
-    ici et doit rester instantanée, alors que l'inventaire complet peut avoir à
-    lancer ffmpeg.
+    Separated from collect() on purpose: validating a media request goes
+    through here and must stay instant, while the full inventory may need
+    to run ffmpeg.
 
-    Mémorisé tant que le fichier du registre ne change pas : chaque vignette
-    et chaque requête Range d'un lecteur vidéo passent par ici, et relire le
-    JSON complet à chaque fois coûtait ~27 ms par requête pour 10 000 clips
-    (5,4 Mo, mesuré sur une machine rapide ; bien davantage sous Windows 7),
-    soit plusieurs secondes de CPU pour une seule page de vignettes (audit du
-    2026-09-24). Le registre n'est jamais réécrit en place (remplacement
-    atomique) : inode, taille ou date changent donc à chaque écriture."""
+    Cached as long as the registry file does not change: every thumbnail
+    and every video player's Range request goes through here, and rereading
+    the full JSON each time cost ~27 ms per request for 10,000 clips
+    (5.4 MB, measured on a fast machine; much more under Windows 7),
+    i.e. several seconds of CPU for a single thumbnail page (audit of
+    2026-09-24). The registry is never rewritten in place (atomic
+    replacement): inode, size or date therefore change on every write."""
     global _IDENTITES_CONNUES
     registre = paths["input"] / md.DOWNLOAD_STATE
     try:
@@ -601,29 +549,28 @@ def known_identities(paths: dict) -> frozenset:
     return identites
 
 
-# Durée mesurée des clips écartés, qui n'ont plus d'entrée dans le registre
-# normalisé (voir collect) : sans ce cache, ffmpeg -i était relancé pour
-# chacun d'eux à chaque ouverture de la page.
+# Measured duration of excluded clips, which no longer have an entry in the
+# normalized registry (see collect): without this cache, ffmpeg -i was
+# relaunched for each of them on every page open.
 EXCLUDED_DURATIONS = "excluded_durations.json"
-# Même principe que EXCLUDED_DURATIONS, pour les vidéos assemblées
-# (collect_videos) : sans lui, chaque redémarrage du serveur relançait
-# ffmpeg -i pour TOUTES les journalières/hebdomadaires/mensuelles existantes
-# dès la première ouverture de l'onglet Clips - le cache mémoire de
-# probe_duration (_DURATIONS plus bas) ne survit pas à un redémarrage
-# (audit general demande par l'utilisateur, 2026-09-03).
+# Same idea as EXCLUDED_DURATIONS, for assembled videos (collect_videos):
+# without it, every server restart relaunched ffmpeg -i for ALL existing
+# daily/weekly/monthly videos on the first open of the Clips tab — the
+# in-memory probe_duration cache (_DURATIONS below) does not survive a
+# restart (general audit requested by the user, 2026-09-03).
 ASSEMBLED_DURATIONS = "assembled_durations.json"
-# Écarter/réintégrer un clip de détection écrit dans le registre de
-# téléchargement (blink_registre.py) : un enregistrement du direct n'y a
-# jamais d'entrée, "écarter" ne peut donc reposer sur le même mécanisme.
-# Fichier à part, aussi simple qu'un ensemble d'identités - pas de statut par
-# clip à fusionner avec autre chose, contrairement au registre.
+# Exclude/restore a detection clip writes in the download registry
+# (blink_registre.py): a live recording never has an entry there, so
+# "exclude" cannot rely on the same mechanism. Separate file, as simple as
+# a set of identities — no per-clip status to merge with anything else,
+# unlike the registry.
 DIRECT_EXCLUSION = "direct_exclusion.json"
 
 
 def _identite_selection_valide(identity: str) -> bool:
-    # fullmatch interdit notamment une fin de ligne après l'extension.
-    # Les suffixes espaces/points sont normalisés par Windows : les refuser
-    # empêche aussi les variantes « .. » après normalisation native.
+    # fullmatch notably forbids a trailing newline after the extension.
+    # Space/dot suffixes are normalized by Windows: rejecting them also
+    # blocks ".." variants after native normalization.
     return bool(IDENTITY.fullmatch(identity)) and all(
         morceau not in (".", "..") and morceau.rstrip(" .") == morceau
         for morceau in identity.split("/"))
@@ -631,28 +578,28 @@ def _identite_selection_valide(identity: str) -> bool:
 
 def _chemin_direct_confine(racine: Path, identity: str) -> Path:
     if not _identite_selection_valide(identity):
-        raise ValueError("Identité de vidéo invalide")
+        raise ValueError("Invalid video identity")
     try:
         racine = racine.resolve()
         chemin = (racine / identity).resolve()
     except (OSError, RuntimeError) as erreur:
-        raise ValueError("Chemin de vidéo inaccessible") from erreur
+        raise ValueError("Video path inaccessible") from erreur
     if not runtime.est_relatif_a(chemin, racine):
-        raise ValueError("Vidéo hors du dossier des directs")
+        raise ValueError("Video outside the live-recording folder")
     return chemin
 
 
-# Sérialise la lecture-modification-écriture de DIRECT_EXCLUSION entre les
-# threads du serveur : voir Handler._appliquer_selection_directs().
+# Serializes read-modify-write of DIRECT_EXCLUSION across server threads:
+# see Handler._appliquer_selection_directs().
 _VERROU_EXCLUSION_DIRECTE = threading.Lock()
 
 
 def _lire_exclusion_directe(paths: dict) -> set:
-    # {"excluded": [...]}, pas une liste nue : md.load_json/save_json (déjà
-    # utilisés pour ASSEMBLED_DURATIONS...) exigent un objet
-    # JSON - une liste nue s'écrit sans broncher mais se relit silencieusement
-    # comme vide (isinstance(..., dict) rejette la liste, load_json rend
-    # alors son défaut), constaté en vérifiant ce mécanisme (2026-09-04).
+    # {"excluded": [...]}, not a bare list: md.load_json/save_json (already
+    # used for ASSEMBLED_DURATIONS...) require a JSON object — a bare list
+    # writes without complaint but rereads silently as empty
+    # (isinstance(..., dict) rejects the list, load_json then returns its
+    # default), observed when verifying this mechanism (2026-09-04).
     valeurs = md.load_json(paths["thumbs"] / DIRECT_EXCLUSION, {}).get("excluded")
     return {str(v) for v in valeurs} if isinstance(valeurs, list) else set()
 
@@ -661,18 +608,18 @@ def _ecrire_exclusion_directe(paths: dict, identites: set) -> None:
     md.save_json(paths["thumbs"] / DIRECT_EXCLUSION, {"excluded": sorted(identites)})
 
 
-# Fenêtre par défaut de /api/clips : au-delà, le nombre de vignettes ne fait
-# que croître de jour en jour sans jamais être consulté. L'historique complet
-# reste disponible sur demande explicite (paramètre ?all=1), jamais perdu.
+# Default window for /api/clips: beyond it, the thumbnail count only grows
+# day by day without ever being consulted. Full history remains available
+# on explicit request (?all=1 parameter), never lost.
 DEFAULT_WINDOW_DAYS = 30
 
-# Préréglages du filtre de plage (bouton de découpage rapide de la page
-# clips), en heures plutôt qu'en jours : « aujourd'hui » vise les 24 dernières
-# heures glissantes, pas depuis minuit, pour rester utile à toute heure de la
-# journée. « month » reprend DEFAULT_WINDOW_DAYS : même bouton que la fenêtre
-# par défaut, pas une deuxième valeur à tenir synchronisée. « 2months » suit
-# la limite de rétention du stockage cloud Blink aux États-Unis, au-delà de
-# laquelle les clips y sont supprimés (signalé sur Reddit, 2026-08-27).
+# Range-filter presets (quick range button on the clips page), in hours
+# rather than days: "today" means the last 24 rolling hours, not since
+# midnight, so it stays useful at any hour. "month" reuses
+# DEFAULT_WINDOW_DAYS: same button as the default window, not a second
+# value to keep in sync. "2months" follows Blink cloud storage retention
+# in the United States, beyond which clips are deleted there (reported on
+# Reddit, 2026-08-27).
 RANGE_PRESETS_HOURS = {
     "today": 24,
     "week": 7 * 24,
@@ -680,19 +627,19 @@ RANGE_PRESETS_HOURS = {
     "2months": 60 * 24,
 }
 
-# L'API ne renvoie que des noms de code internes d'Amazon, jamais de référence
-# commerciale. Deux seulement sont établis : « owl », documenté comme étant le
-# Blink Mini dans le code de blinkpy, et « catalina », identifié par le
-# propriétaire du matériel comme un Blink Outdoor. Tout autre nom de code reste
-# affiché tel quel, annoncé comme interne, plutôt que traduit au jugé.
+# The API only returns Amazon internal code names, never a commercial
+# reference. Only two are established: "owl", documented as the Blink Mini
+# in blinkpy's code, and "catalina", identified by the hardware owner as a
+# Blink Outdoor. Any other code name stays displayed as-is, announced as
+# internal, rather than guessed at.
 CAMERA_MODELS = {"owl": "Blink Mini", "catalina": "Blink Outdoor"}
-# Le module, lui, porte sa génération dans son type : sm2 = Sync Module 2.
+# The module carries its generation in its type: sm2 = Sync Module 2.
 MODULE_MODELS = {"sm": "Sync Module", "sm2": "Sync Module 2"}
 
 
 @dataclass(frozen=True)
 class _SelectionVideos:
-    """Identités locales demandées pour chacune des trois actions."""
+    """Local identities requested for each of the three actions."""
 
     exclure: list[str]
     inclure: list[str]
@@ -701,7 +648,7 @@ class _SelectionVideos:
 
 @dataclass(frozen=True)
 class _CibleSuppressionBlink:
-    """Relie un fichier local à son entrée de registre et à son ID distant."""
+    """Links a local file to its registry entry and remote ID."""
 
     identite: str
     entree: dict
@@ -709,20 +656,20 @@ class _CibleSuppressionBlink:
 
 
 def _lire_selection_videos(payload: dict) -> _SelectionVideos:
-    # Conserver les champs absents ou vides acceptés par l'API historique.
+    # Keep absent or empty fields accepted by the historical API.
     listes = [payload.get(champ) or [] for champ in ("exclure", "inclure", "supprimer")]
     for identites in listes:
         if not isinstance(identites, list):
-            raise ValueError("Sélection de vidéos invalide.")
+            raise ValueError("Invalid video selection.")
         for identite in identites:
             if not isinstance(identite, str) or not _identite_selection_valide(identite):
-                raise ValueError("Sélection de vidéos invalide.")
+                raise ValueError("Invalid video selection.")
     return _SelectionVideos(*listes)
 
 
 def _separer_clips_et_directs(selection: _SelectionVideos, racine_direct: Path | None
                             ) -> tuple[_SelectionVideos, _SelectionVideos, dict]:
-    """Identifie les fichiers directs avant toute lecture du registre ou mutation."""
+    """Identify live-recording files before any registry read or mutation."""
     chemins_directs = {}
     if racine_direct:
         for identite in selection.exclure + selection.inclure + selection.supprimer:
@@ -745,14 +692,14 @@ def _separer_clips_et_directs(selection: _SelectionVideos, racine_direct: Path |
 
 
 def _trouver_entree_selection(entrees: dict, identite: str) -> dict | None:
-    # En cas de doublon de chemin, conserver la première entrée du registre.
+    # On a path duplicate, keep the first registry entry.
     return next((entree for entree in entrees.values()
                  if isinstance(entree, dict) and entree.get("path") == identite), None)
 
 
 def _jours_selection_a_reconstruire(identites: list[str], entrees: dict,
                                   reglages: dict) -> set[tuple[str, str]]:
-    """Un seul couple (identité caméra, jour local) par journée touchée."""
+    """One (camera identity, local day) pair per affected day."""
     jours = set()
     cles_collision = md._cles_camera_par_collision(entrees)
     fuseau_fusion = ZoneInfo(reglages["timezone"])
@@ -772,14 +719,14 @@ def _jours_selection_a_reconstruire(identites: list[str], entrees: dict,
 
 def _preparer_suppressions_blink(identites: list[str], entrees: dict,
                                resultats: dict) -> list[_CibleSuppressionBlink]:
-    """Résout les cibles connues et note les refus sans contacter Blink."""
+    """Resolve known targets and note refusals without contacting Blink."""
     cibles = []
     for identite in identites:
         entree = _trouver_entree_selection(entrees, identite)
         if entree is None:
             resultats[identite] = "inconnu"
             continue
-        # Convention blink_models.target_path ; remote_id sert aux anciens clips.
+        # blink_models.target_path convention; remote_id serves older clips.
         correspondance = re.search(r"_(\d+)_[0-9a-f]{12}\.mp4$", identite)
         id_distant = correspondance.group(1) if correspondance else str(
             entree.get("remote_id") or "")
@@ -791,7 +738,7 @@ def _preparer_suppressions_blink(identites: list[str], entrees: dict,
 
 
 def camera_key(sync, name: str, camera) -> str:
-    """Identifiant opaque et stable d'une caméra pour l'interface web."""
+    """Opaque stable identifier of a camera for the web interface."""
     attributes = getattr(camera, "attributes", None) or {}
     network_id = (
         getattr(camera, "network_id", None)
@@ -836,21 +783,21 @@ def system_key(name: str, sync) -> str:
 
 
 def model_name(kind: str | None) -> str | None:
-    """Nom du modèle d'une caméra pour la ligne technique de sa carte : le
-    nom du produit quand on le connaît, sinon le code que Blink donne au type
-    (« hawk », « sedona », « lotus »), tel quel. Jamais une phrase : ce texte
-    part vers une page qui s'affiche en français ou en anglais, et « type
-    Blink « hawk » » restait français sous une page anglaise (issue #37)."""
+    """Camera model name for the technical line of its card: the product
+    name when known, otherwise the code Blink gives the type ("hawk",
+    "sedona", "lotus"), as-is. Never a sentence: this text goes to a page
+    shown in French or English, and "type Blink 'hawk'" stayed French
+    under an English page (issue #37)."""
     if not kind:
         return None
     return CAMERA_MODELS.get(kind) or kind
 
 
 def horodatage_releve(moment: dt.datetime, fuseau, maintenant: dt.datetime | None = None):
-    """(date ISO à la minute, heure du serveur ; est-ce aujourd'hui ?) d'un
-    relevé de caméra. Ni mot ni format de date d'une langue : c'est la page
-    qui compose « relevé à 14:30 » ou « measured on 09/28 at 14:30 » (issue
-    #37 : « 28/09 à 14:30 » partait tel quel sous une page anglaise)."""
+    """(ISO date to the minute, server time; is it today?) of a camera
+    reading. No word or date format from a language: the page composes
+    French "releve a 14:30" or English "measured on 09/28 at 14:30"
+    (issue #37: "28/09 a 14:30" went out as-is under an English page)."""
     local = moment.astimezone(fuseau)
     maintenant = dt.datetime.now(fuseau) if maintenant is None else maintenant.astimezone(fuseau)
     return local.isoformat(timespec="minutes"), maintenant.date() == local.date()
@@ -867,11 +814,11 @@ def load_assembled_durations(paths: dict) -> dict:
 
 
 def probe_duration_cached(ffmpeg: str, source: Path, identity: str, cache: dict) -> float:
-    """Durée d'un clip écarté, mesurée une seule fois puis mise en cache.
+    """Duration of an excluded clip, measured once then cached.
 
-    La clé retient taille et date de modification du fichier source : un clip
-    remplacé (réparation d'un média absent, par exemple) est ainsi re-mesuré
-    plutôt que de garder une durée périmée."""
+    The key retains size and modification date of the source file: a
+    replaced clip (repair of a missing media, for example) is thus
+    re-measured rather than keeping a stale duration."""
     stat = source.stat()
     empreinte = [stat.st_size, stat.st_mtime]
     entree = cache.get(identity)
@@ -885,34 +832,32 @@ def probe_duration_cached(ffmpeg: str, source: Path, identity: str, cache: dict)
 def collect(paths: dict, timezone: ZoneInfo, ffmpeg: str = "",
             depuis: "dt.datetime | None" = None,
             jusqua: "dt.datetime | None" = None) -> dict:
-    """Inventorie les clips connus du registre de téléchargement.
+    """Inventory clips known to the download registry.
 
-    Contrairement à merge_daily.load_groups, les clips écartés sont conservés :
-    c'est précisément ce qu'on veut pouvoir revoir et reprendre.
+    Unlike merge_daily.load_groups, excluded clips are kept: that is
+    precisely what we want to be able to review and restore.
 
-    `depuis`/`jusqua` bornent la fenêtre renvoyée, chacun optionnel : le stock
-    grossit chaque jour, et sans borne basse la page finirait par transmettre
-    et dessiner un nombre de vignettes sans rapport avec ce qu'on regarde
-    réellement. L'historique complet reste accessible explicitement (voir
-    DEFAULT_WINDOW_DAYS). Les deux sont des horodatages complets, pas de
-    simples dates : le filtre de plage personnalisée de la page cible une
-    période à l'heure près, pour retrouver un incident précis sans défiler
-    tout l'historique d'une caméra toujours armée (signalé sur Reddit,
-    2026-08-27)."""
+    `depuis`/`jusqua` bound the returned window, each optional: the stock
+    grows every day, and without a lower bound the page would end up
+    transmitting and drawing a thumbnail count unrelated to what is
+    actually being watched. Full history remains explicitly accessible
+    (see DEFAULT_WINDOW_DAYS). Both are full timestamps, not bare dates:
+    the page's custom range filter targets a period to the hour, to find
+    a specific incident without scrolling a whole always-armed camera's
+    history (reported on Reddit, 2026-08-27)."""
     entries = read_entries(paths)
-    # Les durées déjà mesurées par merge_daily sont reprises telles quelles ;
-    # seules celles des clips écartés, dont l'entrée a été balayée du registre
-    # normalisé, restent à mesurer, via leur propre cache (voir
-    # load_excluded_durations) pour ne pas relancer ffmpeg à chaque requête.
+    # Durations already measured by merge_daily are reused as-is;
+    # only those of excluded clips, whose entry was swept from the
+    # normalized registry, still need measuring, via their own cache (see
+    # load_excluded_durations) so ffmpeg is not relaunched on every request.
     probed = md.load_json(paths["normalized"] / md.NORMALIZED_STATE, {}).get("clips")
     probed = probed if isinstance(probed, dict) else {}
     duration_cache = None
 
     clips = []
-    # Compté par genre : le récapitulatif du filtre ("X/Y clips") doit
-    # rester propre à la vue affichée (Clip Détection ou Enregistrement
-    # Direct), pas mélanger les deux depuis qu'ils partagent cette liste
-    # (2026-09-04).
+    # Counted by kind: the filter summary ("X/Y clips") must stay specific
+    # to the displayed view (Detection Clip or Live Recording), not mix
+    # both since they share this list (2026-09-04).
     total_clips = 0
     total_direct = 0
     for entry in entries.values():
@@ -930,8 +875,8 @@ def collect(paths: dict, timezone: ZoneInfo, ffmpeg: str = "",
         if jusqua is not None and local > jusqua:
             continue
         excluded = bool(entry.get("excluded"))
-        # On sert de préférence la version normalisée : c'est celle qui porte
-        # l'horodatage incrusté, donc celle qui aide vraiment à juger.
+        # Prefer the normalized version: it carries the burned-in timestamp,
+        # so it is the one that really helps judging.
         source = None
         for kind in ("normalized", "input", "excluded"):
             if (paths[kind] / identity).is_file():
@@ -940,8 +885,8 @@ def collect(paths: dict, timezone: ZoneInfo, ffmpeg: str = "",
 
         probe = (probed.get(identity) or {}).get("probe") or {}
         seconds = probe.get("duration")
-        # Un clip écarté n'a plus d'entrée dans le registre normalisé : on le
-        # mesure alors une fois, depuis Blink_Excluded, puis on se souvient.
+        # An excluded clip no longer has an entry in the normalized registry:
+        # measure it once from Blink_Excluded, then remember.
         if seconds is None and source and ffmpeg:
             if duration_cache is None:
                 duration_cache = load_excluded_durations(paths)
@@ -966,15 +911,15 @@ def collect(paths: dict, timezone: ZoneInfo, ffmpeg: str = "",
     if duration_cache is not None:
         md.save_json(paths["thumbs"] / EXCLUDED_DURATIONS, duration_cache)
 
-    # Enregistrements du direct (bouton "Enregistrer" pendant Direct,
-    # Blink_Direct) : même présentation que les clips de détection, demandé
-    # explicitement (2026-09-04) plutôt qu'une vue à part avec ses propres
-    # règles - fusionnés dans la même liste, "kind" est le seul champ qui
-    # les distingue vraiment (jour/heure/durée/écarter/supprimer marchent
-    # identiquement ensuite). "clip"/direct" à la place de source/origine
-    # (bornées à la provenance cloud/USB d'un clip, sans le sens pour un
-    # direct) - voir _chemin_enregistrement_direct pour la convention de
-    # nommage dont "day"/"time" sont extraits ici.
+    # Live recordings (Record button during Live, Blink_Direct): same
+    # presentation as detection clips, requested explicitly (2026-09-04)
+    # rather than a separate view with its own rules — merged into the same
+    # list, "kind" is the only field that truly distinguishes them
+    # (day/time/duration/exclude/delete then work identically). "clip"/
+    # "direct" instead of source/origine (tied to a clip's cloud/USB
+    # provenance, meaningless for a live recording) — see
+    # _chemin_enregistrement_direct for the naming convention from which
+    # "day"/"time" are extracted here.
     exclusion_directe = _lire_exclusion_directe(paths)
     duration_cache_direct = None
     racine_direct = paths.get("direct")
@@ -1021,50 +966,47 @@ def collect(paths: dict, timezone: ZoneInfo, ffmpeg: str = "",
     if duration_cache_direct is not None:
         md.save_json(paths["thumbs"] / ASSEMBLED_DURATIONS, duration_cache_direct)
 
-    # Du plus récent au plus ancien : c'est ce qu'on vient regarder. Un seul
-    # tri global est nécessaire ; trier ensuite par caméra ferait passer une
-    # caméra plus ancienne devant les clips récents d'une autre caméra.
+    # Newest to oldest: that is what you came to watch. One global sort is
+    # enough; sorting by camera afterward would put an older camera ahead of
+    # recent clips from another camera.
     clips.sort(key=lambda clip: (clip["day"], clip["time"]), reverse=True)
     return {
         "clips": clips,
         "cameras": sorted({clip["camera"] for clip in clips}),
         "passages": runtime.passages(),
         "sources": provenances(entries),
-        # Permet à la page de dire « X clips sur Y connus » et de proposer
-        # explicitement de charger le reste : quelle plage précise est active
-        # (préréglage ou personnalisée) est déjà su côté page, elle seule l'a
-        # demandée, inutile de la lui redécrire ici.
+        # Lets the page say "X clips of Y known" and explicitly offer to load
+        # the rest: which exact range is active (preset or custom) is already
+        # known on the page side — it alone asked for it, no need to restate.
         "filtered": depuis is not None or jusqua is not None,
-        # Par genre (clip/direct), pas un seul total : sinon le récapitulatif
-        # de Clip Détection compterait aussi les enregistrements du direct,
-        # et réciproquement, depuis qu'ils partagent "clips" (2026-09-04).
+        # By kind (clip/direct), not a single total: otherwise the Detection
+        # Clip summary would also count live recordings, and vice versa,
+        # since they share "clips" (2026-09-04).
         "total_known": {"clip": total_clips, "direct": total_direct},
-        # La galerie ne propose pas la case Supprimer pour une caméra déjà en
-        # suppression automatique (issue GitHub #1) : redondant, le clip sera
-        # de toute façon retiré de sa source au prochain téléchargement réussi.
+        # The gallery does not offer the Delete checkbox for a camera already
+        # on automatic deletion (GitHub issue #1): redundant, the clip will
+        # be removed from its source on the next successful download anyway.
         "suppressionAuto": sorted(suppression_auto_keys()),
     }
 
 
 def collect_videos(paths: dict, ffmpeg: str) -> dict:
-    """Inventorie les vidéos assemblées par période (daily/weekly/monthly).
+    """Inventory assembled videos by period (daily/weekly/monthly).
 
-    Les enregistrements du direct (Blink_Direct) n'en font plus partie
-    depuis qu'ils partagent la présentation des clips de détection
-    (2026-09-04) : voir collect(), qui les lit désormais - même parcours
-    récursif root/caméra/**/*.mp4, mais fusionnés dans "clips" plutôt
-    qu'exposés à part ici.
+    Live recordings (Blink_Direct) are no longer part of this since they
+    share the detection-clip presentation (2026-09-04): see collect(),
+    which now reads them — same recursive walk root/camera/**/*.mp4, but
+    merged into "clips" rather than exposed separately here.
 
-    On lit le disque plutôt qu'un registre : ces fichiers sont le produit
-    visible du pipeline (ou du bouton d'enregistrement), et les lister tels
-    qu'ils existent évite d'afficher une entrée pour une vidéo effacée à la
-    main.
+    We read the disk rather than a registry: these files are the visible
+    product of the pipeline (or the record button), and listing them as
+    they exist avoids showing an entry for a video deleted by hand.
 
-    Durée mise en cache sur disque (probe_duration_cached, même mécanisme
-    que pour les clips écartés) plutôt que le simple probe_duration en
-    mémoire seule utilisé jusque-là : sans ça, un redémarrage relançait
-    ffmpeg -i pour chaque vidéo existante dès la première ouverture de
-    l'onglet (audit général demandé par l'utilisateur, 2026-09-03)."""
+    Duration cached on disk (probe_duration_cached, same mechanism as for
+    excluded clips) rather than the in-memory-only probe_duration used
+    until then: without that, a restart relaunched ffmpeg -i for every
+    existing video on the first tab open (general audit requested by the
+    user, 2026-09-03)."""
     result = {}
     duration_cache = None
     for kind in ("daily", "weekly", "monthly"):
@@ -1074,21 +1016,21 @@ def collect_videos(paths: dict, ffmpeg: str) -> dict:
             for camera_dir in sorted(
                 p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")
             ):
-                # rglob, pas glob : daily/weekly/monthly posent leurs fichiers
-                # à plat sous camera_dir, mais direct les range en plus par
-                # mois (camera_dir/AAAA-MM/*.mp4, même convention que
-                # target_path() pour les clips de détection - voir
-                # _chemin_enregistrement_direct). Un seul parcours récursif
-                # couvre les deux formes sans distinguer kind ici.
+                # rglob, not glob: daily/weekly/monthly place their files flat under
+                # camera_dir, but live also nests by month
+                # (camera_dir/YYYY-MM/*.mp4, same convention as target_path()
+                # for detection clips — see _chemin_enregistrement_direct).
+                # One recursive walk covers both shapes without branching on
+                # kind here.
                 for video in sorted(camera_dir.rglob("*.mp4"), reverse=True):
                     if not md.valid_mp4(video):
                         continue
                     if duration_cache is None:
                         duration_cache = load_assembled_durations(paths)
                     relatif = video.relative_to(camera_dir).as_posix()
-                    # kind dans l'identité : daily/weekly/monthly peuvent
-                    # chacun contenir un fichier du même nom pour la même
-                    # caméra, sans rapport entre eux.
+                    # kind in the identity: daily/weekly/monthly may each contain a
+                    # file of the same name for the same camera, unrelated
+                    # to each other.
                     identity = f"{kind}/{camera_dir.name}/{relatif}"
                     items.append({
                         "kind": kind,
@@ -1109,10 +1051,10 @@ _DURATIONS: dict = {}
 
 
 def probe_facts(ffmpeg: str, path: Path) -> tuple:
-    """Durée et définition d'une vidéo, mémorisées tant qu'elle ne change pas.
+    """Duration and resolution of a video, remembered as long as it does not change.
 
-    Chaque mesure coûte un lancement de ffmpeg ; sans ce cache, ouvrir l'onglet
-    des mensuelles relancerait l'analyse à chaque affichage."""
+    Each measurement costs an ffmpeg launch; without this cache, opening the
+    monthly tab would re-run analysis on every display."""
     key = (str(path), path.stat().st_mtime_ns)
     if key not in _DURATIONS:
         try:
@@ -1128,21 +1070,20 @@ def probe_duration(ffmpeg: str, path: Path) -> float:
 
 
 class LecteurTube:
-    """Lit un tube bloquant en continu dans un fil unique, pour donner à
-    chaque lecture un vrai délai sans jamais créer de second lecteur
-    concurrent sur le même tube.
+    """Read a blocking pipe continuously in a single thread, to give each
+    read a real deadline without ever creating a second concurrent reader
+    on the same pipe.
 
-    `pipe.read(n)` est bloquant et ne se laisse pas interrompre. Le lancer
-    dans un fil à *chaque* appel (comme le faisait l'ancien
-    `read_with_deadline`, réutilisé en boucle par le direct) laisse un fil
-    orphelin dès qu'un appel dépasse son délai : `pipe.read()` continue
-    d'attendre en arrière-plan, et l'appel suivant en lance un second,
-    concurrent du premier sur le même tube. Le prochain octet qui arrive
-    peut alors atterrir chez le fil orphelin, invisible pour l'appelant
-    (bug réel, voir AUDIT-2026-08-13.md section 28.22 pour `/live-mse`, et
-    28.26 pour la boucle d'envoi principale des deux directs — un délai
-    global vérifié seulement *entre* deux lectures ne borne rien si une
-    lecture individuelle peut, elle, bloquer indéfiniment)."""
+    `pipe.read(n)` is blocking and cannot be interrupted. Launching it in
+    a thread on *every* call (as the old `read_with_deadline` did, reused
+    in a loop by live view) leaves an orphan thread as soon as a call
+    exceeds its deadline: `pipe.read()` keeps waiting in the background,
+    and the next call starts a second one, concurrent with the first on
+    the same pipe. The next arriving byte can then land in the orphan
+    thread, invisible to the caller (real bug, see AUDIT-2026-08-13.md
+    section 28.22 for `/live-mse`, and 28.26 for the main send loop of
+    both live modes — a global deadline checked only *between* two reads
+    bounds nothing if an individual read can itself block forever)."""
 
     def __init__(self, pipe, taille_bloc: int = 16384):
         self._file: queue.Queue = queue.Queue()
@@ -1158,10 +1099,10 @@ class LecteurTube:
         threading.Thread(target=lire_en_continu, daemon=True).start()
 
     def lire(self, delai: float):
-        """Un bloc de données ; ``b""`` si le tube est à sa vraie fin (EOF) ;
-        ``None`` si rien n'est arrivé avant `delai` (le flux est
-        probablement juste lent — le fil, lui, continue d'attendre, un
-        appel suivant peut encore recevoir quelque chose)."""
+        """One data block; ``b""`` if the pipe is truly at EOF;
+        ``None`` if nothing arrived before `delai` (the stream is
+        probably just slow — the thread itself keeps waiting, a later
+        call may still receive something)."""
         if self._fin:
             return b""
         try:
@@ -1174,27 +1115,26 @@ class LecteurTube:
 
 
 class DetecteurDebutFragment:
-    """Vrai si le bloc reçu commence pile sur un fragment fMP4 ("moof"),
-    jamais au milieu d'un moof/mdat déjà entamé.
+    """True if the received block starts exactly on an fMP4 fragment ("moof"),
+    never in the middle of an already-started moof/mdat.
 
-    Les blocs que LecteurTube.lire() fait remonter (16 Ko) ne s'alignent
-    JAMAIS sur les frontières entre fragments moof+mdat de ffmpeg (vérifié
-    empiriquement : un mdat de plusieurs Ko peut être scindé en plein
-    milieu par un bloc). send_live_mse() s'en sert pour ne démarrer un
-    enregistrement que sur un bloc qui ouvre un vrai fragment - donc une
-    image-clé, garantie par -movflags frag_keyframe : démarrer sur un bloc
-    quelconque pouvait couper un mdat en deux, produisant un fragment sans
-    son moof, illisible à la relecture ("Invalid NAL unit size", bug réel).
+    Blocks that LecteurTube.lire() returns (16 KB) NEVER align on ffmpeg's
+    moof+mdat fragment boundaries (verified empirically: a multi-KB mdat
+    can be split mid-way by a block). send_live_mse() uses this to start
+    a recording only on a block that opens a real fragment — hence a
+    keyframe, guaranteed by -movflags frag_keyframe: starting on an
+    arbitrary block could split an mdat in two, producing a fragment
+    without its moof, unreadable on playback ("Invalid NAL unit size",
+    real bug).
 
-    Ne cherche qu'au tout DÉBUT de chaque bloc plutôt que d'y localiser un
-    offset précis : la seule conséquence d'un fragment manqué (en-tête de
-    boîte à cheval sur deux blocs, cas rare) est d'attendre le suivant,
-    quelques centaines de ms au pire - sans commune mesure avec un fichier
-    corrompu. Doit être alimentée avec CHAQUE bloc du flux, dans l'ordre, y
-    compris le segment d'initialisation ("first" dans send_live_mse : ftyp
-    et moov y sont des boîtes comme les autres pour ce suivi, il peut aussi
-    déjà contenir les premiers fragments), sous peine de désynchroniser son
-    suivi des tailles de boîte."""
+    Only looks at the very START of each block rather than locating a
+    precise offset: the only consequence of a missed fragment (box header
+    straddling two blocks, rare) is waiting for the next one, a few
+    hundred ms at worst — incomparable to a corrupt file. Must be fed
+    EVERY stream block, in order, including the init segment ("first" in
+    send_live_mse: ftyp and moov are boxes like any other for this
+    tracking, and it may already contain the first fragments), or its
+    box-size tracking desynchronizes."""
 
     def __init__(self):
         self._restant_boite = 0
@@ -1221,7 +1161,7 @@ class DetecteurDebutFragment:
             taille = int.from_bytes(self._entete[:4], "big")
             self._entete = b""
             if taille < 8:
-                self._restant_boite = 0  # boîte dégénérée : abandonne le suivi
+                self._restant_boite = 0  # degenerate box: abandon tracking
                 break
             self._restant_boite = taille - 8
         return resultat
@@ -1231,16 +1171,16 @@ _MOOV_CONTAINERS = {b"moov", b"trak", b"mdia", b"minf", b"stbl"}
 
 
 def h264_mime_codec_from_moov(segment: bytes) -> str:
-    """Cherche avcC dans un segment d'initialisation MP4 (ftyp+moov) pour en
-    tirer la chaîne de codec MSE exacte (avc1.PPCCLL : profil, contraintes,
-    niveau). Deviner cette chaîne plante addSourceBuffer dès que la caméra
-    encode dans un profil ou un niveau différent de celui supposé ; la lire
-    dans le flux réel est le seul moyen fiable.
+    """Look for avcC in an MP4 init segment (ftyp+moov) to get the exact MSE
+    codec string (avc1.PPCCLL: profile, constraints, level). Guessing that
+    string crashes addSourceBuffer as soon as the camera encodes in a
+    different profile or level than assumed; reading it from the real
+    stream is the only reliable way.
 
-    Ne suit que le chemin utile : moov > trak > mdia > minf > stbl > stsd >
-    avc1 > avcC. avcC porte déjà profil/contraintes/niveau en clair
-    (AVCDecoderConfigurationRecord), pas besoin de redescendre jusqu'au
-    SPS qu'il contient lui-même."""
+    Only follows the useful path: moov > trak > mdia > minf > stbl > stsd >
+    avc1 > avcC. avcC already carries profile/constraints/level in clear
+    (AVCDecoderConfigurationRecord); no need to dig down to the SPS it
+    contains."""
     def walk(buf: bytes) -> bytes | None:
         i, n = 0, len(buf)
         while i + 8 <= n:
@@ -1256,8 +1196,8 @@ def h264_mime_codec_from_moov(segment: bytes) -> str:
             elif kind == b"stsd":
                 found = walk(payload[8:])  # version+flags+entry_count
             elif kind == b"avc1":
-                # SampleEntry (8) + champs fixes VisualSampleEntry (70) avant
-                # les boîtes filles (avcC, ...).
+                # SampleEntry (8) + fixed VisualSampleEntry fields (70) before
+                # child boxes (avcC, ...).
                 found = walk(payload[78:])
             else:
                 found = None
@@ -1269,43 +1209,43 @@ def h264_mime_codec_from_moov(segment: bytes) -> str:
     avcc = walk(segment)
     if avcc is None or len(avcc) < 4:
         raise RuntimeError(
-            "avcC introuvable dans le segment d'initialisation MP4 (profil illisible).")
+            "avcC not found in the MP4 initialization segment (unreadable profile).")
     profile_idc, constraint, level_idc = avcc[1], avcc[2], avcc[3]
     return f"avc1.{profile_idc:02x}{constraint:02x}{level_idc:02x}"
 
 
 def read_mp4_init_segment(lecteur: LecteurTube, seconds: float) -> bytes:
-    """Accumule la sortie d'ffmpeg jusqu'à pouvoir y lire un avcC complet, ou
-    renonce au bout de `seconds`. Un seul bloc de 4096 octets (comme pour le
-    MJPEG) ne suffit pas toujours : le moov peut déborder du premier bloc.
+    """Accumulate ffmpeg output until a complete avcC can be read, or give
+    up after `seconds`. A single 4096-byte block (as for MJPEG) is not
+    always enough: moov may spill past the first block.
 
-    Prend un `LecteurTube` déjà créé, pas un tube brut : le même doit
-    ensuite servir à la boucle d'envoi principale de l'appelant. En créer
-    un second sur le même tube réintroduirait le bug des lecteurs
-    concurrents que `LecteurTube` existe justement pour éviter."""
+    Takes an already-created `LecteurTube`, not a raw pipe: the same one
+    must then serve the caller's main send loop. Creating a second on the
+    same pipe would reintroduce the concurrent-reader bug that
+    `LecteurTube` exists to prevent."""
     deadline = time.monotonic() + seconds
     buf = bytearray()
     while time.monotonic() < deadline and len(buf) < 65536:
         morceau = lecteur.lire(deadline - time.monotonic())
         if not morceau:
-            break  # b"" (EOF) ou None (délai global épuisé) : rien de plus à tenter
+            break  # b"" (EOF) or None (global deadline exhausted): nothing more to try
         buf += morceau
         try:
             h264_mime_codec_from_moov(bytes(buf))
-            break  # trouvé : pas la peine de lire plus avant d'envoyer les en-têtes
+            break  # found: no need to read more before sending headers
         except RuntimeError:
             continue
     return bytes(buf)
 
 
-# Dernier échec de direct, relu par la page : une balise <img> ne peut pas lire
-# le corps d'une réponse en erreur, elle ne voit qu'un échec de chargement.
+# Last live-view failure, reread by the page: an <img> tag cannot read
+# the body of an error response, it only sees a load failure.
 LAST_LIVE_ERROR: dict = {}
 LAST_LIVE_ERROR_LOCK = threading.Lock()
 
 
 def _memoriser_erreur_direct(camera: str, message: str, status: int) -> None:
-    """Publie d'un seul bloc l'échec que le navigateur viendra relire."""
+    """Publish in one shot the failure the browser will come reread."""
     with LAST_LIVE_ERROR_LOCK:
         LAST_LIVE_ERROR.clear()
         LAST_LIVE_ERROR.update({
@@ -1314,23 +1254,23 @@ def _memoriser_erreur_direct(camera: str, message: str, status: int) -> None:
 
 
 def _effacer_erreur_direct() -> None:
-    """Une nouvelle tentative acceptée rend tout ancien échec caduc."""
+    """A newly accepted attempt makes any prior failure obsolete."""
     with LAST_LIVE_ERROR_LOCK:
         LAST_LIVE_ERROR.clear()
 
 
 def _derniere_erreur_direct() -> dict:
-    """Copie cohérente pour le thread HTTP qui sert /api/live-error."""
+    """Consistent copy for the HTTP thread that serves /api/live-error."""
     with LAST_LIVE_ERROR_LOCK:
         return dict(LAST_LIVE_ERROR)
 
 
 def _texte_stderr_ffmpeg(errors: list) -> str:
-    """Normalise stderr, que subprocess livre en bytes dans ce pipeline.
+    """Normalize stderr, which subprocess delivers as bytes in this pipeline.
 
-    _drainer_stderr alimente `errors` ligne par ligne (diagnostic temporaire),
-    plus un seul bloc comme avant : on rejoint tout, ça couvre les deux
-    formes."""
+    _drainer_stderr feeds `errors` line by line (temporary diagnostic),
+    no longer a single block as before: join everything, that covers both
+    forms."""
     raw = b"".join(e for e in errors if isinstance(e, bytes))
     return raw.decode("utf-8", "replace").strip()[:300]
 
@@ -1355,12 +1295,12 @@ def _journal_direct(name: str, message: str) -> None:
 
 
 async def _stop_stream(stream, feed) -> str:
-    """Ferme les sockets, attend le polling, et assure son secours « done ».
+    """Close sockets, wait for polling, and ensure its "done" fallback.
 
-    init_livestream a déjà créé une commande, même si start échoue ou si
-    l'authentification du relais échoue avant le polling de blinkpy. Ces cas
-    doivent eux aussi envoyer done. Cette coroutine est protégée par la tâche
-    de nettoyage de la session contre les annulations du demandeur HTTP.
+    init_livestream has already created a command, even if start fails or
+    relay authentication fails before blinkpy's polling. Those cases must
+    also send done. This coroutine is protected by the session cleanup
+    task against cancellations from the HTTP requester.
     """
     erreurs = []
     try:
@@ -1369,13 +1309,13 @@ async def _stop_stream(stream, feed) -> str:
         erreurs.append(f"stop : {type(error).__name__}: {error}")
     if feed is not None:
         try:
-            # wait() ne peut pas rester bloqué dans le finally d'une tâche
-            # annulée, contrairement à wait_for(feed, ...).
+            # wait() must not stay blocked in the finally of a cancelled
+            # task, unlike wait_for(feed, ...).
             terminees, _ = await asyncio.wait({feed}, timeout=20)
             if feed in terminees:
                 await feed
                 if not erreurs:
-                    return "session rendue normalement"
+                    return "session released normally"
             else:
                 feed.cancel()
                 # Laisse au finally du polling une chance d'envoyer done.
@@ -1388,11 +1328,11 @@ async def _stop_stream(stream, feed) -> str:
                 else:
                     feed.add_done_callback(_observer_fin_flux)
         except asyncio.CancelledError:
-            # Une feed déjà annulée ne doit pas annuler le nettoyage qui
-            # l'attend. Une annulation du nettoyeur lui-même se propage.
+            # An already-cancelled feed must not cancel the cleanup that
+            # awaits it. Cancellation of the cleaner itself propagates.
             if not feed.cancelled():
                 raise
-            erreurs.append("flux annulé avant confirmation de fin")
+            erreurs.append("stream cancelled before end confirmation")
         except Exception as error:
             erreurs.append(f"flux : {type(error).__name__}: {error}")
 
@@ -1404,13 +1344,13 @@ async def _stop_stream(stream, feed) -> str:
                 stream.camera.sync.blink, stream.camera.network_id, stream.command_id
             ), timeout=10,
         )
-        return "session rendue de force" + (" | " + " ; ".join(erreurs) if erreurs else "")
+        return "session force-released" + (" | " + " ; ".join(erreurs) if erreurs else "")
     except Exception as error:
-        return f"session peut-etre restee ouverte : {type(error).__name__}"
+        return f"session may still be open: {type(error).__name__}"
 
 
 def _observer_fin_flux(tache) -> None:
-    """Récupère les exceptions d'une fermeture qui finit après son budget."""
+    """Collect exceptions from a close that finishes after its budget."""
     try:
         tache.result()
     except (Exception, asyncio.CancelledError):
@@ -1418,46 +1358,46 @@ def _observer_fin_flux(tache) -> None:
 
 
 def _erreur_boucle_asyncio(loop, contexte: dict) -> None:
-    """Filet pour toute exception non rattrapée dans une tâche/callback de
-    BLINK.loop (RTCPeerConnection, connectionstatechange...).
+    """Safety net for any uncaught exception in a BLINK.loop task/callback
+    (RTCPeerConnection, connectionstatechange...).
 
-    Sans lui, le comportement par défaut d'asyncio (logging.error) part vers
-    un stderr qui n'existe pas sous pythonw (lancement normal, autostart) :
-    aucune trace nulle part. Vécu en réel (2026-09-04) : une session WebRTC
-    bloquée, MODULE_SLOT jamais rendu, sans le moindre indice dans direct.log
-    ni serve_erreurs.log (celui-ci ne couvre que les requêtes HTTP, pas les
-    callbacks aiortc sur cette boucle)."""
+    Without it, asyncio's default behavior (logging.error) goes to a stderr
+    that does not exist under pythonw (normal launch, autostart): no trace
+    anywhere. Lived in practice (2026-09-04): a stuck WebRTC session,
+    MODULE_SLOT never released, without the slightest hint in direct.log
+    or serve_erreurs.log (the latter only covers HTTP requests, not aiortc
+    callbacks on this loop)."""
     exception = contexte.get("exception")
     detail = f"{type(exception).__name__}: {exception}" if exception else contexte.get(
-        "message", "erreur inconnue"
+        "message", "unknown error"
     )
-    _journal_direct("asyncio", f"exception non rattrapée sur BLINK.loop, {detail}")
+    _journal_direct("asyncio", f"uncaught exception on BLINK.loop, {detail}")
 
 
-# Attente de la confirmation de Blink apres un armement de camera (voir
+# Wait for Blink confirmation after arming a camera (see
 # _confirmer_armement_camera) ; BLINK.call() borne l'ensemble a 60 s.
 DELAI_CONFIRMATION_ARMEMENT = 45
 
 
 async def _confirmer_armement_camera(blink, camera, reponse, armed: bool) -> None:
-    """Attend que Blink ait appliqué l'armement d'une caméra, puis le retient.
+    """Wait until Blink has applied a camera's arming, then retain it.
 
-    blinkpy poste la commande (camera.async_arm) et rend sa réponse sans la
-    suivre, et ne met pas à jour camera.motion_enabled, l'attribut que
-    describe_camera() affiche : depuis l'allègement de system_state() (le
-    2026-09-03, il ne relit plus que l'écran d'accueil et l'armement du hub),
-    cet attribut gardait sa valeur de la connexion. Armer une caméra depuis la
-    page laissait donc son bouton rouge, alors que celui du hub, relu à chaque
-    fois, passait au vert (constaté en réel le 2026-10-05, caméra « Salon »), et
-    le webhook d'état annonçait un armement périmé.
+    blinkpy posts the command (camera.async_arm) and returns its response
+    without following it, and does not update camera.motion_enabled, the
+    attribute describe_camera() shows: since system_state() was lightened
+    (2026-09-03, it only rereads the home screen and hub arming), that
+    attribute kept its value from connect. Arming a camera from the page
+    thus left its button red, while the hub's, reread each time, turned
+    green (observed in practice 2026-10-05, camera "Salon"), and the status
+    webhook announced stale arming.
 
-    On suit donc la commande, comme reveiller_camera(), et on pose la valeur
-    confirmée. Un refus ou une absence de confirmation devient une erreur lisible
-    au lieu d'un échec silencieux."""
+    So we follow the command, like reveiller_camera(), and set the confirmed
+    value. A refusal or missing confirmation becomes a readable error instead
+    of a silent failure."""
     from blinkpy import api
 
     if not isinstance(reponse, dict) or not reponse.get("id"):
-        raise RuntimeError("Blink a refusé la commande d'armement de la caméra.")
+        raise RuntimeError("Blink refused the camera arming command.")
     commande = dict(reponse)
     commande.setdefault("network_id", camera.network_id)
     try:
@@ -1466,17 +1406,17 @@ async def _confirmer_armement_camera(blink, camera, reponse, armed: bool) -> Non
     except asyncio.TimeoutError:
         confirme = False
     if not confirme:
-        raise RuntimeError("Blink n'a pas confirmé l'armement de la caméra.")
+        raise RuntimeError("Blink did not confirm the camera arming.")
     camera.motion_enabled = bool(armed)
 
 
 class BlinkSession:
-    """Session Blink partagée, vivant sur sa propre boucle asyncio.
+    """Shared Blink session, living on its own asyncio loop.
 
-    Armer une caméra ou ouvrir un direct suppose une session authentifiée. La
-    rouvrir à chaque clic coûterait deux secondes et un aller-retour inutile
-    chez Amazon : on la garde donc ouverte, et on lui parle depuis les fils du
-    serveur HTTP via `call`."""
+    Arming a camera or opening a live view requires an authenticated session.
+    Reopening it on every click would cost two seconds and a useless round
+    trip to Amazon: so we keep it open, and talk to it from the HTTP server
+    threads via `call`."""
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -1496,11 +1436,11 @@ class BlinkSession:
         return self.loop
 
     def call(self, coroutine_factory, timeout: float = 60.0):
-        """Exécute `coroutine_factory(blink)` sur la boucle, en se connectant
-        si besoin. Lève RuntimeError si aucune session valable n'existe."""
+        """Run `coroutine_factory(blink)` on the loop, connecting if needed.
+        Raises RuntimeError if no valid session exists."""
         echeance = time.monotonic() + timeout
         if not self.lock.acquire(timeout=max(0.0, timeout)):
-            raise concurrent.futures.TimeoutError("La session Blink est occupée.")
+            raise concurrent.futures.TimeoutError("The Blink session is busy.")
         try:
             loop = self._ensure_loop()
             finished = threading.Event()
@@ -1512,8 +1452,8 @@ class BlinkSession:
                         self.blink = await blink_auth.connect_saved(self.session)
                     if self.blink is None:
                         raise RuntimeError(
-                            "Session Blink absente ou expirée. Reconnectez-vous "
-                            "depuis le bouton Actualiser."
+                            "Blink session missing or expired. Reconnect "
+                            "from the Refresh button."
                         )
                     return await coroutine_factory(self.blink)
                 finally:
@@ -1524,20 +1464,20 @@ class BlinkSession:
                 return future.result(max(0.0, echeance - time.monotonic()))
             except concurrent.futures.TimeoutError:
                 # result(timeout) ne borne que l'attente du thread appelant :
-                # sans annulation, la coroutine continue sur la boucle Blink et
-                # peut armer une caméra ou supprimer un clip après que l'API a
-                # déjà annoncé un échec. La conserver permet au moins d'arrêter
-                # tout ce qui n'a pas encore été envoyé au service distant.
+                # without cancellation, the coroutine continues on the Blink loop and
+                # can arm a camera or delete a clip after the API has already
+                # announced failure. Keeping it at least lets us stop anything
+                # not yet sent to the remote service.
                 future.cancel()
                 try:
                     future.result(timeout=5)
                 except (concurrent.futures.CancelledError,
                         concurrent.futures.TimeoutError):
                     pass
-                # Le Future concurrent passe à « cancelled » dès que la
-                # demande est transmise à la boucle, avant que le finally de
-                # la coroutine ait nécessairement rendu ses ressources. Une
-                # barrière distincte évite de libérer self.lock trop tôt.
+                # The concurrent Future becomes "cancelled" as soon as the
+                # request is handed to the loop, before the coroutine's finally
+                # has necessarily released its resources. A separate barrier
+                # avoids releasing self.lock too early.
                 finished.wait(timeout=5)
                 raise
         finally:
@@ -1563,14 +1503,14 @@ class BlinkSession:
         if len(by_key) == 1:
             return by_key[0]
         if len(by_key) > 1:
-            raise RuntimeError("Identifiant de caméra dupliqué dans le compte Blink.")
+            raise RuntimeError("Duplicate camera identifier in the Blink account.")
         if len(by_name) == 1:
             return by_name[0]
         if len(by_name) > 1:
             raise RuntimeError(
-                f"Nom de caméra ambigu : {identity}. Utilisez son identifiant stable."
+                f"Ambiguous camera name: {identity}. Use its stable identifier."
             )
-        raise RuntimeError(f"Caméra inconnue : {identity}")
+        raise RuntimeError(f"Unknown camera: {identity}")
 
     def find_system(self, blink, identity: str):
         by_name = []
@@ -1582,17 +1522,16 @@ class BlinkSession:
         if len(by_name) == 1:
             return by_name[0]
         if len(by_name) > 1:
-            raise RuntimeError(f"Nom de système ambigu : {identity}")
-        raise RuntimeError(f"Système inconnu : {identity}")
+            raise RuntimeError(f"Ambiguous system name: {identity}")
+        raise RuntimeError(f"Unknown system: {identity}")
 
     def find_sync_module(self, blink, entry: dict):
-        """Résout le module d'un clip par ses IDs persistés.
+        """Resolve a clip's module from its persisted IDs.
 
-        Le support XR construit le vrai Sync Module depuis le homescreen : il
-        peut donc être absent de ``blink.sync``, qui contient encore, selon les
-        comptes, une Mini ou une Doorbell portant l'ID du périphérique. Le nom
-        de caméra n'est conservé qu'en repli pour les anciennes entrées du
-        registre dépourvues d'identifiants.
+        XR support builds the real Sync Module from the homescreen: it may
+        therefore be absent from ``blink.sync``, which still contains, on some
+        accounts, a Mini or Doorbell carrying the device ID. The camera name
+        is kept only as fallback for old registry entries lacking identifiers.
         """
         network_id = str(entry.get("network_id") or "")
         sync_id = str(entry.get("sync_id") or "")
@@ -1609,11 +1548,11 @@ class BlinkSession:
                 return matches[0]
             if not matches:
                 raise RuntimeError(
-                    f"Sync Module introuvable (réseau {network_id or '?'}, "
+                    f"Sync Module not found (network {network_id or '?'}, "
                     f"module {sync_id or '?'})."
                 )
             raise RuntimeError(
-                f"Sync Module ambigu (réseau {network_id or '?'}, "
+                f"Ambiguous Sync Module (network {network_id or '?'}, "
                 f"module {sync_id or '?'})."
             )
 
@@ -1623,16 +1562,16 @@ class BlinkSession:
 
 
 class LoginFlow:
-    """Conduit une connexion Blink dont les réponses arrivent du navigateur.
+    """Drive a Blink connection whose answers arrive from the browser.
 
-    La difficulté : les identifiants et le code de vérification arrivent dans
-    deux requêtes HTTP distinctes, mais doivent parler à la même session Blink,
-    ouverte entre les deux. On garde donc une boucle asyncio vivante dans un
-    fil, et la tâche de connexion s'y suspend en attendant le code au lieu de
-    le lire au clavier.
+    The difficulty: credentials and the verification code arrive in two
+    distinct HTTP requests, but must talk to the same Blink session, open
+    between them. So we keep a live asyncio loop in a thread, and the
+    connect task suspends there waiting for the code instead of reading it
+    from the keyboard.
 
-    Le mot de passe ne quitte jamais la mémoire de ce processus : blink2video.py
-    n'écrit que les jetons de session, jamais le mot de passe."""
+    The password never leaves this process's memory: blink2video.py only
+    writes session tokens, never the password."""
 
     def __init__(self):
         self.loop = None
@@ -1640,11 +1579,11 @@ class LoginFlow:
         self.queue = None
         self._ferme = None
         self.asked = threading.Event()
-        # Singleton sur Handler (ThreadingHTTPServer, un thread par requête) :
-        # deux /api/login qui se chevauchent (page rafraîchie par impatience
-        # pendant qu'un login précédent attend encore son code, jusqu'à 120 s)
-        # mutaient loop/future/queue sans synchronisation, avec un close()
-        # pouvant arrêter la boucle qu'un autre thread vient de créer.
+        # Singleton on Handler (ThreadingHTTPServer, one thread per request):
+        # two overlapping /api/login (page refreshed out of impatience
+        # while a prior login still waits for its code, up to 120 s)
+        # mutated loop/future/queue without synchronization, with a close()
+        # could stop the loop another thread just created.
         self._verrou = threading.Lock()
 
     def start(self, username: str, password: str) -> dict:
@@ -1675,40 +1614,40 @@ class LoginFlow:
             try:
                 async with blink_auth.session_http_temporaire() as session:
                     blink = await blink_auth.login(session, username, password, ask_code)
-            except Exception as error:  # remonter la cause plutôt que planter le serveur
+            except Exception as error:  # surface the cause rather than crash the server
                 return {"status": "error", "message": f"{type(error).__name__}: {error}"}
             if blink is None:
-                return {"status": "error", "message": "Identifiants ou code refusés."}
+                return {"status": "error", "message": "Credentials or code refused."}
             return {"status": "ok"}
         finally:
-            # Signale la fin RÉELLE du nettoyage (fermeture de la session HTTP
-            # comprise), indépendamment de l'état du concurrent.futures.Future
-            # renvoyé par run_coroutine_threadsafe : ce dernier passe à
-            # "cancelled" de façon synchrone dès l'appel .cancel(), avant même
-            # que la boucle ait rendu la main à la tâche annulée pour dérouler
-            # ce bloc (constaté empiriquement : cancelled() devient True en
-            # 0 ms, ce finally s'exécute une fraction de seconde plus tard).
-            # _arreter_session_courante() attend cet événement plutôt que
-            # future.result() pour savoir quand couper la boucle sans
-            # trancher ce nettoyage à mi-chemin.
+            # Signals the REAL end of cleanup (including HTTP session close),
+            # independent of the concurrent.futures.Future returned by
+            # run_coroutine_threadsafe: the latter becomes "cancelled"
+            # synchronously on .cancel(), even before the loop has given
+            # control back to the cancelled task to run this block (observed
+            # empirically: cancelled() becomes True in 0 ms, this finally
+            # runs a fraction of a second later).
+            # _arreter_session_courante() waits for this event rather than
+            # future.result() to know when to cut the loop without
+            # cutting this cleanup mid-way.
             ferme.set()
 
     def submit_code(self, code: str) -> dict:
         with self._verrou:
             if self.loop is None or self.queue is None:
-                return {"status": "error", "message": "Aucune connexion en cours."}
+                return {"status": "error", "message": "No connection in progress."}
             self.asked.clear()
             loop, queue, future = self.loop, self.queue, self.future
         loop.call_soon_threadsafe(queue.put_nowait, code)
         return self.wait(future)
 
     def wait(self, future, timeout: float = 120.0) -> dict:
-        """Rend la main dès qu'un code est réclamé ou que la connexion aboutit.
+        """Yield as soon as a code is requested or the connection succeeds.
 
-        ``future`` est celui capturé par l'appelant sous verrou, jamais relu
-        depuis ``self`` : si une autre session de login a entre-temps remplacé
-        celle-ci, on continue d'attendre la nôtre sans se faire piéger par un
-        attribut partagé qui a changé sous nos pieds."""
+        ``future`` is the one the caller captured under lock, never reread
+        from ``self``: if another login session has meanwhile replaced this
+        one, we keep waiting for ours without being trapped by a shared
+        attribute that changed under our feet."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if future.done():
@@ -1719,15 +1658,15 @@ class LoginFlow:
                 return {"status": "2fa"}
             time.sleep(0.1)
         self._fermer_si_courante(future)
-        return {"status": "error", "message": "Délai dépassé."}
+        return {"status": "error", "message": "Timed out."}
 
     def close(self) -> None:
         with self._verrou:
             self._arreter_session_courante()
 
     def _fermer_si_courante(self, future) -> None:
-        """N'arrête la boucle que si ``future`` est toujours la session active,
-        pas celle qu'un login concurrent plus récent a déjà remplacée."""
+        """Stop the loop only if ``future`` is still the active session,
+        not one a more recent concurrent login has already replaced."""
         with self._verrou:
             if self.future is future:
                 self._arreter_session_courante()
@@ -1736,19 +1675,19 @@ class LoginFlow:
         if self.future is not None and not self.future.done():
             ferme = self._ferme
             self.future.cancel()
-            # future.done()/.cancelled() passe à True de façon SYNCHRONE dès
-            # cet appel, bien avant que la tâche asyncio sous-jacente n'ait pu
-            # dérouler son annulation (elle ne reprend qu'au prochain tour de
-            # la boucle, dans l'autre thread) : attendre future.result() ici
-            # ne garantit donc rien sur l'état réel de la coroutine (constaté
-            # empiriquement : cancelled() vaut True en 0 ms, alors que le
-            # ``finally`` de _login, qui ferme la session HTTP, ne s'exécute
-            # qu'une fraction de seconde plus tard). ``ferme`` est le seul
-            # signal fiable de cette fin réelle ; sans l'attendre, loop.stop()
-            # coupait ce nettoyage à mi-chemin, laissant la session HTTP
-            # ouverte et la tâche jamais vraiment terminée (constaté en réel :
-            # recommencer une connexion pendant qu'une précédente attend son
-            # code de vérification).
+            # future.done()/.cancelled() becomes True SYNCHRONOUSLY on
+            # this call, well before the underlying asyncio task could
+            # run its cancellation (it only resumes on the next turn of
+            # the loop, in the other thread): waiting for future.result() here
+            # therefore guarantees nothing about the coroutine's real state (observed
+            # empirically: cancelled() is True in 0 ms, while the
+            # ``finally`` of _login, which closes the HTTP session, only runs
+            # only a fraction of a second later). ``ferme`` is the only
+            # reliable signal of that real end; without waiting for it, loop.stop()
+            # cut this cleanup mid-way, leaving the HTTP session
+            # open and the task never truly finished (observed in practice:
+            # restarting a connection while a previous one still waits for its
+            # verification code).
             if ferme is not None:
                 ferme.wait(timeout=5)
             try:
@@ -1764,25 +1703,22 @@ BLINK = BlinkSession()
 
 
 def _choisir_dossier_windows(initial: str) -> str:
-    """Sélecteur de dossier natif via PowerShell/WinForms, chaîne vide si
-    annulé.
+    """Native folder picker via PowerShell/WinForms, empty string if cancelled.
 
-    tkinter dépend de Tcl/Tk, pas forcément embarqué correctement dans un
-    bundle PyInstaller (constaté en conditions réelles sur l'édition
-    Windows 7 : « Sélecteur de dossier indisponible »). System.Windows.Forms
-    fait partie de .NET Framework, présent par défaut depuis Windows Vista
-    (donc Windows 7 aussi), et ne demande rien à empaqueter. Un propriétaire
-    invisible et TopMost sert le même rôle que le -topmost de tkinter : sans
-    lui, la boîte peut s'ouvrir derrière le navigateur.
+    tkinter depends on Tcl/Tk, not always correctly embedded in a PyInstaller
+    bundle (observed in real conditions on the Windows 7 build: "Folder
+    picker unavailable"). System.Windows.Forms is part of .NET Framework,
+    present by default since Windows Vista (hence Windows 7 too), and needs
+    nothing packaged. An invisible TopMost owner serves the same role as
+    tkinter's -topmost: without it, the dialog can open behind the browser.
 
-    Le propriétaire doit être réellement affiché (Show(), Opacity=0, hors
-    écran) plutôt que juste construit avec WindowState='Minimized' sans
-    jamais l'afficher : cette seconde forme, essayée d'abord, faisait
-    entrer ShowDialog() dans un blocage silencieux (aucune erreur, aucune
-    boîte visible, le processus PowerShell restait vivant indéfiniment -
-    constaté en conditions réelles). -STA est déjà le mode par défaut de
-    powershell.exe (vérifié : GetApartmentState() répond STA sans l'option),
-    gardé explicite pour ne pas en dépendre silencieusement."""
+    The owner must actually be shown (Show(), Opacity=0, off-screen) rather
+    than just built with WindowState='Minimized' without ever displaying it:
+    that second form, tried first, made ShowDialog() enter a silent hang
+    (no error, no visible dialog, the PowerShell process stayed alive
+    indefinitely — observed in real conditions). -STA is already
+    powershell.exe's default mode (verified: GetApartmentState() returns STA
+    without the option), kept explicit so we do not silently depend on it."""
     script = (
         "Add-Type -AssemblyName System.Windows.Forms; "
         "$proprietaire = New-Object System.Windows.Forms.Form; "
@@ -1805,72 +1741,72 @@ def _choisir_dossier_windows(initial: str) -> str:
         text=True, errors="replace", check=False,
     )
     if resultat.returncode != 0:
-        raise RuntimeError((resultat.stderr or "").strip() or "PowerShell a échoué")
+        raise RuntimeError((resultat.stderr or "").strip() or "PowerShell failed")
     return resultat.stdout.strip()
 
 
 class _ReglagesInvalides(ValueError):
-    """Refus de formulaire destiné à une réponse HTTP 400."""
+    """Form rejection meant for an HTTP 400 response."""
 
 
-# Ce qu'un nom d'hôte (y compris NetBIOS, d'où « _ »), une IPv4/IPv6 ou un
-# sous-réseau CIDR peut contenir, et rien d'autre : chaque entrée finit aussi
-# dans l'en-tête CSP (frame-ancestors, voir end_headers), où un « ; » ouvrirait
-# une directive de plus.
+# What a host name (including NetBIOS, hence "_"), an IPv4/IPv6 or a
+# CIDR subnet may contain, and nothing else: each entry also ends up in
+# the CSP header (frame-ancestors, see end_headers), where a ";" would open
+# one more directive.
 _ENTREE_CONFIANCE_RE = re.compile(r"^[A-Za-z0-9._\-:\[\]/]+$")
 
 
 def normaliser_hotes_confiance(valeur: str) -> str:
-    """Valide trusted_host et le rend sous forme canonique (« a,b »), ou lève
-    ValueError avec un message affichable. Appliqué à l'enregistrement depuis
-    la page de réglages, jamais au démarrage : un réglage accepté par une
-    version antérieure et refusé par celle-ci empêcherait sinon le serveur de
-    démarrer après mise à jour. À l'usage, hote_autorise() et end_headers()
-    ignorent de toute façon les entrées invalides (refus par défaut)."""
+    """Validate trusted_host and return it in canonical form ("a,b"), or raise
+    ValueError with a displayable message. Applied on save from the settings
+    page, never at startup: a setting accepted by a prior version and rejected
+    by this one would otherwise prevent the server from starting after an
+    update. In use, hote_autorise() and end_headers() ignore invalid entries
+    anyway (default deny)."""
     entrees = serveweb.entrees_confiance(valeur)
     for entree in entrees:
-        # Un « - » initial n'appartient à aucun nom d'hôte ni adresse, et
-        # argparse lirait « --trusted-host -x » comme une option sans valeur :
-        # serve refuserait alors de démarrer au lancement suivant.
+        # A leading "-" belongs to no host name or address, and
+        # argparse would read "--trusted-host -x" as an option without a value:
+        # serve would then refuse to start on the next launch.
         if not _ENTREE_CONFIANCE_RE.match(entree) or entree.startswith("-"):
             raise ValueError(
-                f"Hôte de confiance invalide : « {entree} ». Un ou plusieurs "
-                "noms d'hôte, adresses IP ou sous-réseaux CIDR (192.168.1.0/24), "
-                "séparés par des virgules.")
+                f"Invalid trusted host: « {entree} ». One or more "
+                "hostnames, IP addresses or CIDR subnets (192.168.1.0/24), "
+                "comma-separated.")
         if "/" in entree:
             try:
                 ipaddress.ip_network(entree, strict=False)
             except ValueError as erreur:
                 raise ValueError(
-                    f"Sous-réseau invalide : « {entree} ». Format attendu : "
+                    f"Invalid subnet: « {entree} ». Expected format: "
                     "192.168.1.0/24.") from erreur
     return ",".join(entrees)
 
 
 def _verifier_dossier_reglages(dossier: str) -> None:
-    """Éprouve l'écriture sans changer le dossier de stockage actif."""
+    """Probe writing without changing the active storage folder."""
     if not dossier:
         return
     try:
         candidat = Path(dossier).expanduser()
         candidat.mkdir(parents=True, exist_ok=True)
-        # Création exclusive : ni fichier existant écrasé, ni collision entre
-        # deux requêtes. Le contexte ferme et supprime uniquement sa sonde,
-        # y compris si l'écriture ou le vidage du tampon échoue.
+        # Exclusive creation: neither an existing file overwritten, nor a collision between
+        # two requests. The context closes and deletes only its probe,
+        # including if the write or buffer flush fails.
         with tempfile.NamedTemporaryFile(
                 mode="w", encoding="utf-8", prefix=".blink_ecriture_test-",
                 dir=candidat) as sonde:
             sonde.write("blink2video")
             sonde.flush()
     except OSError as erreur:
-        raise _ReglagesInvalides(f"Dossier de stockage inaccessible : {erreur}") from erreur
+        raise _ReglagesInvalides(f"Storage folder inaccessible: {erreur}") from erreur
 
 
 def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
-    """Retourne le dossier demandé et les réglages normalisés, sans les enregistrer.
+    """Return the requested folder and normalized settings, without saving them.
 
-    La sonde du dossier est un effet réel : conserver l'ordre des contrôles,
-    qui détermine aussi la première erreur présentée à l'utilisateur.
+    The folder probe is a real side effect: keep the order of checks, which
+    also determines the first error shown to the user.
     """
     try:
         usb_minutes = int(payload.get("usb_minutes"))
@@ -1882,8 +1818,8 @@ def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
             raise ValueError
     except (TypeError, ValueError) as erreur:
         raise _ReglagesInvalides(
-            "Les cadences doivent être des nombres de minutes d'au "
-            "moins 1, et le port un nombre entre 1 et 65535.") from erreur
+            "Cadences must be minute counts of at least "
+            "1, and the port a number between 1 and 65535.") from erreur
 
     dossier = str(payload.get("storage_dir", "")).strip()
     _verifier_dossier_reglages(dossier)
@@ -1892,7 +1828,7 @@ def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
     try:
         ZoneInfo(timezone)
     except (ZoneInfoNotFoundError, ValueError) as erreur:
-        raise _ReglagesInvalides(f"Fuseau horaire inconnu : « {timezone} ».") from erreur
+        raise _ReglagesInvalides(f"Unknown timezone: « {timezone} ».") from erreur
 
     reglages = {
         "usb_minutes": usb_minutes, "cloud_minutes": cloud_minutes, "port": port,
@@ -1904,7 +1840,7 @@ def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
     }
     protocole = str(payload.get("live_protocol", "webrtc"))
     if protocole not in runtime.PROTOCOLES_LIVE_VALIDES:
-        raise _ReglagesInvalides(f"Protocole de direct inconnu : « {protocole} ».")
+        raise _ReglagesInvalides(f"Unknown live protocol: « {protocole} ».")
     reglages["live_protocol"] = protocole
 
     font_size = payload.get("font_size")
@@ -1917,13 +1853,13 @@ def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
                 raise ValueError
         except (TypeError, ValueError) as erreur:
             raise _ReglagesInvalides(
-                "La taille de police doit être un nombre entre 8 et 500, "
-                "ou vide pour la taille automatique.") from erreur
+                "Font size must be a number between 8 and 500, "
+                "or empty for automatic size.") from erreur
     reglages["font_size"] = font_size
 
     font_color = str(payload.get("font_color") or "white").strip() or "white"
     if not md.COULEUR_FFMPEG_RE.match(font_color):
-        raise _ReglagesInvalides(f"Couleur d'horodatage invalide : « {font_color} ».")
+        raise _ReglagesInvalides(f"Invalid timestamp color: « {font_color} ».")
     reglages["font_color"] = font_color
 
     try:
@@ -1932,7 +1868,7 @@ def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
             raise ValueError
     except (TypeError, ValueError) as erreur:
         raise _ReglagesInvalides(
-            "L'opacité du bandeau doit être un nombre entre 0.0 et 1.0.") from erreur
+            "Banner opacity must be a number between 0.0 and 1.0.") from erreur
     reglages["box_opacity"] = box_opacity
 
     try:
@@ -1946,120 +1882,184 @@ def _preparer_reglages_web(payload: dict) -> tuple[str, dict]:
         try:
             schema_valide = urlparse(webhook_notif_url).scheme in ("http", "https")
         except ValueError:
-            # urlparse lève sur certaines formes manifestement invalides
-            # (IPv6 mal fermé, ex. « http://[abc ») plutôt que de rendre un
-            # schéma vide comme pour le reste des URL mal formées - un cas
-            # trouvé en se demandant si cette même levée touchait aussi
-            # hote_autorise() (Origin), qui appelle urlparse de la même
-            # façon sans plus de protection qu'ici avant ce correctif.
+            # urlparse raises on some clearly invalid forms
+            # (badly closed IPv6, e.g. "http://[abc") rather than returning an
+            # empty scheme as for other malformed URLs — a case
+            # found while wondering whether that same raise also hit
+            # hote_autorise() (Origin), which calls urlparse the same
+            # way with no more protection than here before this fix.
             schema_valide = False
         if not schema_valide:
             raise _ReglagesInvalides(
-                f"URL de notification invalide : « {webhook_notif_url} ». Une "
-                "adresse http:// ou https:// complète, ou vide pour désactiver.")
+                f"Invalid notification URL: « {webhook_notif_url} ». A full "
+                "http:// or https:// address, or empty to disable.")
     reglages["webhook_notif_url"] = webhook_notif_url
 
-    # Plafonné à LIVE_MAX_SECONDS : le serveur coupe de toute façon chaque
-    # direct à ce délai, une valeur au-delà serait inopérante (bornée à 24 h
-    # en 0.13.0, corrigé en constatant ce plafond pour l'issue #15).
+    # Capped at LIVE_MAX_SECONDS: the server cuts every
+    # live view at that delay anyway, a value beyond would be inert (capped at 24 h
+    # in 0.13.0, fixed on noticing this ceiling for issue #15).
     try:
         live_auto_stop_seconds = int(payload.get("live_auto_stop_seconds", 0) or 0)
         if not 0 <= live_auto_stop_seconds <= LIVE_MAX_SECONDS:
             raise ValueError
     except (TypeError, ValueError) as erreur:
         raise _ReglagesInvalides(
-            "L'arrêt automatique du direct doit être un nombre de secondes "
-            f"entre 0 (désactivé) et {LIVE_MAX_SECONDS} (le plafond de tout "
-            "direct).") from erreur
+            "Live auto-stop must be a number of seconds "
+            f"between 0 (disabled) and {LIVE_MAX_SECONDS} (the ceiling for any "
+            "live view).") from erreur
     reglages["live_auto_stop_seconds"] = live_auto_stop_seconds
 
     return dossier, reglages
 
 
 class Handler(serveweb.Handler):
-    # HTTP/1.1 pour garder la connexion ouverte : un navigateur qui se déplace
-    # dans une vidéo enchaîne les requêtes Range, une par saut. En HTTP/1.0 il
-    # rouvrirait une connexion à chaque fois.
+    # HTTP/1.1 to keep the connection open: a browser scrubbing a video
+    # chains Range requests, one per seek. On HTTP/1.0 it would reopen a
+    # connection each time.
     protocol_version = "HTTP/1.1"
     paths: dict = {}
     timezone: ZoneInfo = ZoneInfo("Europe/Paris")
     hub: str | None = None
     ffmpeg: str = ""
     trusted_host: str = ""
-    # Serveur temporaire du tout premier démarrage : les réglages sont
-    # enregistrés sans lancer lui-même un restart. Le parent ``start`` attend
-    # leur marqueur, arrête ce serveur, puis seulement alors crée les workers.
+    # Temporary server for the very first start: settings are saved without
+    # this process launching a restart itself. The ``start`` parent waits for
+    # their marker, stops this server, then only then creates the workers.
     initial_setup: bool = False
     lock = threading.Lock()
     login_flow = LoginFlow()
 
     def log_message(self, fmt, *args):
-        pass  # le journal d'accès n'apprend rien ici
+        pass  # the access log learns nothing here
 
     # ------------------------------------------------------------ protection
 
-    # La garde d'hôte (Host, Origin, trusted_host en liste ou CIDR, proxy local)
-    # est celle de nico579_commons.serveweb, la même pour les quatre
-    # applications ; ne reste ici que ce qui est propre à blink2video.
+    # The host guard (Host, Origin, trusted_host as list or CIDR, local proxy)
+    # is that of nico579_commons.serveweb, the same for all four apps; only
+    # what is specific to blink2video remains here.
     variable_proxy_local = "BLINK_TRUSTED_LOOPBACK_PROXY"
 
     def _journaliser_acces_refuse(self, raison: str) -> None:
-        """Trace un 403 de hote_autorise() dans serve_erreurs.log (même
-        fichier que handle_error, même tolérance à l'échec d'écriture).
+        """Log a hote_autorise() 403 in serve_erreurs.log (same file as
+        handle_error, same tolerance of write failure).
 
-        Sans ceci, un trusted_host mal renseigné (casse, port oublié dans le
-        champ, MagicDNS Tailscale au lieu de l'IP...) ne laisse aucune trace
-        exploitable : juste un 403 générique côté navigateur. Issue #10,
-        BLINK_BIND + trusted_host donnant toujours 403 sans qu'on ait pu
-        savoir laquelle des trois conditions (Host, boucle locale/tunnel,
-        Origin) avait échoué."""
+        Without this, a misconfigured trusted_host (case, forgotten port in
+        the field, Tailscale MagicDNS instead of the IP...) leaves no usable
+        trace: just a generic 403 in the browser. Issue #10, BLINK_BIND +
+        trusted_host always giving 403 without knowing which of the three
+        conditions (Host, local loop/tunnel, Origin) had failed."""
         try:
             with (runtime.app_dir() / "serve_erreurs.log").open(
                     "a", encoding="utf-8") as journal:
                 journal.write(
-                    f"\n--- {dt.datetime.now().isoformat()} accès refusé ---\n"
+                    f"\n--- {dt.datetime.now().isoformat()} access denied ---\n"
                     f"raison: {raison}\n"
-                    f"Host reçu: {self.headers.get('Host')!r}\n"
-                    f"Origin reçu: {self.headers.get('Origin')!r}\n"
+                    f"Host received: {self.headers.get('Host')!r}\n"
+                    f"Origin received: {self.headers.get('Origin')!r}\n"
                     f"IP cliente: {getattr(self, 'client_address', ('?', 0))[0]}\n"
-                    f"trusted_host configuré: {self.trusted_host!r}\n")
+                    f"trusted_host configured: {self.trusted_host!r}\n")
         except OSError:
             pass
 
     def jeton_valide(self) -> bool:
-        """Le jeton de process (TOKEN) doit accompagner toute requête qui
-        change quelque chose.
+        """The process token (TOKEN) must accompany every request that
+        changes something.
 
-        Distinct de `hote_autorise()` : Host se falsifie difficilement mais
-        se contourne par re-liaison DNS (un domaine public pointé sur
-        127.0.0.1) ; un en-tête personnalisé, lui, ne peut être posé que par
-        du code qui a lu la page servie ici, ce qu'une origine étrangère ne
-        peut pas faire (politique de même origine du navigateur)."""
+        Distinct from `hote_autorise()`: Host is hard to forge but can be
+        bypassed by DNS rebinding (a public domain pointed at 127.0.0.1);
+        a custom header, by contrast, can only be set by code that has read
+        the page served here, which a foreign origin cannot do (browser
+        same-origin policy)."""
         if self.headers.get("X-Blink-Token") == TOKEN:
             return True
-        # EventSource, <video> et <img> ne permettent pas d'ajouter un en-tête
-        # personnalisé. Leur URL porte donc le même secret ; no-referrer et la
-        # politique same-origin ci-dessous empêchent sa fuite vers un tiers.
+        # EventSource, <video> and <img> cannot add a custom
+        # header. Their URL therefore carries the same secret; no-referrer and the
+        # same-origin policy below prevent its leak to a third party.
         valeurs = parse_qs(urlparse(self.path).query).get("token") or []
         return any(value == TOKEN for value in valeurs)
 
+    def identite_acces(self) -> dict:
+        """Cloudflare Access + allowlist profile for this request (cached)."""
+        cache = getattr(self, "_identite_acces_cache", None)
+        if cache is not None:
+            return cache
+        cache = access_control.resoudre_identite(self.headers)
+        self._identite_acces_cache = cache
+        return cache
+
+    def _refuser_acces(self, code: int = 403, message: str = "Forbidden") -> None:
+        try:
+            self.send_json({"error": message, "role": self.identite_acces().get("role")},
+                           code)
+        except Exception:
+            self.send_error(code)
+
+    def exiger_acces_authentifie(self) -> bool:
+        """False already answered the client. True means identity is usable.
+
+        Passing a Cloudflare Access policy (valid JWT) is enough to enter as
+        guest/admin; camera allowlists are enforced separately per route.
+        """
+        profil = self.identite_acces()
+        if profil.get("role") == "unauthenticated":
+            self._refuser_acces(401, profil.get("error") or "Cloudflare Access login required.")
+            return False
+        return True
+
+    def exiger_admin(self) -> bool:
+        if not self.exiger_acces_authentifie():
+            return False
+        if self.identite_acces().get("role") != "admin":
+            self._refuser_acces(403, "Admin only.")
+            return False
+        return True
+
+    def exiger_camera(self, *identifiants: str | None) -> bool:
+        if not self.exiger_acces_authentifie():
+            return False
+        email = self.identite_acces().get("email") or ""
+        if access_control.camera_autorisee(email, *identifiants):
+            return True
+        self._refuser_acces(403, "Camera not allowed for this user.")
+        return False
+
+    def camera_depuis_clip_identity(self, identity: str) -> tuple[str | None, str | None]:
+        """Return (camera name, camera key) for a clip identity, if known."""
+        entry = read_entries(self.paths).get(identity)
+        if not isinstance(entry, dict):
+            return None, None
+        nom = str(entry.get("camera") or "").strip() or None
+        cle = blink_registre.camera_setting_key_from_entry(entry)
+        return nom, cle
+
+    def media_autorise(self, route: str) -> bool:
+        kind, _, relative = route.partition("/")
+        if not relative:
+            return False
+        email = self.identite_acces().get("email") or ""
+        if kind == "clip":
+            nom, cle = self.camera_depuis_clip_identity(relative)
+            return access_control.camera_autorisee(email, nom, cle)
+        camera = relative.split("/", 1)[0]
+        return access_control.camera_autorisee(email, camera)
+
     def end_headers(self) -> None:
-        # 'none' par défaut : même une page de ce site ne doit pas pouvoir
-        # s'afficher dans un <iframe>, dernier rempart contre le
-        # détournement de clic (cliquer sur un bouton qu'on croit ailleurs).
-        # Assoupli aux entrées de trusted_host (issue #12 : embarquer la page
-        # dans un tableau de bord domotique type ioBroker) - seulement les
-        # hôtes/IP exacts, jamais un sous-réseau CIDR : frame-ancestors n'a
-        # pas de syntaxe pour un sous-réseau, et l'accepter en silence
-        # laisserait croire à une protection qui n'opère pas. Refiltré ici
-        # même si les réglages sont validés à l'écriture : un fichier de
-        # réglages modifié à la main n'y passe pas, et un « ; » ajouterait
-        # une directive à cet en-tête.
-        # « :* » obligatoire : sans port, une source CSP ne vaut que pour le
-        # port par défaut (80), et un tableau de bord servi sur 8081/8082
-        # (ioBroker) était refusé, vérifié dans Chrome. Tout port de l'hôte,
-        # comme hote_autorise() qui ignore déjà le port. Pas d'entrée IPv6 :
-        # la syntaxe CSP n'a pas de forme pour une adresse IPv6 littérale.
+        # 'none' by default: even a page of this site must not be able to
+        # display in an <iframe>, last rampart against
+        # clickjacking (clicking a button you think is elsewhere).
+        # Relaxed to trusted_host entries (issue #12: embed the page
+        # in a home-automation dashboard like ioBroker) — only the
+        # exact hosts/IPs, never a CIDR subnet: frame-ancestors has
+        # no syntax for a subnet, and silently accepting one
+        # would suggest a protection that does not apply. Refiltered here
+        # even though settings are validated on write: a settings
+        # file edited by hand does not go through that, and a ";" would add
+        # a directive to this header.
+        # ":*" required: without a port, a CSP source only applies to the
+        # default port (80), and a dashboard served on 8081/8082
+        # (ioBroker) was refused, verified in Chrome. Any port of the host,
+        # like hote_autorise() which already ignores the port. No IPv6 entry:
+        # CSP syntax has no form for a literal IPv6 address.
         exacts = [entree for entree in serveweb.entrees_confiance(self.trusted_host)
                   if "/" not in entree and ":" not in entree
                   and _ENTREE_CONFIANCE_RE.match(entree)]
@@ -2081,23 +2081,22 @@ class Handler(serveweb.Handler):
     # ------------------------------------------------------------------ envoi
 
     def repondre_puis_redemarrer(self, commande_restart: list) -> None:
-        """Détache une commande capable d'arrêter CE processus, puis confirme
-        au navigateur qu'elle a bien été créée. Factorise /api/reglages et
-        /api/stop, qui partagent exactement ce besoin.
+        """Detach a command able to stop THIS process, then confirm to the
+        browser that it was created. Factors /api/reglages and /api/stop,
+        which share exactly this need.
 
-        wfile.write()/flush() ne garantissent que la remise à l'OS, pas la
-        livraison réelle jusqu'au navigateur : un taskkill trop rapproché
-        peut aborter la connexion avant que la pile réseau ait fini de
-        transmettre, la fenêtre étant plus large sur une machine chargée ou
-        lente (rapporté par un utilisateur sous Windows 7/Python 3.8 :
-        JSON.parse en échec côté page, disparaissant une fois la
-        surveillance caméra arrêtée - moins de contention). Une courte
-        pause après le flush laisse le temps à la pile réseau de vraiment
-        vider son tampon avant la mise à mort."""
-        # Vérifier que le relais a réellement pu être créé AVANT d'annoncer
-        # l'acceptation. Le finaliseur attend ensuite brièvement avant l'arrêt,
-        # ce qui laisse à cette réponse le temps de parvenir au navigateur sans
-        # devoir espérer qu'un sleep exécuté après le flush soit suffisant.
+        wfile.write()/flush() only guarantee delivery to the OS, not real
+        delivery to the browser: a too-soon taskkill can abort the connection
+        before the network stack finishes transmitting, the window being
+        wider on a loaded or slow machine (reported by a user on Windows
+        7/Python 3.8: JSON.parse failing on the page, disappearing once
+        camera watching was stopped — less contention). A short pause after
+        flush gives the network stack time to actually empty its buffer
+        before kill."""
+        # Verify the relay could really be created BEFORE announcing
+        # acceptance. The finalizer then waits briefly before stopping,
+        # which gives this response time to reach the browser without
+        # having to hope a sleep after the flush is enough.
         commande = [*commande_restart, "--delai", "0.75"]
         try:
             runtime.demarrer(
@@ -2105,16 +2104,16 @@ class Handler(serveweb.Handler):
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.STDOUT, start_new_session=(os.name != "nt"))
         except OSError as erreur:
-            self.send_json({"error": f"Impossible de lancer l'arrêt : {erreur}"}, 500)
+            self.send_json({"error": f"Could not start shutdown: {erreur}"}, 500)
             return
         self.send_json({"ok": True, "accepted": True})
 
     def send_media(self, path: Path) -> None:
-        """Sert un fichier en gérant les requêtes Range.
+        """Serve a file while handling Range requests.
 
-        Sans Range, un navigateur ne peut pas se déplacer dans la vidéo : il
-        n'a d'autre choix que de tout télécharger depuis le début. C'est la
-        seule raison pour laquelle ce serveur n'est pas trois lignes."""
+        Without Range, a browser cannot scrub a video: it has no choice but
+        to download everything from the start. That is the only reason this
+        server is not three lines."""
         size = path.stat().st_size
         start, end = 0, size - 1
         partial = False
@@ -2123,17 +2122,17 @@ class Handler(serveweb.Handler):
         if match:
             first, last = match.group(1), match.group(2)
             if first:
-                # Ne PAS clamper start ici : un start hors fichier (bytes=20-
-                # sur 10 octets) doit être rejeté (416), pas silencieusement
-                # ramené au dernier octet valide - la RFC 7233 ne l'autorise
-                # que pour la borne de FIN, jamais pour la borne de début.
+                # Do NOT clamp start here: a start past the file (bytes=20-
+                # of 10 bytes) must be rejected (416), not silently
+                # clamped to the last valid byte — RFC 7233 only allows
+                # that for the END bound, never for the start bound.
                 start = int(first)
                 end = min(int(last), size - 1) if last else size - 1
             elif last:  # suffixe : les N derniers octets
                 n = int(last)
                 start = max(size - n, 0) if n > 0 else size
                 end = size - 1
-            else:  # "bytes=-", ni début ni fin : rien à servir
+            else:  # "bytes=-", neither start nor end: nothing to serve
                 start = size
                 end = size - 1
             if start >= size or start > end:
@@ -2164,19 +2163,18 @@ class Handler(serveweb.Handler):
                 try:
                     self.wfile.write(chunk)
                 except (BrokenPipeError, ConnectionResetError):
-                    return  # l'utilisateur a changé de clip, c'est normal
+                    return  # the user changed clip, that is normal
                 remaining -= len(chunk)
 
     def _client_parti(self) -> bool:
-        """Vrai si le navigateur a déjà fermé sa connexion (requête annulée).
+        """True if the browser has already closed its connection (cancelled request).
 
-        Une page qui défile vite libère ses lecteurs, et le navigateur annule
-        les vignettes qu'il avait demandées (359 requêtes sans statut dans le
-        test à froid de Joël, PR #59) ; le serveur ne le sait pas, fabriquait
-        quand même chacune par ffmpeg, et ces requêtes gardaient leur place
-        dans la file des extractions. Un octet lisible qui est la requête
-        suivante d'une connexion persistante n'est pas un départ : seul un
-        flux fermé (lecture vide) l'est."""
+        A fast-scrolling page releases its players, and the browser cancels
+        the thumbnails it had requested (359 statusless requests in Joel's
+        cold test, PR #59); the server does not know, still built each via
+        ffmpeg, and those requests kept their place in the extraction queue.
+        A readable byte that is the next request on a persistent connection
+        is not a departure: only a closed stream (empty read) is."""
         try:
             lisibles, _, _ = select.select([self.connection], [], [], 0)
             if not lisibles:
@@ -2186,13 +2184,13 @@ class Handler(serveweb.Handler):
             return True
 
     def send_thumb(self, route: str, source: Path) -> None:
-        """Sert la miniature d'un clip, en la fabriquant à la première demande.
+        """Serve a clip's thumbnail, building it on first request.
 
-        Elle est prise un peu après le début, jamais sur la première image :
-        une caméra qui vient de se déclencher livre souvent une ou deux images
-        noires ou surexposées, le temps que l'exposition s'ajuste. Et on
-        l'extrait de la version normalisée quand elle existe, pour que
-        l'horodatage incrusté apparaisse dans la vignette."""
+        It is taken a little after the start, never on the first frame: a
+        camera that just triggered often delivers one or two black or
+        overexposed frames while exposure adjusts. And it is extracted from
+        the normalized version when that exists, so the burned-in timestamp
+        appears in the thumbnail."""
         thumb = (self.paths["thumbs"] / route).with_suffix(".jpg")
 
         def fraiche() -> bool:
@@ -2203,21 +2201,21 @@ class Handler(serveweb.Handler):
             )
 
         if not fraiche():
-            # Verrou par miniature : voir _verrou_miniature(). Re-vérifie
-            # fraiche() une fois le verrou obtenu - le thread qui l'a
-            # attendu a pu la trouver déjà construite par celui qui vient
-            # de le relâcher, sans quoi une deuxième extraction inutile
-            # écraserait le fichier temporaire du premier en plein envoi.
+            # Per-thumbnail lock: see _verrou_miniature(). Re-checks
+            # fraiche() once the lock is obtained — the thread that
+            # wait may find it already built by whoever just
+            # released it, otherwise a second useless extraction
+            # would overwrite the first's temporary file mid-send.
             with _verrou_miniature(str(thumb)):
                 if not fraiche():
                     thumb.parent.mkdir(parents=True, exist_ok=True)
                     pending = thumb.with_suffix(".tmp.jpg")
-                    # Deux extractions à la fois au plus : le navigateur réclame
-                    # toutes les vignettes de la page d'un coup, et autant de
-                    # ffmpeg simultanés saturerait la machine pour rien.
+                    # At most two extractions at once: the browser requests
+                    # all page thumbnails at once, and that many
+                    # concurrent ffmpeg would saturate the machine for nothing.
                     with THUMB_SLOTS:
-                        # Après l'attente du créneau, avant le travail : le
-                        # client a pu partir pendant la file (voir _client_parti).
+                        # After waiting for the slot, before the work: the
+                        # client may have left during the queue (see _client_parti).
                         if self._client_parti():
                             self.close_connection = True
                             return
@@ -2228,14 +2226,14 @@ class Handler(serveweb.Handler):
                         return
                     pending.replace(thumb)
 
-        # Chaque changement de filtre reconstruit toute la grille (voir
-        # renderClips côté page), donc chaque <video poster=...> déjà connue
-        # redemande la même image : sans validation, le navigateur la
-        # retéléchargeait entièrement à chaque fois, un flash noir le temps
-        # que ça revienne pour toutes les vignettes à la fois (constaté en
-        # réel, 2026-08-27). La vignette elle-même ne change qu'au prochain
-        # re-téléchargement du clip source (voir `fresh` ci-dessus) : une
-        # revalidation conditionnelle est donc sûre, pas juste plus rapide.
+        # Every filter change rebuilds the whole grid (see
+        # renderClips on the page), so each already-known <video poster=...>
+        # re-requests the same image: without validation, the browser
+        # fully re-downloaded it every time, a black flash while
+        # it came back for all thumbnails at once (observed in
+        # practice, 2026-08-27). The thumbnail itself only changes on the next
+        # re-download of the source clip (see `fresh` above): a
+        # conditional revalidation is therefore safe, not just faster.
         derniere_modif = email.utils.formatdate(thumb.stat().st_mtime, usegmt=True)
         depuis = self.headers.get("If-Modified-Since")
         if depuis:
@@ -2260,11 +2258,11 @@ class Handler(serveweb.Handler):
         self.wfile.write(body)
 
     def describe_camera(self, camera_name: str, camera, raw: dict) -> dict:
-        """Décrit une caméra, en datant ses mesures.
+        """Describe a camera, dating its readings.
 
-        Une caméra injoignable continue de renvoyer sa dernière température
-        connue. La présenter sans date reviendrait à annoncer comme actuelle
-        une valeur qui peut avoir des semaines."""
+        An unreachable camera keeps returning its last known temperature.
+        Presenting it without a date would announce as current a value that
+        may be weeks old."""
         candidates = raw.get(camera_name.strip(), [])
         if isinstance(candidates, dict):
             candidates = [candidates]
@@ -2299,32 +2297,32 @@ class Handler(serveweb.Handler):
             try:
                 moment = md.parse_created_at(str(measured))
                 age = (dt.datetime.now(dt.timezone.utc) - moment).total_seconds()
-                # Un relevé du jour se lit mieux à l'heure seule ; au-delà la
-                # date devient nécessaire pour juger de sa fraîcheur. La page
-                # compose le texte, dans sa langue (issue #37).
+                # A reading from today reads better as time alone; beyond that the
+                # date becomes necessary to judge its freshness. The page
+                # composes the text, in its language (issue #37).
                 measured, measured_today = horodatage_releve(moment, self.timezone)
             except (ValueError, TypeError):
                 measured, age = None, None
 
-        # Les « signals » de l'écran d'accueil sont les jauges que montre
-        # l'application Blink. On les transmet telles quelles, sans inventer
-        # d'échelle : rien dans l'API ne documente leur maximum, et chez cette
-        # installation une caméra qui fonctionne très bien affiche lfr 1.
+        # Homescreen "signals" are the gauges the
+        # the Blink app. We pass them through as-is, without inventing
+        # scale: nothing in the API documents their maximum, and on this
+        # installation a camera that works very well shows lfr 1.
         signals = info.get("signals") or {}
 
-        # Ne pas utiliser camera.arm : pour un mini d'intérieur, blinkpy
-        # renvoie l'armement du module de synchronisation à la place de la
-        # détection propre à la caméra (BlinkCameraMini.arm rend sync.arm).
-        # Système armé plus détection coupée s'affichait donc « active ».
-        # motion_enabled est juste pour tous les modèles, et le champ
-        # `enabled` de l'écran d'accueil sert de recoupement.
+        # Do not use camera.arm: for an indoor mini, blinkpy
+        # returns the sync module's arming instead of the
+        # camera's own detection (BlinkCameraMini.arm returns sync.arm).
+        # Armed system plus detection off thus showed as "active".
+        # motion_enabled is correct for all models, and the
+        # homescreen `enabled` field serves as a cross-check.
         enabled = camera.motion_enabled
         if enabled is None:
             enabled = info.get("enabled")
 
-        # Temperature brute de l'ecran d'accueil (Fahrenheit, comme Blink la
-        # rapporte) : meme conversion que camera.temperature_c (blinkpy,
-        # camera.py) pour un resultat identique, sans dependre de cette
+        # Raw homescreen temperature (Fahrenheit, as Blink
+        # reports it): same conversion as camera.temperature_c (blinkpy,
+        # camera.py) for an identical result, without depending on that
         # propriete elle-meme.
         temp_brute = signals.get("temp")
         try:
@@ -2336,17 +2334,17 @@ class Handler(serveweb.Handler):
             "name": camera_name.strip(),
             "armed": bool(enabled),
             # battery/temperature/wifi/firmware/kind : lus depuis l'ecran
-            # d'accueil (info/signals), pas depuis l'objet camera de
-            # blinkpy (attributes) - celui-ci n'est mis a jour que par
-            # sync_module.refresh(), plus appele depuis system_state()
+            # homescreen (info/signals), not from the camera object of
+            # blinkpy (attributes) — that one is only updated by
+            # sync_module.refresh(), no longer called from system_state()
             # depuis l'allegement du 2026-09-03 (cf. BACKLOG.md) : y lire
-            # ces champs les figeait silencieusement a la valeur du
-            # demarrage du serveur, jamais rafraichis ensuite. Verifie sur
-            # un ecran d'accueil reel avant ce correctif (pas suppose) :
+            # those fields silently froze them at the value from
+            # server startup, never refreshed afterward. Verified on
+            # a real homescreen before this fix (not assumed):
             # tous presents (battery, fw_version, type, signals.wifi/temp).
-            # voltage seul n'a pas d'equivalent dans l'ecran d'accueil,
+            # voltage alone has no equivalent on the homescreen,
             # laisse tel quel : jamais affiche cote page (verifie),
-            # perimer apres le demarrage n'a aucun effet visible.
+            # going stale after startup has no visible effect.
             "battery": info.get("battery"),
             "battery_signal": signals.get("battery"),
             "voltage": attributes.get("battery_voltage"),
@@ -2365,42 +2363,42 @@ class Handler(serveweb.Handler):
         }
 
     def system_state(self) -> dict:
-        """État d'armement du système et des caméras.
+        """Arming state of the system and cameras.
 
-        L'armement Blink a deux niveaux, et les confondre mène à des surprises :
-        le module de synchronisation commande l'ensemble, chaque caméra a en
-        plus son propre interrupteur. Une caméra armée dans un système désarmé
-        ne détecte rien, d'où l'affichage des deux."""
-        # Lu une fois pour toutes les caméras : c'est un fichier, pas une
-        # question posée à Blink.
+        Blink arming has two levels, and confusing them leads to surprises:
+        the sync module commands the whole, each camera also has its own
+        switch. An armed camera in a disarmed system detects nothing, hence
+        showing both."""
+        # Read once for all cameras: it is a file, not a
+        # question asked of Blink.
         venues = provenances(read_entries(self.paths))
 
         def read(blink):
             async def run(_blink=blink):
-                # _blink.refresh(force=True) enchainait aussi, par caméra,
+                # _blink.refresh(force=True) also chained, per camera,
                 # get_camera_info() + update() (sync_module.py refresh()),
                 # plus update_local_storage_manifest()/check_new_videos() -
-                # rien de tout cela n'est lu plus bas : cet affichage ne
+                # none of that is read below: this display does
                 # vient que de get_homescreen() (nom/batterie/temperature/
                 # statut) et de network_info par module (armement). Verifie
-                # dans le code source de blinkpy avant de couper (pas
-                # suppose) : sync.cameras est peuple une seule fois, a la
+                # in blinkpy's source before cutting (not
+                # assumed): sync.cameras is populated once, at
                 # connexion initiale (update_cameras(), appele par start(),
-                # jamais par refresh()) - ses identifiants (device_id/
-                # network_id, utilises plus bas pour rapprocher chaque
-                # caméra de son entree dans l'ecran d'accueil) sont donc
-                # deja stables ici, pas besoin de les rafraichir a chaque
+                # never by refresh()) — its identifiers (device_id/
+                # network_id, used below to match each
+                # camera from its homescreen entry) are therefore
+                # already stable here, no need to refresh them on every
                 # appel. Mesure en reel (2026-09-03) : la sequence complete
-                # (1 + 1 par module + 1 par camera, en serie) faisait durer
-                # "Interrogation du systeme Blink..." bien plus que
-                # necessaire pour cette page precise.
+                # (1 + 1 per module + 1 per camera, in series) made
+                # "Interrogation du systeme Blink..." last far longer than
+                # necessary for this specific page.
                 await _blink.get_homescreen()
                 for sync in _blink.sync.values():
                     await sync.get_network_info()
-                # Les attributs de blinkpy ne disent pas *quand* une mesure a
-                # été prise. L'écran d'accueil, lui, porte un `status` et un
-                # `updated_at` par appareil : sans eux, la température d'une
-                # caméra hors de portée s'affiche comme si elle était actuelle
+                # blinkpy attributes do not say *when* a reading was
+                # been taken. The homescreen carries a `status` and an
+                # `updated_at` per device: without them, the temperature of a
+                # out-of-range camera shows as if it were current
                 # alors qu'elle peut dater de plusieurs semaines.
                 raw = {}
                 home = getattr(_blink, "homescreen", None) or {}
@@ -2435,9 +2433,9 @@ class Handler(serveweb.Handler):
         state = BLINK.call(read, timeout=60)
         state["webrtc"] = WEBRTC_ACTIF
         # Relu a chaque appel, contrairement a WEBRTC_ACTIF (fige a l'import
-        # du process) : un changement depuis les Reglages redemarre deja le
-        # serveur, mais watchLive() lit ce champ pendant un direct deja en
-        # cours, bien apres ce redemarrage-la.
+        # of the process): a change from Settings already restarts the
+        # server, but watchLive() reads this field during a live view already in
+        # progress, well after that restart.
         state["live_auto_stop_seconds"] = runtime.lire_reglages()["live_auto_stop_seconds"]
         return state
 
@@ -2476,10 +2474,10 @@ class Handler(serveweb.Handler):
                 reponse = await camera.snap_picture()
                 if not isinstance(reponse, dict) or not reponse.get("id"):
                     raise RuntimeError("Blink a refuse la commande de reveil.")
-                # blinkpy attend deja la commande, mais ignore le resultat
-                # de wait_for_command() et renvoie la reponse initiale meme
-                # lors d'un refus ou d'un delai depasse. Un seul GET confirme
-                # son issue sans declencher une seconde photo.
+                # blinkpy already waits for the command, but ignores the result
+                # of wait_for_command() and returns the initial response even
+                # on a refusal or timeout. A single GET confirms
+                # its outcome without triggering a second photo.
                 statut = await api.request_command_status(
                     _blink, reponse.get("network_id") or camera.network_id,
                     reponse["id"],
@@ -2494,9 +2492,9 @@ class Handler(serveweb.Handler):
             raise blink_engine.BusyError(_slot_occupe_message())
         try:
             _slot_pris("reveil", identity)
-            # Le verrou memoire protege les directs de ce serveur ; celui
-            # sur disque protege aussi les telechargements dans un autre
-            # processus. Les deux restent tenus jusqu'a la confirmation.
+            # The in-memory lock protects this server's live views; the
+            # on-disk one also protects downloads in another
+            # process. Both stay held until confirmation.
             with blink_engine.hub_lock("reveil", attente=ATTENTE_HUB_MAX_SECONDS):
                 BLINK.call(demander, timeout=130)
         finally:
@@ -2506,13 +2504,13 @@ class Handler(serveweb.Handler):
                 MODULE_SLOT.release()
 
     def declencher_snapshot(self, identity: str) -> Path:
-        """Prend une photo à la demande et la garde, contrairement à
-        reveiller_camera() qui ne fait que confirmer le réveil (issue GitHub
-        #9 : bouton manuel et webhook partagent cette même méthode).
+        """Take an on-demand photo and keep it, unlike reveiller_camera() which
+        only confirms wake-up (GitHub issue #9: manual button and webhook
+        share this same method).
 
-        La confirmation de commande ne met pas à jour la vignette dans blinkpy.
-        Il faut relire l'état de la caméra et vérifier que l'image a changé ;
-        sinon get_media() peut renvoyer l'ancienne photo."""
+        Command confirmation does not update the thumbnail in blinkpy.
+        The camera state must be reread and the image verified to have
+        changed; otherwise get_media() may return the old photo."""
         resultat = {}
 
         def demander(blink):
@@ -2576,29 +2574,29 @@ class Handler(serveweb.Handler):
         dossier = self.paths["snapshots"] / safe_file(resultat["nom"])
         dossier.mkdir(parents=True, exist_ok=True)
         horodatage = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%SZ")
-        # Empreinte du contenu, pas un compteur : deux déclenchements dans la
-        # même seconde (double clic, webhook rapproché) écrasaient sinon
-        # silencieusement l'un des deux clichés (constaté en test).
+        # Content fingerprint, not a counter: two triggers in the
+        # same second (double click, close webhooks) would otherwise silently
+        # overwrite one of the two shots (observed in testing).
         empreinte = hashlib.sha256(resultat["corps"]).hexdigest()[:8]
         cible = dossier / f"{horodatage}_{empreinte}.jpg"
         cible.write_bytes(resultat["corps"])
         runtime.notifier_nouveau_media(resultat["nom"], cible, "snapshot")
-        # La vignette du Direct (send_camera_thumb) vient d'un cache distinct.
-        # Une photo prise à la demande a déjà l'image sous la main ; elle évite d'afficher
-        # une vue plus vieille que ce qu'on vient tout juste de capturer
-        # (demandé sur l'issue GitHub #10). resultat["camera"], pas
-        # `identity` : le webhook reçoit le nom affiché (voir le gabarit
-        # d'URL des réglages), mais la tuile du Direct lit sa vignette sous
-        # la clé stable (c.key côté JS) - les deux ne coïncident que par
-        # hasard pour le bouton manuel, qui envoie déjà cette clé. Un test
-        # en conditions réelles (webhook, caméra "Salon") a montré le
-        # mauvais fichier écrit avant ce correctif.
+        # The Live thumbnail (send_camera_thumb) comes from a distinct cache.
+        # An on-demand photo already has the image at hand; it avoids showing
+        # a view older than what was just captured
+        # (requested on GitHub issue #10). resultat["camera"], not
+        # `identity`: the webhook receives the display name (see the
+        # settings URL template), but the Live tile reads its thumbnail under
+        # the stable key (c.key on the JS side) — the two only coincide by
+        # chance for the manual button, which already sends that key. A real
+        # conditions test (webhook, camera "Salon") showed the
+        # wrong file written before this fix.
         self._ecrire_vignette_camera(resultat["camera"], resultat["corps"])
         return cible
 
     def _ecrire_vignette_camera(self, identity: str, corps: bytes) -> None:
-        """Même remplacement atomique que send_camera_thumb, réutilisable
-        pour republier une image déjà en main sans repasser par Blink."""
+        """Same atomic replacement as send_camera_thumb, reusable to republish
+        an image already at hand without going back through Blink."""
         cache = self.paths["thumbs"] / "cameras" / f"{safe_file(identity)}.jpg"
         cache.parent.mkdir(parents=True, exist_ok=True)
         attente = cache.with_suffix(".tmp.jpg")
@@ -2606,7 +2604,7 @@ class Handler(serveweb.Handler):
         attente.replace(cache)
 
     async def _actualiser_media_camera(self, blink, sync, camera) -> None:
-        """Relit l'URL de la photo dans l'état courant de Blink."""
+        """Reread the photo URL from Blink's current state."""
         await blink.get_homescreen()
         info = await sync.get_camera_info(
             camera.camera_id, unique_info=sync.get_unique_info(camera.name))
@@ -2615,9 +2613,9 @@ class Handler(serveweb.Handler):
         await camera.update_images(info)
 
     def lister_snapshots(self) -> list:
-        """Plus récent d'abord ; pas de registre séparé, le nom de fichier
-        (horodatage UTC) suffit déjà à trier et le contenu du dossier à
-        énumérer, comme pour les vidéos assemblées."""
+        """Newest first; no separate registry, the file name (UTC timestamp)
+        already suffices to sort and the folder contents to enumerate, as
+        for assembled videos."""
         racine = self.paths["snapshots"]
         if not racine.is_dir():
             return []
@@ -2637,12 +2635,11 @@ class Handler(serveweb.Handler):
         return entrees
 
     def gerer_webhook_snapshot(self) -> None:
-        """Déclenche une prise de vue depuis l'extérieur (issue GitHub #9),
-        authentifié par un secret dédié plutôt que par le jeton de session ou
-        l'origine : un système tiers (smarthome) n'a ni l'un ni l'autre, et
-        ne peut d'ailleurs pas poser d'en-tête personnalisé sur une simple
-        URL de webhook - le secret voyage donc en paramètre, comme le jeton
-        de session le fait déjà pour <video>/<img> (voir jeton_valide())."""
+        """Trigger a snapshot from outside (GitHub issue #9), authenticated by
+        a dedicated secret rather than the session token or origin: a third
+        party (smarthome) has neither, and cannot set a custom header on a
+        plain webhook URL — so the secret travels as a parameter, as the
+        session token already does for <video>/<img> (see jeton_valide())."""
         requete = parse_qs(urlparse(self.path).query)
         fourni = (requete.get("token") or [""])[0]
         attendu = runtime.lire_jeton_webhook()
@@ -2655,11 +2652,11 @@ class Handler(serveweb.Handler):
             return
         try:
             chemin = self.declencher_snapshot(camera)
-            # "chemin", pas "fichier" : meme cle et meme forme (chemin
-            # absolu complet) que le webhook sortant (notifier_nouveau_media),
-            # pour qu'un meme script cote domotique lise les deux de la
-            # meme facon (issue #16 : la reponse ne donnait avant que le
-            # chemin relatif sous Pictures/, sous une cle differente).
+            # "chemin", not "fichier": same key and same form (full
+            # absolute path) as the outbound webhook (notifier_nouveau_media),
+            # so the same home-automation script can read both the
+            # same way (issue #16: the response previously only gave the
+            # relative path under Pictures/, under a different key).
             self.send_json({"ok": True, "chemin": str(chemin)})
         except blink_engine.BusyError as erreur:
             self.send_json({"error": str(erreur)}, 409)
@@ -2724,8 +2721,8 @@ class Handler(serveweb.Handler):
         if not self._secret_webhook_valide(requete):
             self.send_error(403)
             return
-        # Plusieurs caméras d'un coup en répétant le paramètre (camera=A&camera=B,
-        # issue #40) ; les doublons ne sont armés qu'une fois.
+        # Several cameras at once by repeating the parameter (camera=A&camera=B,
+        # issue #40); duplicates are armed only once.
         cameras = list(dict.fromkeys(
             nom.strip() for nom in requete.get("camera") or [] if nom.strip()))
         systeme = (requete.get("system") or [""])[0].strip()
@@ -2748,8 +2745,8 @@ class Handler(serveweb.Handler):
             corps, code = self._armer_une_cible(etat, "camera", cameras[0], voulu)
             self.send_json(corps, code)
             return
-        # Une réponse par caméra : une caméra hors ligne ou inconnue n'empêche pas
-        # les autres. « ok » global n'est vrai que si toutes ont réussi.
+        # One response per camera: an offline or unknown camera does not block
+        # the others. Global "ok" is true only if all succeeded.
         resultats = []
         for nom in cameras:
             corps, code = self._armer_une_cible(etat, "camera", nom, voulu)
@@ -2761,12 +2758,12 @@ class Handler(serveweb.Handler):
                         "requested": voulu, "cameras": resultats})
 
     def _armer_une_cible(self, etat: dict, portee: str, nom: str, voulu: bool):
-        """Arme ou désarme une caméra ou un système nommé ; rend (réponse, code HTTP).
+        """Arm or disarm a named camera or system; return (response, HTTP code).
 
-        `changed` dit si l'état connu de blink2video avant l'appel était différent
-        de la demande ; `applied`, si l'état relu après l'appel correspond à la
-        demande (pour une caméra, blink2video suit la commande jusqu'à ce que Blink
-        la confirme)."""
+        `changed` says whether blink2video's known state before the call differed
+        from the request; `applied`, whether the state reread after the call
+        matches the request (for a camera, blink2video follows the command until
+        Blink confirms it)."""
         if portee == "camera":
             candidats = [(s, c) for s in etat.get("systems") or [] for c in s.get("cameras") or []
                          if str(c.get("name") or "").strip() == nom]
@@ -2815,16 +2812,16 @@ class Handler(serveweb.Handler):
         return reponse, 200
 
     def send_camera_thumb(self, identity: str, refresh: bool = False) -> None:
-        """Sert la dernière vignette connue d'une caméra.
+        """Serve a camera's last known thumbnail.
 
-        Elle remplace le cadre noir avant qu'on lance un direct : on voit
-        d'emblée ce que regarde la caméra, y compris pour celles qui sont hors
-        de portée et dont le direct échouera. C'est l'image que Blink garde de
-        son côté, pas une capture neuve : la demander réveillerait la caméra et
-        userait sa batterie à chaque affichage de la page.
+        It replaces the black frame before starting a live view: you see at
+        once what the camera is looking at, including those out of range whose
+        live view will fail. It is the image Blink keeps on its side, not a
+        fresh capture: requesting that would wake the camera and drain its
+        battery on every page display.
 
-        Une demande explicite de rafraîchissement relit l'image conservée par
-        Blink. En cas d'échec, la dernière image locale reste disponible."""
+        An explicit refresh request rereads the image Blink kept. On failure,
+        the last local image remains available."""
         cached = (self.paths["thumbs"] / "cameras" / f"{safe_file(identity)}.jpg")
         if refresh or not (cached.is_file() and cached.stat().st_size > 0):
             def fetch(blink):
@@ -2857,13 +2854,13 @@ class Handler(serveweb.Handler):
         self.wfile.write(body)
 
     def live_failure_reason(self, stream) -> str:
-        """Demande à Blink pourquoi aucune image n'arrive.
+        """Ask Blink why no image is arriving.
 
-        La réponse de suivi de commande porte un motif lisible (« Live view
-        failed » quand la caméra est hors de portée ou endormie). blinkpy le
-        journalise mais ne le remonte pas : on interroge donc nous-mêmes."""
+        The command-follow-up response carries a readable reason ("Live view
+        failed" when the camera is out of range or asleep). blinkpy logs it
+        but does not surface it: so we query ourselves."""
         if stream is None:
-            return "La caméra n'a envoyé aucune image."
+            return "The camera sent no image."
         def ask(blink):
             async def run(_blink=blink):
                 from blinkpy import api
@@ -2874,7 +2871,7 @@ class Handler(serveweb.Handler):
         try:
             status = BLINK.call(ask, timeout=30) or {}
         except Exception:
-            return "La caméra n'a envoyé aucune image."
+            return "The camera sent no image."
 
         message = str(status.get("status_msg") or "").strip()
         commands = status.get("commands") or []
@@ -2883,27 +2880,26 @@ class Handler(serveweb.Handler):
             if command.get("id") == stream.command_id:
                 condition = str(command.get("state_condition") or "")
         if message.lower() == "live view failed" or condition == "error":
-            return ("La caméra n'a pas répondu (Blink signale « "
-                    f"{message or condition} »). Hors de portée du module, "
-                    "endormie, ou déjà occupée par une autre session.")
-        return message or "La caméra n'a envoyé aucune image."
+            return ("The camera did not respond (Blink reports « "
+                    f"{message or condition} »). Out of range of the module, "
+                    "asleep, or already busy with another session.")
+        return message or "The camera sent no image."
 
     def send_attente_module(self) -> None:
-        """Attend que MODULE_SLOT soit réellement libre, sans le retenir.
+        """Wait until MODULE_SLOT is actually free, without holding it.
 
-        Ne déclenche rien : watchLive() (serve_app.js) a déjà demandé
-        l'arrêt de la session active (stopWatch(), pc.close()/fetch abort)
-        avant cet appel - la lui redemander ici serait redondant. Le rôle
-        de cette route est seulement de dire QUAND ce nettoyage, déjà en
-        cours, arrive à son terme, plutôt que de laisser le client deviner
-        un délai (10s à l'aveugle, remplacé par ceci le 2026-09-03 -
-        BACKLOG.md : mesuré 8,8s puis 1,65s sur deux bascules réelles,
-        bien trop variable pour un délai fixe). Ce qui prend réellement du
-        temps échappe à ce serveur : blinkpy (LiveStreamAPI.poll(),
-        livestream.py) n'envoie la commande "done" à Blink qu'une fois vu
-        la fin de la connexion TCP vers le relais Blink lui-même - déjà
-        attendu en entier par _stop_stream avant que MODULE_SLOT soit
-        rendu, donc rien à accélérer ici, seulement à rendre visible."""
+        Triggers nothing: watchLive() (serve_app.js) has already requested
+        stop of the active session (stopWatch(), pc.close()/fetch abort)
+        before this call — asking again here would be redundant. This route's
+        role is only to say WHEN that cleanup, already in progress, finishes,
+        rather than letting the client guess a delay (blind 10s, replaced by
+        this on 2026-09-03 — BACKLOG.md: measured 8.8s then 1.65s on two real
+        switches, far too variable for a fixed delay). What really takes time
+        is outside this server: blinkpy (LiveStreamAPI.poll(), livestream.py)
+        only sends the "done" command to Blink once it has seen the TCP
+        connection to the Blink relay itself end — already fully awaited by
+        _stop_stream before MODULE_SLOT is released, so nothing to speed up
+        here, only to make visible."""
         libre = MODULE_SLOT.acquire(blocking=True, timeout=ATTENTE_MODULE_MAX_SECONDS)
         if libre:
             MODULE_SLOT.release()
@@ -2912,13 +2908,13 @@ class Handler(serveweb.Handler):
             self.send_json({"libre": False, "error": _slot_occupe_message()})
 
     def send_offer_webrtc(self, name: str, payload: dict) -> None:
-        """Une tentative possède son réveil, son pc et un nettoyage unique."""
+        """An attempt owns its wake-up, its pc and a unique cleanup."""
         offer_sdp = str(payload.get("sdp") or "")
         offer_type = str(payload.get("type") or "")
         session_id = str(payload.get("session_id") or "")
         essai = payload.get("essai")
         if not offer_sdp or offer_type != "offer" or not DIRECT_SESSION_ID.fullmatch(session_id):
-            self.send_json({"error": "Offre SDP ou identifiant de session invalide."}, 400)
+            self.send_json({"error": "Invalid SDP offer or session identifier."}, 400)
             return
 
         if not MODULE_SLOT.acquire(blocking=False):
@@ -2931,11 +2927,11 @@ class Handler(serveweb.Handler):
                         "rendu": False, "nettoyage": None}
 
         def journal(message):
-            _journal_direct(name, f"session {session_id[:8]}, tentative {essai} : {message}")
+            _journal_direct(name, f"session {session_id[:8]}, attempt {essai}: {message}")
 
         def _rendre_verrous() -> None:
-            # Ne rend jamais deux fois le sémaphore, même si HTTP et un
-            # callback de pc réclament tous les deux le nettoyage.
+            # Never release the semaphore twice, even if HTTP and a
+            # pc callback both request cleanup.
             with DIRECT_WEBRTC_SESSION_LOCK:
                 if holder["rendu"]:
                     return
@@ -2945,7 +2941,7 @@ class Handler(serveweb.Handler):
                 if verrou is not None and holder.get("lock_entered"):
                     verrou.__exit__(None, None, None)
             except Exception as error:
-                journal(f"échec de libération du verrou disque, {type(error).__name__}: {error}")
+                journal(f"failed to release disk lock, {type(error).__name__}: {error}")
             finally:
                 with DIRECT_WEBRTC_SESSION_LOCK:
                     if DIRECT_WEBRTC_SESSION.get("session") is holder:
@@ -2962,20 +2958,20 @@ class Handler(serveweb.Handler):
                 if stream is not None:
                     journal(await _stop_stream(stream, holder.get("feed")))
             except Exception as error:
-                journal(f"échec de fermeture Blink, {type(error).__name__}: {error}")
+                journal(f"failed to close Blink, {type(error).__name__}: {error}")
             finally:
                 _rendre_verrous()
 
         async def _fermer() -> None:
-            # Tous les appelants attendent la même tâche. Leur annulation
-            # ne coupe ni done ni la libération des verrous.
+            # All callers await the same task. Their cancellation
+            # cuts neither done nor lock release.
             if holder["nettoyage"] is None:
                 holder["nettoyage"] = asyncio.ensure_future(_nettoyer())
             await asyncio.shield(holder["nettoyage"])
 
         def _interrompre() -> None:
-            # Exécuté sur BLINK.loop, sans passer par BLINK.call : celui-ci
-            # peut justement attendre le réveil que l'utilisateur annule.
+            # Run on BLINK.loop, without going through BLINK.call: the latter
+            # may be waiting on the wake-up the user is cancelling.
             if holder["nettoyage"] is not None or holder["rendu"]:
                 return
             pc = holder.get("pc")
@@ -2994,7 +2990,7 @@ class Handler(serveweb.Handler):
                 DIRECT_WEBRTC_SESSION["session"] = holder
         if annulee:
             MODULE_SLOT.release()
-            self.send_json({"error": "Tentative annulée."}, 409)
+            self.send_json({"error": "Attempt cancelled."}, 409)
             return
 
         def _attendre_nettoyage_http():
@@ -3002,13 +2998,13 @@ class Handler(serveweb.Handler):
             if loop is None:
                 _rendre_verrous()
             else:
-                # Pas de reconnexion/authentification requise pour fermer.
+                # No reconnect/authentication required to close.
                 future = asyncio.run_coroutine_threadsafe(_fermer(), loop)
                 future.result(timeout=45)
 
         try:
             _slot_pris("direct WebRTC", name)
-            journal("direct WebRTC commence")
+            journal("WebRTC live starting")
             ENREGISTREMENT_DIRECT_ACTIF.clear()
             _effacer_erreur_direct()
             holder["lock"] = blink_engine.hub_lock("direct", attente=ATTENTE_HUB_MAX_SECONDS)
@@ -3032,11 +3028,11 @@ class Handler(serveweb.Handler):
                                 stream = await camera.init_livestream()
                             except KeyError as error:
                                 raise RuntimeError(
-                                    "Blink n'a fourni aucune adresse de flux. "
-                                    "La caméra est indisponible ou le module est occupé."
+                                    "Blink provided no stream address. "
+                                    "The camera is unavailable or the module is busy."
                                 ) from error
                             except NotImplementedError as error:
-                                raise RuntimeError(f"Format de direct non pris en charge ({error}).") from error
+                                raise RuntimeError(f"Unsupported live format ({error}).") from error
                             holder["stream"] = stream
                             journal(f"init_livestream en {time.monotonic() - t_flux:.1f}s")
                             t_start = time.monotonic()
@@ -3059,13 +3055,13 @@ class Handler(serveweb.Handler):
                                 return_when=asyncio.FIRST_COMPLETED,
                             )
                             if negociation not in terminees and holder["nettoyage"] is None:
-                                # feed.auth peut échouer avant son finally
-                                # amont, en laissant le TCP local ouvert. Ne
-                                # pas attendre 40 s un SPS qui n'arrivera pas.
-                                raise RuntimeError("Le relais Blink s'est arrêté avant la première image.")
-                            # Une négociation en échec ferme elle-même feed
-                            # via on_close avant de remonter son exception.
-                            # Attendre ce nettoyage conserve la vraie cause.
+                                # feed.auth can fail before its finally
+                                # upstream, leaving the local TCP open. Do
+                                # not wait 40 s for an SPS that will not arrive.
+                                raise RuntimeError("The Blink relay stopped before the first frame.")
+                            # A failed negotiation closes feed itself
+                            # via on_close before raising its exception.
+                            # Waiting for this cleanup preserves the real cause.
                             pc, answer_sdp, answer_type = await negociation
                         finally:
                             if not negociation.done():
@@ -3084,13 +3080,13 @@ class Handler(serveweb.Handler):
                 return run()
 
             answer_sdp, answer_type = BLINK.call(start, timeout=WEBRTC_START_MAX_SECONDS)
-            journal("direct WebRTC négocié")
+            journal("WebRTC live negotiated")
         except Exception as error:
-            message = "Tentative annulée." if isinstance(error, concurrent.futures.CancelledError) else (
+            message = "Attempt cancelled." if isinstance(error, concurrent.futures.CancelledError) else (
                 str(error) if isinstance(error, RuntimeError) else f"{type(error).__name__}: {error}"
             )
             _memoriser_erreur_direct(name, message, 503)
-            journal(f"échec (webrtc), {message}")
+            journal(f"failed (webrtc), {message}")
             try:
                 _attendre_nettoyage_http()
             except Exception as error:
@@ -3107,44 +3103,42 @@ class Handler(serveweb.Handler):
             _demander_arret_direct(session_id)
 
     def send_live_mse(self, name: str, session_id: str = "") -> None:
-        """Diffuse le direct d'une caméra en fMP4 fragmenté, pour MediaSource.
+        """Stream a camera's live view as fragmented fMP4, for MediaSource.
 
-        Face à /live (MJPEG) : au lieu de faire réencoder chaque image en
-        JPEG par ffmpeg puis redécoder par un <img>, on ne fait que changer
-        de conteneur (Annexe B -> boîtes MP4 fragmentées), sans toucher à
-        l'image. Un sous-processus ffmpeg fait le remux, exactement comme
-        /live : une première version passait par PyAV en lecture directe du
-        flux Blink, plus simple pour lire le codec exact, mais nettement
-        moins fiable sur ce flux précis (essais réels sur caméra) que le
-        sous-processus ffmpeg qu'utilise /live avec succès depuis le début.
-        Le prix : lire le codec exige de parcourir les boîtes du segment
-        d'initialisation MP4 (moov > trak > mdia > minf > stbl > stsd >
-        avc1 > avcC) plutôt que de le lire via une API.
+        Versus /live (MJPEG): instead of having ffmpeg re-encode each frame
+        to JPEG then an <img> re-decode it, we only change container
+        (Annex B -> fragmented MP4 boxes), without touching the image. An
+        ffmpeg subprocess does the remux, exactly like /live: a first version
+        went through PyAV reading the Blink stream directly, simpler for
+        reading the exact codec, but clearly less reliable on this precise
+        stream (real camera trials) than the ffmpeg subprocess /live has used
+        successfully from the start. The cost: reading the codec requires
+        walking the MP4 init-segment boxes (moov > trak > mdia > minf > stbl >
+        stsd > avc1 > avcC) rather than reading it via an API.
 
-        Déclenche aussi l'enregistrement du direct dans Blink_Direct (voir
-        _chemin_enregistrement_direct) : les mêmes octets envoyés au
-        navigateur sont dupliqués vers un fichier, best-effort - un échec
-        n'interrompt jamais le direct affiché, voir _ecrire ci-dessous.
+        Also triggers live recording into Blink_Direct (see
+        _chemin_enregistrement_direct): the same bytes sent to the browser
+        are duplicated to a file, best-effort — a failure never interrupts
+        the displayed live view, see _ecrire below.
 
-        `session_id` (optionnel, ancien client ou test dépourvu) : enregistré
-        dans DIRECT_MSE_SESSION pour que /api/arreter-direct puisse
-        interrompre l'attente ci-dessous sans dépendre de la détection
-        passive d'une connexion fermée, qui ne survient qu'à la prochaine
-        écriture - jamais si la caméra reste muette (bug réel : le module
-        restait occupé jusqu'à LIVE_MAX_SECONDS après une fermeture d'onglet
-        pendant un silence)."""
+        `session_id` (optional, old client or bare test): registered in
+        DIRECT_MSE_SESSION so /api/arreter-direct can interrupt the wait
+        below without depending on passive closed-connection detection,
+        which only happens on the next write — never if the camera stays
+        mute (real bug: the module stayed busy until LIVE_MAX_SECONDS after
+        a tab close during silence)."""
         if not DIRECT_SESSION_ID.fullmatch(session_id):
-            # Dégradation gracieuse plutôt qu'un refus : un ancien client ou
-            # un identifiant mal formé perd juste le bénéfice de l'arrêt
-            # explicite, le direct lui-même n'a pas besoin de session_id.
+            # Graceful degradation rather than refusal: an old client or
+            # a malformed id just loses the benefit of explicit
+            # stop; the live view itself does not need session_id.
             session_id = ""
         if not MODULE_SLOT.acquire(blocking=False):
             message = _slot_occupe_message()
             _memoriser_erreur_direct(name, message, 409)
-            _journal_direct(name, f"refusee (MSE), {message}")
-            # Le détail peut contenir un nom de caméra non latin-1 ou un saut
+            _journal_direct(name, f"refused (MSE), {message}")
+            # The detail may contain a non-latin-1 camera name or a
             # de ligne. Il reste disponible via /api/live-error ; la ligne de
-            # statut HTTP, elle, doit toujours rester ASCII et bien formée.
+            # HTTP status itself must always stay ASCII and well-formed.
             self.send_error(409, "Live stream busy")
             return
 
@@ -3159,9 +3153,9 @@ class Handler(serveweb.Handler):
         try:
             _slot_pris("direct MSE", name)
             ENREGISTREMENT_DIRECT_ACTIF.clear()
-            # Une tentative réellement admise remplace l'ancien diagnostic.
-            # En particulier, un 409 ne doit jamais faire relire au navigateur
-            # le 503 d'une tentative précédente de la même caméra.
+            # A truly admitted attempt replaces the old diagnostic.
+            # In particular, a 409 must never make the browser reread
+            # the 503 of a previous attempt on the same camera.
             _effacer_erreur_direct()
             holder["lock"] = blink_engine.hub_lock("direct", attente=ATTENTE_HUB_MAX_SECONDS)
             holder["lock"].__enter__()
@@ -3170,41 +3164,41 @@ class Handler(serveweb.Handler):
             def start(blink):
                 async def run(_blink=blink):
                     sync, camera = BLINK.find_camera(_blink, name)
-                    # Chronométré comme send_offer_webrtc (même opacité :
+                    # Timed like send_offer_webrtc (same opacity:
                     # init_livestream()/stream.start() sont de vrais appels
-                    # au cloud Blink, la part la plus lente et jusqu'ici la
-                    # moins visible de tout ce chemin - voir sa note,
+                    # to Blink cloud, the slowest and until now least
+                    # visible part of this whole path — see its note,
                     # 2026-09-04).
                     t_flux = time.monotonic()
                     try:
                         stream = await camera.init_livestream()
                     except KeyError as error:
                         raise RuntimeError(
-                            f"Blink n'a fourni aucune adresse de flux pour "
-                            f"« {name} ». La caméra est probablement hors de "
-                            f"portée du module de synchronisation, éteinte, ou "
-                            f"sa batterie est vide."
+                            f"Blink provided no stream address for "
+                            f"« {name} ». The camera is probably out of "
+                            f"range of the Sync Module, powered off, or "
+                            f"its battery is empty."
                         ) from error
                     except NotImplementedError as error:
                         raise RuntimeError(
-                            f"Cette caméra diffuse dans un format non pris en "
-                            f"charge ({error})."
+                            f"This camera streams in an unsupported "
+                            f"format ({error})."
                         ) from error
                     _journal_direct(
                         name, f"init_livestream en "
                               f"{time.monotonic() - t_flux:.1f}s"
                     )
-                    # init_livestream() a déjà créé une commande distante. Si
-                    # start() échoue, le finally doit tout de même retrouver ce
-                    # flux et envoyer stop/done à Blink.
+                    # init_livestream() has already created a remote command. If
+                    # start() fails, finally must still find this
+                    # stream and send stop/done to Blink.
                     holder["stream"] = stream
-                    # camera.name, pas `name` : `name` est ici l'identifiant
-                    # opaque de camera_key() (stable à travers un renommage,
-                    # voir sa docstring), pas le nom affiché. Passé par
-                    # holder plutôt que par une fermeture directe, comme
-                    # "stream"/"feed" : run() tourne sur BLINK.loop, ce nom
-                    # doit survivre jusqu'à _ecrire (bien plus bas, hors de
-                    # cette coroutine) pour nommer le fichier d'enregistrement.
+                    # camera.name, not `name`: `name` here is the
+                    # opaque camera_key() (stable across a rename,
+                    # see its docstring), not the display name. Passed via
+                    # holder rather than a direct closure, like
+                    # "stream"/"feed": run() runs on BLINK.loop, this name
+                    # must survive until _ecrire (much further down, outside
+                    # this coroutine) to name the recording file.
                     holder["camera_name"] = camera.name
                     t_start = time.monotonic()
                     await stream.start()
@@ -3220,34 +3214,34 @@ class Handler(serveweb.Handler):
             _journal_direct(name, f"flux Blink ouvert sur {url}")
 
             process = runtime.demarrer(
-                # loglevel "info" temporaire (diagnostic partage relais/ffmpeg
-                # en cours, cf. direct.log) : à repasser à "error" une fois
-                # l'écart Terrasse1/Salon expliqué.
+                # Temporary loglevel "info" (shared relay/ffmpeg diagnostic
+                # in progress, see direct.log): switch back to "error" once
+                # the Terrasse1/Salon gap is explained.
                 [self.ffmpeg, "-hide_banner", "-loglevel", "info",
                  "-fflags", "nobuffer", "-flags", "low_delay",
-                 # Plus généreux qu'en MJPEG (500000/300000) : un moov figé
-                 # (empty_moov) doit connaître les dimensions *avant*
-                 # d'écrire son en-tête, alors que le décodage MJPEG les
-                 # apprend au fil de l'eau sans jamais avoir à s'engager
-                 # d'avance. Vu en vrai sur une caméra plus lente à livrer
-                 # son SPS (jardin) : « dimensions not set / Could not
-                 # write header » côté ffmpeg, jamais côté MJPEG avec les
-                 # mêmes réglages sur la même caméra. Toujours largement
-                 # sous LIVE_FIRST_FRAME_SECONDS (40 s) : une caméra qui
-                 # répond vite n'attend pas plus longtemps pour autant, ce
-                 # ne sont que des plafonds.
+                 # More generous than MJPEG (500000/300000): a frozen moov
+                 # (empty_moov) must know dimensions *before*
+                 # writing its header, while MJPEG decoding learns them
+                 # on the fly without ever having to commit
+                 # ahead of time. Seen in practice on a slower-to-deliver camera
+                 # delivering its SPS (jardin): "dimensions not set / Could not
+                 # write header" on the ffmpeg side, never on MJPEG with the
+                 # same settings on the same camera. Still well
+                 # under LIVE_FIRST_FRAME_SECONDS (40 s): a camera that
+                 # responds quickly does not wait longer for that reason;
+                 # these are only ceilings.
                  #
-                 # Essai en cours (direct.log, 2026-09-02) : à 5000000, ce
-                 # plafond est systématiquement consommé en quasi-totalité
-                 # (~5-6 s) sur Salon ET Terrasse1, deux caméras sans rapport
-                 # avec le cas lent d'origine (jardin) : pas juste utilisé
-                 # quand nécessaire, toujours épuisé. Redescendu à 1500000
-                 # (3x l'ancien seuil MJPEG, 1/3 de l'actuel) pour voir si
-                 # jardin tient toujours sans « dimensions not set ». À
-                 # remonter si jardin échoue avec cette valeur.
+                 # Ongoing trial (direct.log, 2026-09-02): at 5000000, this
+                 # ceiling is systematically almost fully consumed
+                 # (~5-6 s) on Salon AND Terrasse1, two cameras unrelated
+                 # to the original slow case (jardin): not just used
+                 # when needed, always exhausted. Lowered back to 1500000
+                 # (3x the old MJPEG threshold, 1/3 of the current) to see if
+                 # jardin still holds without "dimensions not set". To
+                 # raise again if jardin fails with this value.
                  "-analyzeduration", "1500000", "-probesize", "1500000",
                  "-i", url,
-                 # copy : remux sans réencodage, coût CPU quasi nul.
+                 # copy: remux without re-encode, near-zero CPU cost.
                  "-c:v", "copy", "-an",
                  "-f", "mp4",
                  "-movflags", "frag_keyframe+empty_moov+default_base_moof",
@@ -3258,13 +3252,13 @@ class Handler(serveweb.Handler):
             holder["process"] = process
 
             def _drainer_stderr() -> None:
-                # Une ligne à la fois (pas un seul read() bloquant jusqu'à la
-                # fin) : diagnostic temporaire pour dater chaque étape interne
-                # de ffmpeg (détection du flux, image-clé...) pendant qu'on
-                # cherche pourquoi Terrasse1 (12 s) dépasse Salon (8 s) entre
-                # le premier octet du relais et le segment initial. errors
-                # reste alimentée pour _texte_stderr_ffmpeg (reason/diagnostic
-                # de fin), inchangé par ailleurs.
+                # One line at a time (not a single blocking read until
+                # the end): temporary diagnostic to date each internal
+                # ffmpeg step (stream detection, keyframe...) while we
+                # look into why Terrasse1 (12 s) exceeds Salon (8 s) between
+                # the first relay byte and the init segment. errors
+                # stays fed for _texte_stderr_ffmpeg (reason/end
+                # diagnostic), otherwise unchanged.
                 for ligne_brute in iter(process.stderr.readline, b""):
                     errors.append(ligne_brute)
                     texte = ligne_brute.decode("utf-8", "replace").rstrip()
@@ -3279,11 +3273,11 @@ class Handler(serveweb.Handler):
             _journal_direct(name, f"segment initial {len(first)} octets")
             if not first:
                 reason = self.live_failure_reason(holder.get("stream"))
-                # ffmpeg peut s'être arrêté avant tout octet exploitable (pas
-                # forcément une caméra hors de portée) : son message, quand il
-                # y en a un, en dit souvent plus que le statut Blink seul. Le
-                # fil de lecture n'a que ça à faire depuis le lancement du
-                # sous-processus : s'il n'a pas fini, ffmpeg tourne encore.
+                # ffmpeg may have stopped before any usable byte (not
+                # necessarily an out-of-range camera): its message, when it
+                # there is one, often says more than Blink status alone. The
+                # reader thread has only that to do since process
+                # subprocess: if it has not finished, ffmpeg is still running.
                 drain = holder.get("drain")
                 if drain is not None:
                     drain.join(timeout=2)
@@ -3292,16 +3286,16 @@ class Handler(serveweb.Handler):
                     reason = f"{reason} | ffmpeg : {trace}"
                 raise RuntimeError(reason)
             codec_str = h264_mime_codec_from_moov(first)
-            # Pré-alimenté avec `first` (verdict ignoré : voir _ecrire, ce
-            # premier bloc est de toute façon toujours écrit intégralement)
-            # pour que son suivi des tailles de boîte reste synchronisé sur
-            # tout le flux depuis son origine, `first` pouvant déjà contenir
-            # plus que le seul segment d'initialisation (voir sa docstring).
+            # Pre-fed with `first` (verdict ignored: see _ecrire, this
+            # first block is always written in full anyway)
+            # so its box-size tracking stays synchronized on
+            # the whole stream from its origin, `first` possibly already containing
+            # more than just the init segment (see its docstring).
             detecteur_fragments = DetecteurDebutFragment()
             detecteur_fragments.bloc_ouvre_un_fragment(first)
 
-            # À partir de ce point, une seconde ligne de statut HTTP ne peut
-            # plus être envoyée proprement, même si end_headers() échoue.
+            # From this point, a second HTTP status line cannot
+            # be sent cleanly, even if end_headers() fails.
             reponse_commencee = True
             self.send_response(200)
             self.send_header("Content-Type", "video/mp4")
@@ -3313,42 +3307,42 @@ class Handler(serveweb.Handler):
             _journal_direct(name, f"en-tetes envoyes, codec {codec_str}")
 
             def _ecrire(data: bytes) -> bool:
-                # Même tolérance sur ce premier envoi que sur les suivants :
-                # un onglet déjà fermé quand ce bloc part ne doit pas remonter
-                # comme un échec (vu en vrai : ConnectionAbortedError sur ce
-                # tout premier write, alors que c'est une fin normale).
+                # Same tolerance on this first send as on later ones:
+                # a tab already closed when this block leaves must not surface
+                # as a failure (seen in practice: ConnectionAbortedError on this
+                # very first write, even though that is a normal end).
                 #
-                # Piloté par le bouton (ENREGISTREMENT_DIRECT_ACTIF, voir
-                # /api/direct-enregistrement) : trois états, jamais mélangés -
-                # démarrage (ouvre un fichier neuf, horodaté à cet instant, et
-                # y écrit d'abord `first` : sans le segment d'initialisation
-                # MP4 en tête, le fichier ne serait pas lisible), arrêt
-                # (referme, n'écrit plus rien de ce paquet-ci), régime établi
-                # (écrit `data` normalement). Un échec ici (disque plein...)
-                # arrête l'enregistrement seul, jamais le direct à l'écran.
+                # Driven by the button (ENREGISTREMENT_DIRECT_ACTIF, see
+                # /api/direct-enregistrement): three states, never mixed —
+                # start (opens a new file, timestamped at this instant, and
+                # first writes `first` into it: without the MP4 init
+                # segment at the head, the file would not be readable), stop
+                # (closes, writes nothing more of this packet), steady state
+                # (writes `data` normally). A failure here (disk full...)
+                # stops recording only, never the on-screen live view.
                 fichier_direct = holder.get("fichier_direct")
                 desire = ENREGISTREMENT_DIRECT_ACTIF.is_set()
-                # `data` doit alimenter le détecteur même quand desire est
-                # encore faux ou qu'un fichier est déjà ouvert : c'est le
-                # prix pour que son suivi des tailles de boîte reste
-                # synchronisé sur tout le flux (voir sa docstring). Pas pour
-                # `first`, déjà pré-alimenté avant la boucle.
+                # `data` must feed the detector even when desire is
+                # still false or a file is already open: that is the
+                # price for its box-size tracking to stay
+                # synchronized on the whole stream (see its docstring). Not for
+                # `first`, already pre-fed before the loop.
                 fragment_complet = (
                     data is first or detecteur_fragments.bloc_ouvre_un_fragment(data)
                 )
                 if desire and fichier_direct is None and fragment_complet:
-                    # Un démarrage demandé en cours de direct (pas dès le
-                    # premier bloc) attend ce fragment plutôt que d'écrire
-                    # `data` tel quel : les blocs lus depuis ffmpeg (16 Ko,
-                    # LecteurTube) ne s'alignent jamais sur les frontières
-                    # moof/mdat, démarrer sur un bloc quelconque pouvait
-                    # couper un mdat en deux - le fichier obtenu, amputé du
-                    # moof de tête, n'était plus décodable (constaté avec de
-                    # vraies données : ffmpeg y lisait des NAL units invalides).
+                    # A start requested mid-live (not from the
+                    # first block) waits for this fragment rather than writing
+                    # `data` as-is: blocks read from ffmpeg (16 KB,
+                    # LecteurTube) never align on
+                    # moof/mdat boundaries; starting on an arbitrary block could
+                    # split an mdat in two — the resulting file, missing its
+                    # leading moof, was no longer decodable (observed with
+                    # real data: ffmpeg read invalid NAL units).
                     #
-                    # holder["camera_name"] (le vrai nom, posé par run() plus
-                    # haut) plutôt que `name` : voir la note sur camera_key()
-                    # à l'endroit où holder["camera_name"] est posé.
+                    # holder["camera_name"] (the real name, set by run()
+                    # above) rather than `name`: see the note on camera_key()
+                    # where holder["camera_name"] is set.
                     chemin = _chemin_enregistrement_direct(
                         holder.get("camera_name", name)
                     )
@@ -3362,7 +3356,7 @@ class Handler(serveweb.Handler):
                     except OSError as error:
                         fichier_direct = None
                         _journal_direct(
-                            name, f"enregistrement impossible, "
+                            name, f"recording impossible, "
                                   f"{type(error).__name__}: {error}"
                         )
                 elif not desire and fichier_direct is not None:
@@ -3370,7 +3364,7 @@ class Handler(serveweb.Handler):
                         fichier_direct.close()
                     except OSError as error:
                         _journal_direct(
-                            name, f"echec de fermeture de l'enregistrement, "
+                            name, f"failed to close recording, "
                                   f"{type(error).__name__}: {error}"
                         )
                     holder["fichier_direct"] = None
@@ -3380,7 +3374,7 @@ class Handler(serveweb.Handler):
                     except OSError as error:
                         holder["fichier_direct"] = None
                         _journal_direct(
-                            name, f"enregistrement interrompu, "
+                            name, f"recording interrupted, "
                                   f"{type(error).__name__}: {error}"
                         )
                 try:
@@ -3394,25 +3388,25 @@ class Handler(serveweb.Handler):
                 holder["sent"] = 0
                 return
             sent = len(first)
-            # deadline n'était vérifiée qu'entre deux lectures : une lecture
-            # individuelle bloquée (ffmpeg qui se tait sans jamais fermer
-            # stdout) ne rendait jamais la main, et LIVE_MAX_SECONDS ne
-            # bornait donc rien dans ce cas précis (vu en vrai : un direct
-            # resté ouvert plus de 600 s, MODULE_SLOT jamais rendu). lire()
-            # porte maintenant elle-même un délai réel sur chaque lecture.
+            # deadline was only checked between two reads: a blocked
+            # individual read (ffmpeg going silent without ever closing
+            # stdout) never returned, and LIVE_MAX_SECONDS
+            # therefore bounded nothing in this case (seen in practice: a live
+            # view left open over 600 s, MODULE_SLOT never released). lire()
+            # now itself carries a real timeout on each read.
             deadline = time.monotonic() + LIVE_MAX_SECONDS
             while time.monotonic() < deadline:
                 if holder["arret"].is_set():
-                    break  # /api/arreter-direct : ne pas attendre un bloc qui peut ne jamais venir
+                    break  # /api/arreter-direct: do not wait for a block that may never come
                 chunk = lecteur.lire(
                     min(LIVE_MSE_ARRET_POLL_SECONDS, deadline - time.monotonic())
                 )
                 if chunk is None:
-                    continue  # juste lent : le délai global n'est pas encore écoulé
+                    continue  # just slow: the global deadline has not elapsed yet
                 if not chunk:
                     break
                 if not _ecrire(chunk):
-                    break  # onglet fermé : c'est la fin normale d'un direct
+                    break  # tab closed: that is the normal end of a live view
                 sent += len(chunk)
             holder["sent"] = sent
         except Exception as error:
@@ -3429,7 +3423,7 @@ class Handler(serveweb.Handler):
                     process.terminate()
                 except Exception as error:
                     journaux_nettoyage.append(
-                        f"echec de terminate ffmpeg, {type(error).__name__}: {error}"
+                        f"failed to terminate ffmpeg, {type(error).__name__}: {error}"
                     )
                 try:
                     process.wait(timeout=5)
@@ -3438,11 +3432,11 @@ class Handler(serveweb.Handler):
                         process.kill()
                     except Exception as error:
                         journaux_nettoyage.append(
-                            f"echec de kill ffmpeg, {type(error).__name__}: {error}"
+                            f"failed to kill ffmpeg, {type(error).__name__}: {error}"
                         )
                 except Exception as error:
                     journaux_nettoyage.append(
-                        f"echec d'attente ffmpeg, {type(error).__name__}: {error}"
+                        f"failed waiting for ffmpeg, {type(error).__name__}: {error}"
                     )
             fichier_direct = holder.get("fichier_direct")
             if fichier_direct is not None:
@@ -3450,7 +3444,7 @@ class Handler(serveweb.Handler):
                     fichier_direct.close()
                 except OSError as error:
                     journaux_nettoyage.append(
-                        f"echec de fermeture de l'enregistrement, "
+                        f"failed to close recording, "
                         f"{type(error).__name__}: {error}"
                     )
             stream = holder.get("stream")
@@ -3461,7 +3455,7 @@ class Handler(serveweb.Handler):
                         timeout=45,
                     )
                 except Exception as error:
-                    verdict = f"echec de fermeture, {type(error).__name__}: {error}"
+                    verdict = f"failed to close, {type(error).__name__}: {error}"
                 journaux_nettoyage.append(verdict)
             verrou = holder.get("lock")
             if verrou is not None and holder.get("lock_entered"):
@@ -3469,32 +3463,32 @@ class Handler(serveweb.Handler):
                     verrou.__exit__(None, None, None)
                 except Exception as error:
                     journaux_nettoyage.append(
-                        f"echec de liberation du verrou disque, "
+                        f"failed to release disk lock, "
                         f"{type(error).__name__}: {error}"
                     )
-            # Publier l'échec avant de rendre le jeton empêche une nouvelle
+            # Publishing the failure before releasing the token prevents a new
             # tentative d'effacer LAST_LIVE_ERROR puis de voir cet ancien
-            # diagnostic réapparaître sous ses pieds. La réponse HTTP reste,
-            # elle, différée jusqu'après la libération du jeton.
+            # diagnostic from reappearing under its feet. The HTTP response stays
+            # deferred until after the token is released.
             if erreur_direct is not None:
                 try:
                     _memoriser_erreur_direct(name, erreur_direct, 503)
                 except Exception as error:
                     journaux_nettoyage.append(
-                        f"diagnostic d'echec indisponible, "
+                        f"failure diagnosis unavailable, "
                         f"{type(error).__name__}: {error}"
                     )
-            # Ces deux libérations mémoire sont la dernière ceinture : aucune
-            # erreur de fermeture de ffmpeg/Blink/verrou disque, ni aucun
-            # diagnostic, ne doit pouvoir les sauter.
+            # These two memory releases are the last belt: no
+            # ffmpeg/Blink/disk-lock close error, nor any
+            # diagnostic, must be able to skip them.
             try:
                 _slot_rendu()
             finally:
                 MODULE_SLOT.release()
 
-            # Diagnostic seulement après avoir rendu toutes les ressources :
-            # sa lecture attend un fil et manipulait auparavant bytes comme str,
-            # ce qui pouvait lever ici et laisser le module occupé à jamais.
+            # Diagnostic only after releasing all resources:
+            # its read waits on a thread and previously treated bytes as str,
+            # what could raise here and leave the module busy forever.
             sent = holder.get("sent")
             if sent is not None:
                 try:
@@ -3511,16 +3505,16 @@ class Handler(serveweb.Handler):
                     )
                 except Exception as error:
                     journaux_nettoyage.append(
-                        f"diagnostic final indisponible, {type(error).__name__}: {error}"
+                        f"final diagnosis unavailable, {type(error).__name__}: {error}"
                     )
             for journal in journaux_nettoyage:
                 _journal_direct(name, journal)
 
         if erreur_direct is not None:
-            # Le client ne voit ce 503 qu'une fois ffmpeg arrêté, la session
-            # Blink fermée et les verrous rendus. Sa prochaine tentative ne
-            # peut donc plus consommer ses reprises sur nos propres 409.
-            _journal_direct(name, f"echec, {erreur_direct}")
+            # The client only sees this 503 once ffmpeg is stopped, the
+            # Blink session closed and locks released. Its next attempt
+            # can therefore no longer spend its retries on our own 409s.
+            _journal_direct(name, f"failed, {erreur_direct}")
             if not reponse_commencee:
                 try:
                     self.send_error(503, "Live stream unavailable")
@@ -3528,12 +3522,11 @@ class Handler(serveweb.Handler):
                     pass
 
     def resolve_media(self, route: str) -> Path | None:
-        """Traduit « clip/… » ou « daily/… » en fichier réel, ou rien.
+        """Translate "clip/..." or "daily/..." into a real file, or nothing.
 
-        Deux vérifications indépendantes : la forme du chemin, puis le fait
-        qu'il retombe bien sous la racine annoncée une fois résolu. La seconde
-        est celle qui compte, elle neutralise les « .. » quelle que soit leur
-        écriture."""
+        Two independent checks: path shape, then that it falls under the
+        announced root once resolved. The second is the one that matters; it
+        neutralizes ".." whatever their spelling."""
         kind, _, relative = route.partition("/")
         if not relative or not IDENTITY.match(relative):
             return None
@@ -3554,10 +3547,9 @@ class Handler(serveweb.Handler):
         return None
 
     def resolve_snapshot(self, relative: str) -> Path | None:
-        """Même garde-fou que resolve_media() (chemin bien formé, puis retombe
-        sous la racine une fois résolu), pour « caméra/fichier.jpg » : une
-        seule racine, pas de identité à vérifier contre un registre - une
-        photo prise à la demande n'en a pas."""
+        """Same safeguard as resolve_media() (well-formed path, then falls under
+        the root once resolved), for "camera/file.jpg": a single root, no
+        identity to check against a registry — an on-demand photo has none."""
         if not relative or not IDENTITY_SNAPSHOT.match(relative):
             return None
         root = self.paths["snapshots"]
@@ -3569,26 +3561,26 @@ class Handler(serveweb.Handler):
     # ------------------------------------------------------------------ routes
 
     def do_GET(self):
-        # try/except : self.path vient tel quel de la ligne de requête,
-        # sous contrôle total du client. urlparse lève sur certaines formes
-        # manifestement invalides (IPv6 mal fermé, ex. « //[abc ») - même
-        # piège déjà audité et corrigé pour l'Origin dans hote_autorise() et
-        # pour l'URL de webhook sortant. Sur les Python récents (3.9+, voir
-        # gh-87389) un chemin "//..." est déjà normalisé avant d'atteindre
-        # urlparse et ce cas ne se présente plus ; le build Windows 7
-        # (Python 3.8.10 épinglé) n'a pas ce correctif stdlib, d'où le
-        # filet ici plutôt que de compter dessus.
+        # try/except: self.path comes as-is from the request line,
+        # under full client control. urlparse raises on some
+        # clearly invalid forms (badly closed IPv6, e.g. "//[abc") — same
+        # trap already audited and fixed for Origin in hote_autorise() and
+        # for the outbound webhook URL. On recent Python (3.9+, see
+        # gh-87389) a "//..." path is already normalized before reaching
+        # urlparse and this case no longer appears; the Windows 7 build
+        # (pinned Python 3.8.10) lacks that stdlib fix, hence the
+        # safety net here rather than relying on it.
         try:
             route = urlparse(self.path).path
         except ValueError:
             self.send_error(400)
             return
         if route == WEBHOOK_SNAPSHOT_ROUTE:
-            # Volontairement AVANT hote_autorise()/jeton_valide() : ce sont
-            # les gardes-fous du navigateur (même origine, même machine),
-            # sans objet pour un appel externe légitime (smarthome, issue
+            # Deliberately BEFORE hote_autorise()/jeton_valide(): those are
+            # the browser safeguards (same origin, same machine),
+            # irrelevant for a legitimate external call (smarthome, issue
             # GitHub #9). gerer_webhook_snapshot() a son propre secret,
-            # indépendant, jamais examiné par ces deux fonctions.
+            # independent, never examined by those two functions.
             self.gerer_webhook_snapshot()
             return
         if route == WEBHOOK_STATUS_ROUTE:
@@ -3600,16 +3592,16 @@ class Handler(serveweb.Handler):
         if not self.hote_autorise():
             self.send_error(403)
             return
-        if route not in ("/", "/favicon.ico") and not self.jeton_valide():
+        if route not in ("/", "/favicon.ico", "/logo.png") and not self.jeton_valide():
             self.send_error(403)
             return
         if route == "/":
             body = PAGE.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            # La page est intégrée au script : elle change dès qu'on modifie
-            # serve.py. Sans cette consigne, le navigateur ressert sa copie et
-            # l'on croit une modification perdue alors qu'elle est bien là.
+            # The page is embedded in the script: it changes as soon as one edits
+            # serve.py. Without this directive, the browser reuses its copy and
+            # one thinks a change is lost when it is actually there.
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -3624,26 +3616,61 @@ class Handler(serveweb.Handler):
             corps = chemin.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "image/x-icon")
-            # Statique, ne change jamais en cours de route : autant laisser le
-            # navigateur cesser de le redemander à chaque page.
+            # Static, never changes on the fly: might as well let the
+            # browser stop re-requesting it on every page.
             self.send_header("Cache-Control", "public, max-age=604800")
             self.send_header("Content-Length", str(len(corps)))
             self.end_headers()
             self.wfile.write(corps)
             return
 
+        if route == "/logo.png":
+            chemin = runtime.resource_dir() / "assets" / "cas-cams-icon.png"
+            if not chemin.is_file():
+                self.send_error(404)
+                return
+            corps = chemin.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Cache-Control", "public, max-age=604800")
+            self.send_header("Content-Length", str(len(corps)))
+            self.end_headers()
+            self.wfile.write(corps)
+            return
+
+        # CSRF token alone is not enough once Cloudflare Access is on:
+        # identity (email → allowlist) must resolve for every API/media call.
+        if not self.exiger_acces_authentifie():
+            return
+
+        if route == "/api/me":
+            self.send_json(self.identite_acces())
+            return
+
+        if route == "/api/access":
+            if not self.exiger_admin():
+                return
+            self.send_json(access_control.lire_acces())
+            return
+
         if route.startswith("/camthumb/"):
-            # Pas de contrôle du nom ici : il coûterait un rafraîchissement
-            # complet du compte à chaque vignette. C'est find_camera, plus bas,
-            # qui refuse un nom inconnu, et safe_file qui assainit le nom de
+            # No name check here: it would cost a full account
+            # refresh on every thumbnail. That is find_camera, below,
+            # that rejects an unknown name, and safe_file that sanitizes the
             # fichier du cache.
+            nom = unquote(route[len("/camthumb/"):])
+            if not self.exiger_camera(nom):
+                return
             refresh = parse_qs(urlparse(self.path).query).get("refresh", [""])[0] == "1"
-            self.send_camera_thumb(unquote(route[len("/camthumb/"):]), refresh=refresh)
+            self.send_camera_thumb(nom, refresh=refresh)
             return
 
         if route.startswith("/live-mse/"):
+            nom = unquote(route[len("/live-mse/"):])
+            if not self.exiger_camera(nom):
+                return
             session_id = parse_qs(urlparse(self.path).query).get("session_id", [""])[0]
-            self.send_live_mse(unquote(route[len("/live-mse/"):]), session_id)
+            self.send_live_mse(nom, session_id)
             return
 
         if route == "/api/live-error":
@@ -3652,7 +3679,9 @@ class Handler(serveweb.Handler):
 
         if route == "/api/system":
             try:
-                self.send_json(self.system_state())
+                etat = self.system_state()
+                self.send_json(access_control.filtrer_system_state(
+                    etat, self.identite_acces().get("email") or ""))
             except RuntimeError as error:
                 self.send_json({"error": str(error)}, 503)
             return
@@ -3662,29 +3691,37 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/videos":
-            self.send_json(collect_videos(self.paths, self.ffmpeg))
+            self.send_json(access_control.filtrer_videos(
+                collect_videos(self.paths, self.ffmpeg),
+                self.identite_acces().get("email") or ""))
             return
 
         if route == "/api/status":
             self.send_json({
                 "authenticated": (runtime.app_dir() / "blink_auth.json").is_file(),
                 "initial_setup": self.initial_setup,
+                "role": self.identite_acces().get("role"),
+                "email": self.identite_acces().get("email"),
             })
             return
 
         if route == "/api/autostart":
+            if not self.exiger_admin():
+                return
             self.send_json({"actif": autostart.est_installe()})
             return
 
         if route == "/api/choisir-dossier":
-            # Le navigateur ne peut pas rendre un chemin absolu (File System
-            # Access API : juste un handle, par conception, pour la vie
-            # privée du web). Serveur et page étant sur la même machine ici
-            # (outil local, pas un service distant), une boîte de dialogue
-            # native comble ce manque. PowerShell/WinForms sous Windows (voir
-            # _choisir_dossier_windows) ; tkinter en repli ailleurs - importé
-            # localement pour ne jamais peser sur les environnements sans
-            # affichage (CI Linux headless), qui n'empruntent jamais cette
+            if not self.exiger_admin():
+                return
+            # The browser cannot return an absolute path (File System
+            # Access API: just a handle, by design, for the
+            # private to the web). Server and page being on the same machine here
+            # (local tool, not a remote service), a dialog
+            # native fills that gap. PowerShell/WinForms under Windows (see
+            # _choisir_dossier_windows); tkinter as fallback elsewhere — imported
+            # locally so as never to weigh on environments without
+            # a display (headless Linux CI), which never take this
             # route.
             try:
                 if os.name == "nt":
@@ -3704,6 +3741,8 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/reglages":
+            if not self.exiger_admin():
+                return
             self.send_json(
                 {**runtime.lire_reglages(), "storage_dir": runtime.lire_dossier_stockage(),
                  "initial_setup": self.initial_setup,
@@ -3711,12 +3750,14 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/sourdine":
-            # Les caméras connues viennent du registre des clips ET du
-            # dernier état de watch.py (fichier local, aucun appel réseau à
-            # Blink ici) : une caméra durablement hors de portée peut n'avoir
-            # jamais produit de clip et resterait sinon absente de la liste,
-            # donc impossible à mettre en sourdine depuis cette page (cas
-            # vécu : « Portail »).
+            if not self.exiger_admin():
+                return
+            # Known cameras come from the clip registry AND from
+            # watch.py's last state (local file, no network call to
+            # Blink here): a camera long out of range may have
+            # never produced a clip and would otherwise stay absent from the list,
+            # therefore impossible to mute from this page (case
+            # lived: "Portail").
             etat = md.load_json(watch.WATCH_STATE, {})
             surveillees = etat.get("cameras") or {}
             noms_connus = {str(e.get("name") or nom).strip().casefold()
@@ -3729,15 +3770,17 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/suppression-auto":
-            # Les caméras proposées sont celles de l'activité en cours
-            # (dernier état de watch.py), pas l'historique cumulé du
-            # registre de téléchargement : une caméra dont la clé interne a
-            # changé au fil du temps (Sync Module remplacé, network_id
-            # absent des vieux clips USB - blinkpy 0.25 n'expose pas de
-            # device_id sur l'USB) y apparaissait sinon en double, sous des
-            # libellés internes illisibles pour l'utilisateur. La
-            # résolution nom -> clé(s) (camera-v2-*, suppression_auto_choices
-            # ci-dessus) reste un détail interne, jamais exposé ici.
+            if not self.exiger_admin():
+                return
+            # Proposed cameras are those of current activity
+            # (watch.py's last state), not the cumulative history of the
+            # download registry: a camera whose internal key has
+            # changed over time (Sync Module replaced, network_id
+            # absent from old USB clips — blinkpy 0.25 does not expose a
+            # device_id on USB) would otherwise appear twice, under
+            # internal labels unreadable to the user. The
+            # name -> key(s) resolution (camera-v2-*, suppression_auto_choices
+            # above) remains an internal detail, never exposed here.
             etat = md.load_json(watch.WATCH_STATE, {})
             surveillees = etat.get("cameras") or {}
             noms = sorted(surveillees, key=str.casefold)
@@ -3754,15 +3797,15 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/clips":
-            # ?all=1 lève explicitement toute borne : l'historique complet
-            # reste à un clic, jamais perdu, seulement pas chargé d'office
+            # ?all=1 explicitly lifts any bound: full history
+            # stays one click away, never lost, just not loaded by default
             # (voir DEFAULT_WINDOW_DAYS). ?preset=today|week|month|2months
-            # couvre les boutons de découpage rapide de la page (RANGE_
-            # PRESETS_HOURS) ; ?depuis/?jusqua (ISO, sans fuseau : lus dans le
-            # fuseau réglé, comme l'horodatage de chaque clip) couvrent sa
-            # plage personnalisée à l'heure près. Sans aucun paramètre, la
-            # fenêtre reste celle d'avant ces boutons : les DEFAULT_WINDOW_DAYS
-            # derniers jours, exactement ce que rend aussi ?preset=month.
+            # covers the page's quick-range buttons (RANGE_
+            # PRESETS_HOURS); ?depuis/?jusqua (ISO, no timezone: read in the
+            # configured timezone, like each clip's timestamp) cover its
+            # custom range to the hour. With no parameter, the
+            # window stays as before those buttons: DEFAULT_WINDOW_DAYS
+            # last days, exactly what ?preset=month also returns.
             query = parse_qs(urlparse(self.path).query)
             depuis = jusqua = None
             if query.get("all", ["0"])[0] != "1":
@@ -3781,19 +3824,23 @@ class Handler(serveweb.Handler):
                             jusqua = dt.datetime.fromisoformat(jusqua_brut) \
                                 .replace(tzinfo=self.timezone)
                     except ValueError:
-                        self.send_json({"error": "Plage de dates invalide."}, 400)
+                        self.send_json({"error": "Invalid date range."}, 400)
                         return
                 else:
                     depuis = maintenant - dt.timedelta(hours=RANGE_PRESETS_HOURS["month"])
             try:
-                self.send_json(collect(self.paths, self.timezone, self.ffmpeg,
-                                       depuis, jusqua))
+                data = collect(self.paths, self.timezone, self.ffmpeg, depuis, jusqua)
+                self.send_json(access_control.filtrer_clips(
+                    data, self.identite_acces().get("email") or ""))
             except RuntimeError as error:
                 self.send_json({"error": str(error)}, 500)
             return
 
         if route.startswith("/thumb/"):
             target = unquote(route[len("/thumb/"):])
+            if not self.media_autorise(target):
+                self._refuser_acces(403, "Media not allowed for this user.")
+                return
             source = self.resolve_media(target)
             if source is None:
                 self.send_error(404)
@@ -3802,7 +3849,11 @@ class Handler(serveweb.Handler):
             return
 
         if route.startswith("/media/"):
-            path = self.resolve_media(unquote(route[len("/media/"):]))
+            target = unquote(route[len("/media/"):])
+            if not self.media_autorise(target):
+                self._refuser_acces(403, "Media not allowed for this user.")
+                return
+            path = self.resolve_media(target)
             if path is None:
                 self.send_error(404)
                 return
@@ -3810,7 +3861,11 @@ class Handler(serveweb.Handler):
             return
 
         if route.startswith("/snapshot/"):
-            path = self.resolve_snapshot(unquote(route[len("/snapshot/"):]))
+            relatif = unquote(route[len("/snapshot/"):])
+            camera = relatif.split("/", 1)[0] if relatif else ""
+            if not self.exiger_camera(camera):
+                return
+            path = self.resolve_snapshot(relatif)
             if path is None:
                 self.send_error(404)
                 return
@@ -3818,35 +3873,41 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/snapshots":
-            self.send_json({"snapshots": self.lister_snapshots()})
+            self.send_json({
+                "snapshots": access_control.filtrer_snapshots(
+                    self.lister_snapshots(),
+                    self.identite_acces().get("email") or ""),
+            })
             return
 
         if route == "/api/passages":
-            # Le nombre de clips au registre accompagne les heures : la page le
-            # compare à ce qu'elle affiche et signale l'écart, sans rien
-            # redessiner de lui-même.
-            # La version publiée est lue dans le cache, jamais chez GitHub : la
-            # page ne doit pas attendre un serveur distant. Un fil de fond tient
-            # ce cache à jour.
+            # The registry clip count accompanies the hours: the page
+            # compares to what it shows and reports the gap, without
+            # redrawing anything itself.
+            # The published version is read from cache, never from GitHub: the
+            # page must not wait on a remote server. A background thread keeps
+            # this cache up to date.
             self.send_json({"passages": runtime.passages(),
                             "clips": nombre_clips_connus(read_entries(self.paths)),
                             "maj": maj.disponible(reseau=False)})
             return
 
         if route == "/api/travail":
-            # Sonde fréquente et volontairement minuscule : ne pas relire ici
-            # tout le registre des clips comme /api/passages. Sur un vieux PC
-            # Windows 7, parser ce JSON croissant toutes les trois secondes
-            # coûterait bien plus que la lecture du seul état de progression.
+            # Frequent and deliberately tiny probe: not rereading here
+            # the whole clip registry like /api/passages. On an old
+            # Windows 7 PC, parsing this growing JSON every three seconds
+            # would cost far more than reading just the progress state.
             self.send_json({"travail": runtime.travail_affichable()})
             return
 
         if route == "/api/refresh":
+            if not self.exiger_admin():
+                return
             if self.initial_setup:
-                # Défense côté serveur, pas seulement dialogue modal : même
-                # une requête manuelle ne peut rapatrier un clip avant la
+                # Server-side defense, not only a modal dialog: even
+                # a manual request cannot fetch a clip before the
                 # validation du dossier et du fuseau.
-                self.send_json({"error": "Validez d'abord les réglages initiaux."}, 409)
+                self.send_json({"error": "Validate the initial settings first."}, 409)
                 return
             self.stream_refresh()
             return
@@ -3856,7 +3917,7 @@ class Handler(serveweb.Handler):
     # ------------------------------------------------------- actualisation
 
     def send_event(self, payload: dict) -> bool:
-        """Émet un événement SSE. Renvoie False si le navigateur a coupé."""
+        """Emit an SSE event. Returns False if the browser has disconnected."""
         body = f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         try:
             self.wfile.write(body.encode("utf-8"))
@@ -3866,18 +3927,18 @@ class Handler(serveweb.Handler):
         return True
 
     def stream_refresh(self) -> None:
-        """Enchaîne téléchargement puis fusion, en poussant la sortie au fil de l'eau.
+        """Chain download then merge, pushing output as it comes.
 
-        Server-Sent Events plutôt qu'une réponse unique en fin de traitement :
-        c'est le mécanisme du navigateur pour recevoir un flux de messages
-        (une simple balise data:, pas de protocole à inventer), et il n'y a
-        rien à installer côté page. Le sens du flux est unique, du serveur vers
-        la page, ce qui suffit ici : la page n'a rien à répondre.
+        Server-Sent Events rather than a single response at the end: that is
+        the browser's mechanism for receiving a message stream (a simple
+        data: tag, no protocol to invent), and nothing to install on the page.
+        Flow is one-way, server to page, which is enough here: the page has
+        nothing to answer.
 
-        Deux self_command distincts (« download » puis « merge »), pas un
-        verbe unique qui les enchaînerait : ce sont les deux seules mains de
-        l'outil, et les appeler l'un après l'autre dit exactement ce qui se
-        passe. Voir run_refresh()."""
+        Two distinct self_commands ("download" then "merge"), not one verb
+        that would chain them: those are the tool's only two hands, and
+        calling them one after the other says exactly what is happening.
+        See run_refresh()."""
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -3885,42 +3946,42 @@ class Handler(serveweb.Handler):
         self.end_headers()
 
         if not self.lock.acquire(blocking=False):
-            self.send_event({"line": "Une actualisation est déjà en cours."})
+            self.send_event({"line": "A refresh is already in progress."})
             self.send_event({"done": True, "ok": False})
             return
-        # Un calcul lancé par les boucles de fond occupe déjà ffmpeg et le
-        # registre. En lancer un second ne ferait qu'attendre le verrou pendant
+        # A job started by background loops already occupies ffmpeg and the
+        # registry. Starting a second would only wait on the lock for
         # de longues minutes, en donnant l'impression d'un blocage.
         en_cours = runtime.travail_en_cours()
         if en_cours:
             self.send_event({"line": (
-                f"{en_cours.get('quoi', 'Un calcul')} est déjà en cours. "
-                "Attendez la fin de la barre, puis réessayez."
+                f"{en_cours.get('quoi', 'A job')} is already in progress. "
+                "Wait for the progress bar to finish, then try again."
             )})
             self.send_event({"done": True, "ok": False})
             self.lock.release()
             return
-        # La page renouvelle les vignettes à la fin de cette actualisation.
+        # The page refreshes thumbnails at the end of this update.
         try:
-            # Le téléchargement interroge le Sync Module, comme le direct. Les
-            # laisser se chevaucher garantirait un « System is busy » : mieux
-            # vaut le dire tout de suite que d'échouer au milieu.
+            # Download talks to the Sync Module, like live view. Letting
+            # them overlap would guarantee a "System is busy": better
+            # to say so immediately than fail mid-way.
             if not MODULE_SLOT.acquire(blocking=False):
                 self.send_event({"line": _slot_occupe_message()})
                 self.send_event({"done": True, "ok": False})
                 return
             _slot_pris("actualisation")
             try:
-                # Le sous-processus ``download`` prend lui-même le verrou de
-                # fichier du hub pendant son inventaire puis ses transferts.
-                # Le prendre aussi ici, dans le parent, le rendait impossible à
-                # réacquérir : chaque clic « Actualiser » sautait alors toute la
-                # partie USB comme si un autre programme occupait le module.
-                # MODULE_SLOT reste la protection mémoire contre un direct lancé
-                # par ce serveur ; le verrou enfant couvre les autres processus.
+                # The ``download`` subprocess itself takes the
+                # hub file lock during its inventory then transfers.
+                # Taking it here too, in the parent, made it impossible to
+                # reacquire: every "Actualiser" click then skipped the whole
+                # USB part as if another program held the module.
+                # MODULE_SLOT remains the in-memory guard against a live view started
+                # by this server; the child lock covers other processes.
                 self.run_refresh()
             except blink_engine.BusyError as error:
-                self.send_event({"line": f"Module occupé : {error}."})
+                self.send_event({"line": f"Module busy: {error}."})
                 self.send_event({"done": True, "ok": False})
             finally:
                 _slot_rendu()
@@ -3929,42 +3990,42 @@ class Handler(serveweb.Handler):
             self.lock.release()
 
     def run_refresh(self) -> None:
-        """Télécharge puis assemble, en poussant la sortie des deux au fil de l'eau.
+        """Download then assemble, pushing both outputs as they come.
 
-        Deux programmes enchaînés ici plutôt qu'un verbe qui les enchaînerait :
-        « download » et « merge » sont les deux seules mains de l'outil, et les
-        appeler l'un après l'autre dit exactement ce qui se passe."""
+        Two programs chained here rather than a verb that would chain them:
+        "download" and "merge" are the tool's only two hands, and calling
+        them one after the other says exactly what is happening."""
         auth = BASE_DIR / "blink_auth.json"
         hub_args = ["--hub", self.hub] if self.hub else []
         reglages = runtime.lire_reglages()
-        # Mêmes drapeaux que runtime.standard() pour la boucle merge : un clic
-        # sur Actualiser doit produire ce que produirait la boucle automatique
-        # à son prochain tour, pas une horodatée/hebdomadaire/mensuelle par
-        # défaut qui ignore la page Réglages. Comme dans standard(),
-        # merge_jour est l'interrupteur général de l'assemblage : Actualiser
-        # ne doit pas le réactiver implicitement.
+        # Same flags as runtime.standard() for the merge loop: a click
+        # on Actualiser must produce what the automatic loop would produce
+        # on its next turn, not a daily/weekly/monthly by
+        # default that ignores the Settings page. As in standard(),
+        # merge_jour is the general assembly switch: Actualiser
+        # must not implicitly reactivate it.
         options_merge = runtime.options_fusion(reglages)
-        etapes = [("Téléchargement", "phase.step_download",
+        etapes = [("Downloading", "phase.step_download",
                   runtime.self_command("download", *hub_args))]
         if reglages["merge_jour"]:
-            etapes.append(("Fusion", "phase.step_merge",
+            etapes.append(("Merging", "phase.step_merge",
                            runtime.self_command("merge", *options_merge)))
         if not auth.is_file():
-            # Le téléchargement demanderait l'e-mail, le mot de passe et le code
-            # de vérification sur l'entrée standard, qui n'existe pas ici : le
-            # processus resterait bloqué. On le dit et on se contente
-            # d'assembler ce qui est déjà là.
+            # Download would ask for email, password and the
+            # verification code on standard input, which does not exist here: the
+            # process would stay blocked. We say so and settle for
+            # assembling what is already there.
             self.send_event({"line": (
-                f"Session Blink absente ({auth.name}). Lancez « blink2video login » "
-                "dans un terminal pour vous connecter. "
-                + ("Reconstruction des vidéos seule." if reglages["merge_jour"]
-                   else "Aucun traitement lancé : la fusion est désactivée.")
+                f"Blink session missing ({auth.name}). Run « blink2video login » "
+                "in a terminal to sign in. "
+                + ("Video reconstruction only." if reglages["merge_jour"]
+                   else "Nothing started: merging is disabled.")
             )})
             etapes = etapes[1:]
 
-        # PYTHONUNBUFFERED : sans lui, la sortie arriverait par blocs de
-        # plusieurs kilo-octets et la barre avancerait par à-coups.
-        # PYTHONIOENCODING évite les accents mutilés par la console Windows.
+        # PYTHONUNBUFFERED: without it, output would arrive in
+        # several kilobytes and the bar would jump in fits.
+        # PYTHONIOENCODING avoids accents mangled by the Windows console.
         env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
         for phase, cle, command in etapes:
             self.send_event({"phase": phase, "phase_key": cle, "line": f"$ {phase.lower()}"})
@@ -3973,19 +4034,19 @@ class Handler(serveweb.Handler):
         self.send_event({"done": True, "ok": True})
 
     def suivre(self, command: list, env: dict, phase: str) -> bool:
-        """Fait avancer la barre au fil des lignes. Faux si on doit s'arrêter."""
+        """Advance the bar as lines arrive. False if we must stop."""
         process = runtime.demarrer(
             command, cwd=str(BASE_DIR),
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True,
             encoding="utf-8", errors="replace", bufsize=1, env=env,
         )
-        # Chien de garde par silence, même seuil et même raison que
+        # Silence watchdog, same threshold and same reason as
         # run_ffmpeg_batch/concat_copy (merge_daily.py, AUDIT-2026-08-13
         # 28.82) : download comme merge peuvent rester silencieux longtemps
-        # (réseau Blink qui ne répond plus, ffmpeg bloqué en sous-main) sans
-        # qu'aucune ligne n'arrive sur stdout, ce qui figerait
-        # indéfiniment la boucle ci-dessous et garderait self.lock pris pour
+        # (Blink network not responding, ffmpeg stuck underneath) without
+        # no line arrives on stdout, which would freeze
+        # indefinitely the loop below and would keep self.lock held for
         # toute future Actualisation.
         dernier_signe = time.monotonic()
         signe_verrou = threading.Lock()
@@ -4010,8 +4071,8 @@ class Handler(serveweb.Handler):
                     dernier_signe = time.monotonic()
                 line = raw.rstrip("\n")
                 event = {"line": line}
-                # Les deux programmes annoncent leur avancement sous la forme
-                # « [3/24] ». Une seule règle de lecture suffit, et chaque phase
+                # Both programs announce their progress in the form
+                # "[3/24]". A single reading rule is enough, and each phase
                 # repart naturellement de 1.
                 counter = PROGRESS.search(line)
                 if counter:
@@ -4027,10 +4088,10 @@ class Handler(serveweb.Handler):
                 if heading:
                     titre = heading.group(1).strip()
                     event["phase"] = titre.capitalize() if titre.isupper() else titre
-                    # Ces deux titres sont les seuls que blink_engine.py émette
-                    # sous cette forme (voir traiter_cloud/un_passage) : une clé
-                    # stable permet à la page de les traduire, le nom du hub
-                    # (donnée de l'utilisateur, jamais traduisible) passant à part.
+                    # These two headings are the only ones blink_engine.py emits
+                    # in this form (see traiter_cloud/un_passage): a stable
+                    # key lets the page translate them, the hub name
+                    # (user data, never translatable) passing separately.
                     if titre == "CLOUD DE L'ABONNEMENT":
                         event["phase_key"] = "phase.cloud_section"
                     elif titre.startswith("STOCKAGE LOCAL : "):
@@ -4045,18 +4106,18 @@ class Handler(serveweb.Handler):
             chien_de_garde.join(timeout=5)
         process.wait()
         if tue_par_silence:
-            self.send_event({"line": f"{phase} : arrêtée, silencieuse depuis "
-                                      f"plus de {int(md.SILENCE_MAX)} s"})
+            self.send_event({"line": f"{phase}: stopped, silent for "
+                                      f"more than {int(md.SILENCE_MAX)} s"})
             self.send_event({"done": True, "ok": False})
             return False
         if process.returncode != 0:
-            self.send_event({"line": f"{phase} : échec (code {process.returncode})"})
+            self.send_event({"line": f"{phase}: failed (code {process.returncode})"})
             self.send_event({"done": True, "ok": False})
             return False
         return True
 
     def _post_reglages(self, payload: dict) -> None:
-        """Valide les réglages, publie le stockage puis organise la relance."""
+        """Validate settings, publish storage, then arrange the restart."""
         try:
             dossier, reglages = _preparer_reglages_web(payload)
         except _ReglagesInvalides as erreur:
@@ -4064,43 +4125,43 @@ class Handler(serveweb.Handler):
             return
 
         try:
-            # Le verrou couvre toute la transaction : préparation de la
-            # destination, publication du pointeur et éventuel marqueur initial.
+            # The lock covers the whole transaction: preparing the
+            # destination, publishing the pointer and any initial marker.
             with runtime.verrou_configuration():
                 runtime.ecrire_dossier_stockage(
                     dossier, reglages=reglages, configuration_initiale=self.initial_setup)
         except runtime.BusyError as erreur:
             self.send_json(
-                {"error": f"Une modification des réglages est déjà en cours : {erreur}"},
+                {"error": f"A settings change is already in progress: {erreur}"},
                 409)
             return
         except OSError as erreur:
             self.send_json(
-                {"error": f"Impossible d'enregistrer les réglages : {erreur}"}, 500)
+                {"error": f"Could not save settings: {erreur}"}, 500)
             return
         if self.initial_setup:
-            # Le parent start détient encore le verrou de démarrage : il voit
-            # le marqueur et remplace lui-même le serveur initial après réponse.
+            # The start parent still holds the startup lock: it sees
+            # the marker and itself replaces the initial server after the response.
             self.send_json({"ok": True, "accepted": True,
                             "initial_setup": True})
             return
-        # La relance relira les réglages ; son relais laisse partir la réponse
-        # HTTP avant d'arrêter ce serveur.
+        # The restart will reread settings; its relay lets the HTTP
+        # response leave before stopping this server.
         self.repondre_puis_redemarrer(["restart"])
 
     def _post_sourdine(self, payload: dict) -> None:
-        """Délègue la sourdine à watch, sans redémarrer le serveur."""
+        """Delegate mute to watch, without restarting the server."""
         camera = str(payload.get("camera", "")).strip()
         ignored = bool(payload.get("ignored"))
         if not camera:
-            self.send_json({"error": "Nom de caméra manquant."}, 400)
+            self.send_json({"error": "Missing camera name."}, 400)
             return
-        # watch relit son état à chaque passage de sa propre boucle
-        # (voir _controler) : contrairement aux autres réglages, la
-        # sourdine n'a pas besoin de redémarrage, seulement de laisser
-        # « watch --ignore/--unignore » écrire le fichier partagé. Fait
-        # ici en tâche de fond pour que le clic reste immédiat, sur le
-        # même principe que le bouton Écarter (28.33).
+        # watch rereads its state on each pass of its own loop
+        # (see _controler): unlike other settings,
+        # mute needs no restart, only letting
+        # "watch --ignore/--unignore" write the shared file. Done
+        # here in the background so the click stays immediate, on the
+        # same principle as the Exclude button (28.33).
         option = "--ignore" if ignored else "--unignore"
 
         def travailler():
@@ -4119,7 +4180,7 @@ class Handler(serveweb.Handler):
         camera = str(payload.get("camera", "")).strip()
         actif = bool(payload.get("actif"))
         try:
-            # Sérialiser lecture ET modification, y compris avec une
+            # Serialize read AND modification, including with a
             # bascule de stockage : replace seul perd les clics concurrents.
             with runtime.verrou_configuration("suppression-auto", attente=5):
                 etat = md.load_json(watch.WATCH_STATE, {})
@@ -4127,9 +4188,9 @@ class Handler(serveweb.Handler):
                 libelle = next((nom for nom in surveillees
                                 if nom.strip().casefold() == camera.casefold()), None)
                 if not camera or libelle is None:
-                    self.send_json({"error": "Caméra inconnue."}, 400)
+                    self.send_json({"error": "Unknown camera."}, 400)
                     return
-                # Le nom affiché résout les identités internes persistées.
+                # The display name resolves persisted internal identities.
                 cles = {
                     choice["key"] for choice in suppression_auto_choices(
                         watch.camera_entries(libelle, surveillees, read_entries(self.paths)))
@@ -4141,10 +4202,10 @@ class Handler(serveweb.Handler):
                     cameras -= cles
                 runtime.ecrire_suppression_auto(cameras)
         except runtime.BusyError as erreur:
-            self.send_json({"error": f"Une modification des réglages est déjà en cours : {erreur}"}, 409)
+            self.send_json({"error": f"A settings change is already in progress: {erreur}"}, 409)
             return
         except OSError as erreur:
-            self.send_json({"error": f"Impossible d'enregistrer la suppression automatique : {erreur}"}, 500)
+            self.send_json({"error": f"Could not save automatic deletion: {erreur}"}, 500)
             return
         self.send_json({"ok": True})
         return
@@ -4160,11 +4221,11 @@ class Handler(serveweb.Handler):
             self.send_json({"error": str(erreur)}, 400)
             return
 
-        # Le même instantané sert aux suppressions et au travail différé.
+        # The same snapshot serves deletions and deferred work.
         entrees = read_entries(self.paths)
         if clips.exclure or clips.inclure:
-            # Seules les exclusions/reconstructions sont asynchrones : la
-            # réponse HTTP n'attend pas un verrou de registre déjà occupé.
+            # Only exclusions/reconstructions are asynchronous: the
+            # HTTP response does not wait on an already-held registry lock.
             threading.Thread(
                 target=self._appliquer_exclusions_clips,
                 args=(clips, entrees), daemon=True,
@@ -4179,9 +4240,9 @@ class Handler(serveweb.Handler):
         self.send_json({"ok": True, "resultats": resultats})
 
     def _appliquer_exclusions_clips(self, selection: _SelectionVideos, entrees: dict) -> None:
-        """Travail de fond : écarter/réintégrer, puis reconstruire si autorisé."""
-        # Le registre est partagé : sérialiser les deux actions et conserver
-        # leur ordre. Une réintégration l'emporte sur une exclusion du même clip.
+        """Background work: exclude/restore, then rebuild if allowed."""
+        # The registry is shared: serialize both actions and keep
+        # their order. A restore wins over an exclusion of the same clip.
         with REGISTRE:
             for identites, exclu in ((selection.exclure, True), (selection.inclure, False)):
                 if not identites:
@@ -4195,15 +4256,15 @@ class Handler(serveweb.Handler):
                     print(msg("ecarter_lot_erreur", erreur=erreur))
 
         reglages = runtime.lire_reglages()
-        # Décocher Quotidienne interdit aussi les reconstructions déclenchées
-        # par une sélection. Les réglages sont relus après l'écriture du registre.
+        # Unchecking Daily also forbids reconstructions triggered
+        # by a selection. Settings are reread after writing the registry.
         if not reglages["merge_jour"]:
             return
         jours = _jours_selection_a_reconstruire(
             selection.exclure + selection.inclure, entrees, reglages)
         options = runtime.options_fusion(reglages)
-        # Même fuseau que le calcul des jours, et jamais deux assemblages
-        # simultanés susceptibles d'écrire la même vidéo.
+        # Same timezone as day calculation, and never two assemblies
+        # concurrent that could write the same video.
         with REASSEMBLAGE:
             for camera, jour in jours:
                 runtime.lancer(
@@ -4225,8 +4286,8 @@ class Handler(serveweb.Handler):
 
         slot_pris = False
         try:
-            # Ressource partagée avec le direct et le téléchargement : une
-            # suppression concurrente risquerait un manifeste ou un lot partiel.
+            # Resource shared with live view and download: a
+            # concurrent deletion would risk a partial manifest or batch.
             if not MODULE_SLOT.acquire(blocking=False):
                 raise blink_engine.BusyError(_slot_occupe_message())
             slot_pris = True
@@ -4292,9 +4353,9 @@ class Handler(serveweb.Handler):
                             continue
                     evenements_presents_par_module[cle_sync] = evenements
 
-                # Les numéros USB peuvent être réattribués après réindexation.
-                # Retrouver le clip par caméra/date ; une ambiguïté interdit
-                # toute suppression, même si l'ancien numéro semble valide.
+                # USB numbers can be reassigned after reindexing.
+                # Find the clip by camera/date; ambiguity forbids
+                # any deletion, even if the old number seems valid.
                 try:
                     attendu = md.parse_created_at(str(entree.get("created_at") or ""))
                 except (ValueError, TypeError):
@@ -4320,11 +4381,11 @@ class Handler(serveweb.Handler):
 
     @staticmethod
     def _evenement_encore_present(entree: dict, evenements) -> bool:
-        """Vrai si le manifeste montre encore ce clip par caméra et instant.
+        """True if the manifest still shows this clip by camera and instant.
 
-        Même rapprochement que la suppression elle-même (caméra, ±2 s) : le
-        numéro USB seul ne prouve pas une absence, le Sync Module le
-        renumérote lors d'une réindexation."""
+        Same matching as deletion itself (camera, +/-2 s): the USB number
+        alone does not prove absence; the Sync Module renumbers on
+        reindexing."""
         if not evenements:
             return False
         camera = str(entree.get("camera") or "").strip().casefold()
@@ -4355,8 +4416,8 @@ class Handler(serveweb.Handler):
             if entree.get("path") in marques:
                 entree["source_deleted"] = True
                 continue
-            # La lecture du manifeste renseigne aussi les autres clips USB du
-            # même module, sans requête réseau supplémentaire.
+            # Reading the manifest also informs the other USB clips of
+            # same module, without an extra network request.
             cle_sync = str(entree.get("sync_id") or "")
             ids_presents = ids_presents_par_module.get(cle_sync)
             if ids_presents is None or str(entree.get("source") or "usb") != "usb":
@@ -4365,11 +4426,11 @@ class Handler(serveweb.Handler):
                 r"_(\d+)_[0-9a-f]{12}\.mp4$", str(entree.get("path") or ""))
             id_connu = correspondance.group(1) if correspondance else str(
                 entree.get("remote_id") or "")
-            # Absent par son numéro ET par caméra/instant : un numéro absent
-            # seul marquait à tort tout clip encore présent mais renuméroté,
-            # ce qui masquait définitivement sa case « Supprimer » dans la
-            # galerie (audit du 2026-09-24). Un faux négatif reste bénin : la
-            # prochaine demande répond « deja_absent » et marque alors.
+            # Absent by its number AND by camera/instant: an absent number
+            # alone wrongly marked any still-present but renumbered clip,
+            # which permanently hid its "Delete" checkbox in the
+            # gallery (audit of 2026-09-24). A false negative stays benign: the
+            # next request answers "deja_absent" and then marks it.
             if (id_connu and id_connu not in ids_presents
                     and not self._evenement_encore_present(
                         entree, evenements_presents_par_module.get(cle_sync))):
@@ -4379,11 +4440,11 @@ class Handler(serveweb.Handler):
     def _appliquer_selection_directs(self, selection: _SelectionVideos, racine_direct: Path,
                                     chemins_directs: dict, resultats: dict) -> None:
         """Modifie uniquement les fichiers directs et leurs exclusions locales."""
-        # Aucun registre de clips, appel Blink ou réassemblage pour ces fichiers.
-        # Lecture-modification-écriture sous verrou : deux sélections
-        # simultanées (double-clic, deux onglets) relisaient la même liste et
-        # la dernière écriture effaçait l'autre (39 exclusions perdues sur 40
-        # lancées ensemble, mesuré le 2026-09-24).
+        # No clip registry, Blink call or reassembly for these files.
+        # Locked read-modify-write: two simultaneous
+        # selections (double-click, two tabs) reread the same list and
+        # the last write erased the other (39 exclusions lost out of 40
+        # launched together, measured 2026-09-24).
         with _VERROU_EXCLUSION_DIRECTE:
             exclusion_directe = _lire_exclusion_directe(self.paths)
             exclusion_directe |= set(selection.exclure)
@@ -4392,7 +4453,7 @@ class Handler(serveweb.Handler):
                 try:
                     chemin = _chemin_direct_confine(racine_direct, identite)
                     if chemin != chemins_directs[identite]:
-                        raise ValueError("Chemin de vidéo modifié pendant la sélection")
+                        raise ValueError("Video path changed during selection")
                     chemin.unlink()
                     resultats[identite] = "supprime"
                     exclusion_directe.discard(identite)
@@ -4401,9 +4462,9 @@ class Handler(serveweb.Handler):
                 except (OSError, ValueError) as erreur:
                     resultats[identite] = f"echec: {type(erreur).__name__}"
                     continue
-                # Nettoyage cosmétique des deux parents, seulement s'ils sont
-                # vides. Ne jamais remonter à la racine du stockage des directs
-                # ou au-delà.
+                # Cosmetic cleanup of both parents, only if they are
+                # empty. Never climb to the live-recording storage root
+                # or beyond.
                 for dossier in (chemin.parent, chemin.parent.parent):
                     if (dossier == racine_direct.resolve()
                             or not runtime.est_relatif_a(dossier, racine_direct.resolve())):
@@ -4414,19 +4475,19 @@ class Handler(serveweb.Handler):
                         break
             _ecrire_exclusion_directe(self.paths, exclusion_directe)
 
-    # Au-delà, le corps d'une requête refusée n'est pas lu : la connexion est
-    # fermée sans lui, un envoi abusif ne doit pas occuper le serveur.
+    # Beyond that, a refused request's body is not read: the connection is
+    # closed without it; an abusive send must not occupy the server.
     _CORPS_REFUSE_MAX = 1 << 20
 
     def _refuser(self, code: int) -> None:
-        """Répond une erreur à un POST après avoir lu son corps, sans jamais
-        l'interpréter. Fermée avec des octets non lus, la connexion part en RST
-        sous Windows et le client perd la réponse (WinError 10053) : 25 refus
-        de jeton perdus sur 300 POST avec corps, mesuré le 2026-09-26, soit la
-        page qui garde un jeton périmé après un redémarrage. Lecture bornée
-        et octets jetés : l'audit qui voulait refuser « avant lecture »
-        cherchait à ne rien traiter d'un client non authentifié, ce qui reste
-        vrai. Même correctif que les serveurs de lidar2map et watch2notif."""
+        """Answer an error to a POST after reading its body, never interpreting
+        it. Closed with unread bytes, the connection goes RST under Windows
+        and the client loses the response (WinError 10053): 25 token refusals
+        lost out of 300 POSTs with body, measured 2026-09-26, i.e. the page
+        keeping a stale token after a restart. Bounded read and bytes
+        discarded: the audit that wanted to refuse "before reading" sought
+        to process nothing from an unauthenticated client, which remains
+        true. Same fix as the lidar2map and watch2notif servers."""
         try:
             longueur = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -4436,8 +4497,8 @@ class Handler(serveweb.Handler):
         self.send_error(code)
 
     def do_POST(self):
-        # Meme raison que do_GET : un appelant externe (script de domotique)
-        # n'a ni l'origine ni le jeton de session, le secret du webhook suffit.
+        # Same reason as do_GET: an external caller (home-automation script)
+        # has neither origin nor session token; the webhook secret is enough.
         try:
             route_webhook = urlparse(self.path).path
         except ValueError:
@@ -4448,9 +4509,9 @@ class Handler(serveweb.Handler):
         if not self.hote_autorise() or not self.jeton_valide():
             self._refuser(403)
             return
-        # Même filet que do_GET : après hote_autorise()/jeton_valide() ici,
-        # donc seulement atteignable par un client déjà de confiance, mais
-        # une requête malformée ne doit pas non plus planter la sienne.
+        # Same safety net as do_GET: after hote_autorise()/jeton_valide() here,
+        # so only reachable by an already-trusted client, but
+        # a malformed request must not crash its own either.
         try:
             route = urlparse(self.path).path
         except ValueError:
@@ -4462,9 +4523,9 @@ class Handler(serveweb.Handler):
             self.send_error(400)
             return
         if length < 0:
-            # rfile.read(-1) lirait jusqu'à la fermeture de la connexion,
-            # qu'une connexion HTTP/1.1 persistante ne ferme jamais d'elle-même :
-            # le thread de la requête restait bloqué (audit du 2026-09-24).
+            # rfile.read(-1) would read until connection close,
+            # which a persistent HTTP/1.1 connection never does by itself:
+            # the request thread stayed blocked (audit of 2026-09-24).
             self.send_error(400)
             return
         try:
@@ -4473,26 +4534,34 @@ class Handler(serveweb.Handler):
             self.send_json({"error": "corps JSON illisible"}, 400)
             return
         if not isinstance(payload, dict):
-            # Toutes les routes lisent payload.get(...) : une liste ou un
-            # nombre JSON valides levaient AttributeError, sans réponse propre.
+            # All routes read payload.get(...): a list or a
+            # valid JSON numbers raised AttributeError, with no clean response.
             self.send_json({"error": "corps JSON : objet attendu"}, 400)
             return
 
+        if not self.exiger_acces_authentifie():
+            return
+
         if route.startswith("/live-webrtc/"):
-            self.send_offer_webrtc(unquote(route[len("/live-webrtc/"):]), payload)
+            nom = unquote(route[len("/live-webrtc/"):])
+            if not self.exiger_camera(nom):
+                return
+            self.send_offer_webrtc(nom, payload)
             return
 
         if route.startswith("/api/direct-signal/"):
-            # Seul maillon de toute la chaine que le serveur ne peut pas
-            # observer lui-meme : le decodage/affichage reel dans le
+            # Only link in the whole chain that the server cannot
+            # observe itself: the real decode/display in the
             # <video> du navigateur. connectionstatechange (blink_webrtc.py)
-            # dit que la negociation a abouti, jamais qu'une image est
+            # says negotiation succeeded, never that an image is
             # effectivement arrivee a l'ecran - watchWebRTC()/watchMse()
-            # (serve_app.js) le savent, eux, via loadeddata/playing ou
-            # l'abandon apres reprises. Best-effort, jamais bloquant : un
-            # signal perdu ne doit jamais faire echouer le direct lui-meme,
+            # (serve_app.js) know that, via loadeddata/playing or
+            # giving up after retries. Best-effort, never blocking: a
+            # lost signal must never fail the live view itself,
             # seul direct.log en patit.
             nom = unquote(route[len("/api/direct-signal/"):])
+            if not self.exiger_camera(nom):
+                return
             evenement = str(payload.get("evenement") or "signal").strip()
             detail = str(payload.get("detail") or "").strip()
             suffixe = f" : {detail}" if detail else ""
@@ -4502,7 +4571,18 @@ class Handler(serveweb.Handler):
             self.send_json({"ok": True})
             return
 
+        if route == "/api/access":
+            if not self.exiger_admin():
+                return
+            try:
+                self.send_json(access_control.ecrire_acces(payload))
+            except ValueError as error:
+                self.send_json({"error": str(error)}, 400)
+            return
+
         if route == "/api/login":
+            if not self.exiger_admin():
+                return
             username = str(payload.get("username", "")).strip()
             password = str(payload.get("password", ""))
             if not username or not password:
@@ -4513,6 +4593,8 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/2fa":
+            if not self.exiger_admin():
+                return
             code = str(payload.get("code", "")).strip()
             if not code:
                 self.send_json({"status": "error", "message": "Code requis."})
@@ -4521,32 +4603,40 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/arm":
+            if not self.exiger_admin():
+                return
             name = str(payload.get("name", "")).strip()
             armed = bool(payload.get("armed"))
             scope = str(payload.get("scope", "camera"))
             try:
                 self.set_armed(scope, name, armed)
-                self.send_json(self.system_state())
+                self.send_json(access_control.filtrer_system_state(
+                    self.system_state(), self.identite_acces().get("email") or ""))
             except RuntimeError as error:
                 self.send_json({"error": str(error)}, 503)
             return
 
         if route == "/api/reveiller":
+            if not self.exiger_admin():
+                return
             name = str(payload.get("name", "")).strip()
             try:
                 self.reveiller_camera(name)
-                self.send_json(self.system_state())
+                self.send_json(access_control.filtrer_system_state(
+                    self.system_state(), self.identite_acces().get("email") or ""))
             except blink_engine.BusyError as error:
                 self.send_json({"error": str(error)}, 409)
             except Exception as error:
                 # Delai large (jusqu'a 130 s, voir reveiller_camera) : outre
-                # RuntimeError (camera inconnue), un timeout cote blinkpy ou
-                # un refus reseau doivent aussi remonter un message lisible
-                # plutot qu'une erreur 500 muette.
+                # RuntimeError (unknown camera), a blinkpy-side timeout or
+                # a network refusal must also surface a readable message
+                # rather than a silent 500 error.
                 self.send_json({"error": f"{type(error).__name__}: {error}"}, 503)
             return
 
         if route == "/api/snapshot":
+            if not self.exiger_admin():
+                return
             name = str(payload.get("name", "")).strip()
             try:
                 chemin = self.declencher_snapshot(name)
@@ -4559,6 +4649,8 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/snapshot-supprimer":
+            if not self.exiger_admin():
+                return
             relatif = str(payload.get("fichier", ""))
             chemin = self.resolve_snapshot(relatif)
             if chemin is None:
@@ -4569,10 +4661,14 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/webhook-regenerer":
+            if not self.exiger_admin():
+                return
             self.send_json({"token": runtime.regenerer_jeton_webhook()})
             return
 
         if route == "/api/direct-enregistrement":
+            if not self.exiger_admin():
+                return
             session_id = str(payload.get("session_id") or "")
             with DIRECT_WEBRTC_SESSION_LOCK:
                 holder = DIRECT_WEBRTC_SESSION.get("session")
@@ -4589,7 +4685,7 @@ class Handler(serveweb.Handler):
                     else:
                         ENREGISTREMENT_DIRECT_ACTIF.clear()
             if not autorise:
-                self.send_json({"error": "Cette session de direct n'est plus active."}, 409)
+                self.send_json({"error": "This live session is no longer active."}, 409)
                 return
             self.send_json({"actif": ENREGISTREMENT_DIRECT_ACTIF.is_set()})
             return
@@ -4597,36 +4693,40 @@ class Handler(serveweb.Handler):
         if route == "/api/arreter-direct":
             session_id = str(payload.get("session_id") or "")
             if not DIRECT_SESSION_ID.fullmatch(session_id):
-                self.send_json({"error": "Identifiant de session requis."}, 400)
+                self.send_json({"error": "Session identifier required."}, 400)
                 return
             arrete = _demander_arret_direct(session_id)
             if arrete:
-                _journal_direct("arreter-direct", f"session {session_id[:8]}, fermeture demandée")
-            # L'attente éventuelle du polling Blink se poursuit sur sa boucle.
-            # /api/attente-module reste la confirmation de libération réelle.
+                _journal_direct("arreter-direct", f"session {session_id[:8]}, close requested")
+            # Any Blink polling wait continues on its loop.
+            # /api/attente-module remains the real-release confirmation.
             self.send_json({"ok": True, "stopped": arrete, "session_id": session_id})
             return
 
         if route == "/api/maj/verifier":
-            # Bouton « Vérifier les mises à jour » des réglages : GitHub tout
-            # de suite, sans attendre le fil de fond (une heure au plus, voir
-            # maj.FRAICHEUR). « ok » faux : GitHub n'a pas répondu, le cache
+            if not self.exiger_admin():
+                return
+            # Settings "Check for updates" button: GitHub right
+            # right away, without waiting for the background thread (an hour at most, see
+            # maj.FRAICHEUR). "ok" false: GitHub did not answer, the cache
             # reste tel quel.
             neuve, ok = maj.verifier_maintenant()
             self.send_json({"maj": neuve, "ok": ok, "version": runtime.VERSION})
             return
 
         if route == "/api/update":
+            if not self.exiger_admin():
+                return
             neuve = maj.disponible(reseau=False)
             if not neuve:
-                self.send_json({"error": "Aucune version plus récente."}, 409)
+                self.send_json({"error": "No newer version available."}, 409)
                 return
             if not runtime.effacer_conclusion_travail("phase.update_noop"):
-                self.send_json({"error": "La conclusion de la mise à jour précédente est encore occupée. Réessayez."}, 409)
+                self.send_json({"error": "The previous update conclusion is still busy. Try again."}, 409)
                 return
-            # Détaché, et volontairement sans attendre : ce processus fait
-            # partie de ce que la mise à jour va arrêter. Elle rend compte dans
-            # maj.log, et la page attend simplement le retour du serveur.
+            # Detached, and deliberately without waiting: this process is
+            # part of what the update will stop. It reports in
+            # maj.log, and the page simply waits for the server reply.
             runtime.demarrer(
                 runtime.self_command("update"), cwd=str(runtime.app_dir()),
                 stdin=subprocess.DEVNULL,
@@ -4637,40 +4737,54 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/appliquer-selection":
+            if not self.exiger_admin():
+                return
             return self._post_appliquer_selection(payload)
 
         if route == "/api/autostart":
+            if not self.exiger_admin():
+                return
             code = autostart.appliquer("on" if payload.get("actif") else "off")
             if code != 0:
                 self.send_json(
-                    {"error": "Échec de la modification du démarrage automatique."}, 500)
+                    {"error": "Failed to change automatic startup."}, 500)
                 return
-            # Relu plutôt que renvoyé tel quel : si le mécanisme de la
+            # Reread rather than returned as-is: if the
             # plateforme n'a pas vraiment pris (droits, service absent...),
-            # l'interface montre l'état réel, pas ce qui a juste été demandé.
+            # interface shows the real state, not what was just requested.
             self.send_json({"actif": autostart.est_installe()})
             return
 
         if route == "/api/reglages":
+            if not self.exiger_admin():
+                return
             return self._post_reglages(payload)
 
         if route == "/api/sourdine":
+            if not self.exiger_admin():
+                return
             return self._post_sourdine(payload)
 
         if route == "/api/suppression-auto":
+            if not self.exiger_admin():
+                return
             return self._post_suppression_auto(payload)
 
         if route == "/api/stop":
-            # --sans-relance pour que « restart » s'arrête sans revenir,
-            # exactement ce qu'un bouton Stop doit faire.
+            if not self.exiger_admin():
+                return
+            # --sans-relance so "restart" stops without coming back,
+            # exactly what a Stop button must do.
             self.repondre_puis_redemarrer(["restart", "--sans-relance"])
             return
 
         if route == "/api/redemarrer":
-            # Même appel que la fin de _post_reglages(), sans passer par la
-            # validation ni l'enregistrement : un redémarrage tout court,
-            # pour reprendre un code fraîchement modifié ou sortir d'un état
-            # bloqué, sans avoir à retoucher un réglage pour l'obtenir.
+            if not self.exiger_admin():
+                return
+            # Same call as the end of _post_reglages(), without going through
+            # validation or saving: a plain restart,
+            # to pick up freshly edited code or leave a stuck
+            # state, without having to tweak a setting to get it.
             self.repondre_puis_redemarrer(["restart"])
             return
 
@@ -4683,11 +4797,11 @@ class Handler(serveweb.Handler):
 
 
 PAGE = """<!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>blink2video</title>
+<title>Cas Cams</title>
 <link rel="icon" href="/favicon.ico">
 <style>
 __CSS__
@@ -4695,31 +4809,37 @@ __CSS__
 </head>
 <body>
 <header>
-  <h1>blink2video<span class="v">__VERSION__ (<span id="pidServeur"></span>)</span></h1>
+  <h1 class="brand">
+  <img class="brand-icon" src="/logo.png" alt="" width="40" height="40">
+  <span class="brand-text">
+    Cas Cams
+    <span class="v">__VERSION__ (<span id="pidServeur"></span>)</span>
+  </span>
+</h1>
   <select id="view">
-    <option value="live" data-i18n="view.live">Directs Vues</option>
-    <option value="direct" data-i18n="view.direct">Directs Enregistrements</option>
-    <option value="clips" data-i18n="view.clips">Détections Enregistrements</option>
-    <option value="daily" data-i18n="view.daily">Détections Journalières</option>
-    <option value="weekly" data-i18n="view.weekly">Détections Hebdomadaires</option>
-    <option value="monthly" data-i18n="view.monthly">Détections Mensuelles</option>
-    <option value="pictures" data-i18n="view.pictures">Photos</option>
+    <option value="live" data-i18n="view.live">Live Views</option>
+    <option value="alllive" data-i18n="view.alllive">All Live Views</option>
+    <option value="rotation" data-i18n="view.rotation">Live View Rotation</option>
+    <option value="direct" data-i18n="view.direct">Live Recordings</option>
+    <option value="clips" data-i18n="view.clips">Detection Recordings</option>
+    <option value="daily" data-i18n="view.daily">Detection Daily</option>
+    <option value="weekly" data-i18n="view.weekly">Detection Weekly</option>
+    <option value="monthly" data-i18n="view.monthly">Detection Monthly</option>
+    <option value="pictures" data-i18n="view.pictures">Pictures</option>
   </select>
   <button id="filtreButton" data-i18n="filtre.button" data-i18n-title="filtre.button.title"
-          title="Filtrer">🔍 Filtre</button>
-  <button id="rondeButton" data-i18n="ronde.button" data-i18n-title="ronde.button.title"
-          title="Les directs en plein écran, une caméra après l'autre" hidden>▶ Ronde…</button>
+          title="Filter">🔍 Filter</button>
   <span class="filtreResume" id="filtreResume"></span>
   <span class="filtreResume" id="filtreCompte"></span>
   <span class="count" id="count"></span>
-  <!-- Tout ce qui concerne la mise à jour tient ensemble, à droite : l'heure du
-       dernier passage, la coche qui recharge seule, et le bouton. -->
+  <!-- Update controls stay together on the right: last-pass time,
+       auto-reload checkbox, and the button. -->
   <div class="maj">
     <button id="update" hidden></button>
     <span class="sub tiny" id="passages"></span>
     <button class="danger" id="applyButton" hidden></button>
-    <button class="primary" id="refresh" data-i18n="btn.refresh">↻ Actualiser</button>
-    <button id="reglagesButton" data-i18n="btn.reglages" data-i18n-title="btn.reglages.title" title="Réglages">⚙ Réglages…</button>
+    <button class="primary" id="refresh" data-i18n="btn.refresh">↻ Refresh</button>
+    <button id="reglagesButton" data-i18n="btn.reglages" data-i18n-title="btn.reglages.title" title="Settings">⚙ Settings…</button>
   </div>
   <span class="langGroup" title="Langue / Language">
     <button class="btn-lang" data-lang-btn="fr">FR</button>
@@ -4730,130 +4850,129 @@ __CSS__
 <main><div id="list"></div><pre id="log"></pre></main>
 
 <dialog id="auth">
-  <!-- Boîte modale : le fond assombri masque et rend inatteignables les
-       boutons FR/EN de l'en-tête tant qu'elle est ouverte (showModal()).
-       Doublon minimal ici, seul moyen de changer de langue avant de se
-       connecter. -->
+  <!-- Modal: the dimmed backdrop covers the header FR/EN buttons while
+       showModal() is open. Minimal duplicate here is the only way to
+       change language before signing in. -->
   <span class="langGroup langGroupAuth" title="Langue / Language">
     <button class="btn-lang" data-lang-btn="fr">FR</button>
     <button class="btn-lang" data-lang-btn="en">EN</button>
   </span>
-  <h3 id="authTitle" data-i18n="auth.title">Connexion Blink</h3>
-  <p id="authHint" data-i18n="auth.hint">Le mot de passe sert uniquement à ouvrir la session ; seuls
-     les jetons sont enregistrés, jamais le mot de passe.</p>
+  <h3 id="authTitle" data-i18n="auth.title">Blink login</h3>
+  <p id="authHint" data-i18n="auth.hint">The password is only used to open the session; only
+     the tokens are stored, never the password.</p>
   <p id="authError"></p>
   <div id="authCreds">
-    <input id="user" type="email" data-i18n-placeholder="auth.email" placeholder="Adresse e-mail" autocomplete="username">
+    <input id="user" type="email" data-i18n-placeholder="auth.email" placeholder="Email address" autocomplete="username">
     <div class="champMdp">
-      <input id="pass" type="password" data-i18n-placeholder="auth.password" placeholder="Mot de passe"
+      <input id="pass" type="password" data-i18n-placeholder="auth.password" placeholder="Password"
              autocomplete="current-password">
       <button type="button" id="passToggle" data-i18n="auth.show"
-              aria-label="Afficher le mot de passe">Afficher</button>
+              aria-label="Show password">Show</button>
     </div>
   </div>
   <div id="authCode" hidden>
-    <input id="code" inputmode="numeric" data-i18n-placeholder="auth.code" placeholder="Code reçu par SMS ou e-mail"
+    <input id="code" inputmode="numeric" data-i18n-placeholder="auth.code" placeholder="Code received by SMS or email"
            autocomplete="one-time-code">
   </div>
   <div class="row">
-    <button id="authCancel" data-i18n="auth.cancel">Annuler</button>
-    <button class="primary" id="authOk" data-i18n="auth.ok">Se connecter</button>
+    <button id="authCancel" data-i18n="auth.cancel">Cancel</button>
+    <button class="primary" id="authOk" data-i18n="auth.ok">Log in</button>
   </div>
 </dialog>
 
 <dialog id="reglages">
-  <h3 data-i18n="reglages.title">Réglages</h3>
+  <h3 data-i18n="reglages.title">Settings</h3>
   <p id="initialSetupHint" class="sub" hidden data-i18n="reglages.initial.hint">
-    Vérifiez notamment le dossier des données et le fuseau horaire. Aucun clip
-    ne sera téléchargé avant que vous ayez appliqué ces réglages.
+    Check the data folder and time zone in particular. No clip
+    will be downloaded until you apply these settings.
   </p>
   <div class="tabsReglages" role="tablist">
     <button type="button" id="tabGeneral" class="tabReglages"
-            data-i18n="reglages.tab.general">Général</button>
+            data-i18n="reglages.tab.general">General</button>
     <button type="button" id="tabVideo" class="tabReglages"
-            data-i18n="reglages.tab.video">Vidéo</button>
+            data-i18n="reglages.tab.video">Video</button>
     <button type="button" id="tabAcces" class="tabReglages"
-            data-i18n="reglages.tab.acces">Accès et automatisation</button>
+            data-i18n="reglages.tab.acces">Access &amp; automation</button>
     <button type="button" id="tabAlertes" class="tabReglages"
-            data-i18n="reglages.tab.alertes">Alertes</button>
+            data-i18n="reglages.tab.alertes">Alerts</button>
   </div>
   <div id="panelGeneral" class="panelReglages">
     <label id="autostartLabel"
            data-i18n-title="reglages.autostart.title"
-           title="Démarre le serveur web et le traitement des clips en arrière-plan,
-                   à l'ouverture de session (au démarrage de la machine pour un service
-                   Linux avec lingering) ; n'ouvre pas cette page toute seule">
-      <input type="checkbox" id="autostart"> <span data-i18n="reglages.autostart">Démarrage automatique
-      de la surveillance</span>
+           title="Starts the web server and clip processing in the background
+                   when your session opens (at boot for a Linux service
+                   with lingering); does not open this page by itself">
+      <input type="checkbox" id="autostart"> <span data-i18n="reglages.autostart">Start monitoring
+      automatically</span>
     </label>
-    <label id="autoLabel" data-i18n-title="reglages.auto.title" title="Recharger la liste dès que des clips arrivent">
-      <input type="checkbox" id="auto"> <span data-i18n="reglages.auto">Actualisation automatique de la page</span>
+    <label id="autoLabel" data-i18n-title="reglages.auto.title" title="Reload the list as soon as clips arrive">
+      <input type="checkbox" id="auto"> <span data-i18n="reglages.auto">Automatic page refresh</span>
     </label>
     <div class="champCadence">
-      <label for="tailleCartes" data-i18n="reglages.tailleCartes">Taille des vignettes</label>
+      <label for="tailleCartes" data-i18n="reglages.tailleCartes">Thumbnail size</label>
       <select id="tailleCartes">
-        <option value="petites" data-i18n="reglages.tailleCartes.petites">Petites</option>
-        <option value="moyennes" data-i18n="reglages.tailleCartes.moyennes">Moyennes</option>
-        <option value="grandes" data-i18n="reglages.tailleCartes.grandes">Grandes</option>
-        <option value="tres_grandes" data-i18n="reglages.tailleCartes.tres_grandes">Très grandes</option>
+        <option value="petites" data-i18n="reglages.tailleCartes.petites">Small</option>
+        <option value="moyennes" data-i18n="reglages.tailleCartes.moyennes">Medium</option>
+        <option value="grandes" data-i18n="reglages.tailleCartes.grandes">Large</option>
+        <option value="tres_grandes" data-i18n="reglages.tailleCartes.tres_grandes">Extra large</option>
       </select>
     </div>
     <label id="barrePaginationLabel" data-i18n-title="reglages.barrePagination.title"
-           title="Masquée, la barre du bas de la liste reste disponible pour changer de page. Propre à ce navigateur.">
-      <input type="checkbox" id="barrePagination"> <span data-i18n="reglages.barrePagination">Afficher la barre de
-      pagination en haut de la liste</span>
+           title="When hidden, the bar at the bottom of the list stays available to change page. Specific to this browser.">
+      <input type="checkbox" id="barrePagination"> <span data-i18n="reglages.barrePagination">Show the pagination
+      bar at the top of the list</span>
     </label>
     <fieldset>
-      <legend data-i18n="reglages.masquees">Caméras masquées</legend>
-      <p class="sub tiny" data-i18n="reglages.masquees.hint">Une caméra masquée disparaît des listes de cette page mais continue d'enregistrer et de télécharger. Réglage propre à ce navigateur.</p>
+      <legend data-i18n="reglages.masquees">Hidden cameras</legend>
+      <p class="sub tiny" data-i18n="reglages.masquees.hint">A hidden camera disappears from the lists on this page but keeps recording and downloading. This setting is specific to this browser.</p>
       <div id="camerasMasqueesListe" class="ligneCoches sub tiny"></div>
     </fieldset>
     <div class="champCadence">
-      <label for="port" data-i18n="reglages.serveur">Port du serveur</label>
+      <label for="port" data-i18n="reglages.serveur">Server port</label>
       <input type="number" id="port" min="1" max="65535" step="1">
     </div>
     <div class="champDossier" data-i18n-title="reglages.storageDir.hint"
-         title="Clips, vidéos assemblées, directs et captures. Ne déplace pas ceux déjà enregistrés à l'ancien emplacement : à faire vous-même si vous changez ce chemin. Vide = emplacement par défaut, Documents/blink2video.">
-      <label for="storageDir" data-i18n="reglages.storageDir">Dossier des vidéos</label>
+         title="Clips, assembled videos, lives and snapshots. Does not move those already saved at the old location: do it yourself if you change this path. Empty = default location, Documents/blink2video.">
+      <label for="storageDir" data-i18n="reglages.storageDir">Videos folder</label>
       <input type="text" id="storageDir" data-i18n-placeholder="reglages.storageDir.placeholder"
-             placeholder="C:/chemin/vers/le/dossier">
-      <button type="button" id="storageDirBrowse" data-i18n="reglages.storageDir.browse">Parcourir…</button>
+             placeholder="C:/path/to/the/folder">
+      <button type="button" id="storageDirBrowse" data-i18n="reglages.storageDir.browse">Browse…</button>
     </div>
   </div>
   <div id="panelVideo" class="panelReglages" hidden>
     <fieldset>
-      <legend data-i18n="reglages.cadence">Cadence de lecture des caméras</legend>
+      <legend data-i18n="reglages.cadence">Camera polling interval</legend>
       <label id="downloadAutoLabel" data-i18n-title="reglages.downloadAuto.hint"
-             title="Décochée, aucun clip n'est plus récupéré ni stocké : utile pour ne garder que le direct. Les cadences ci-dessous n'ont alors plus d'effet.">
+             title="Unchecked, no clip is fetched or stored anymore: useful to keep only the live view. The cadences below then have no effect.">
         <input type="checkbox" id="downloadAuto">
-        <span data-i18n="reglages.downloadAuto">Télécharger les clips automatiquement</span>
+        <span data-i18n="reglages.downloadAuto">Download clips automatically</span>
       </label>
       <div class="champCadenceDouble">
-        <label for="usbMinutes" data-i18n="reglages.usb">Stockage local (minutes)</label>
+        <label for="usbMinutes" data-i18n="reglages.usb">Local storage (minutes)</label>
         <input type="number" id="usbMinutes" min="1" step="1">
         <label for="cloudMinutes" data-i18n="reglages.cloud">Cloud (minutes)</label>
         <input type="number" id="cloudMinutes" min="1" step="1">
       </div>
     </fieldset>
     <fieldset>
-      <legend data-i18n="reglages.video">Vidéo</legend>
+      <legend data-i18n="reglages.video">Video</legend>
       <label id="timestampLabel">
-        <input type="checkbox" id="timestamp"> <span data-i18n="reglages.timestamp">Incruster la date et l'heure
-        dans l'image</span>
+        <input type="checkbox" id="timestamp"> <span data-i18n="reglages.timestamp">Burn the date and time
+        into the image</span>
       </label>
       <p class="sub tiny" data-i18n="reglages.timestamp.style.hint">
-        Vide = taille automatique selon la hauteur de la vidéo. Couleur : nom
-        (white, yellow...) ou hexadécimal, éventuellement avec une transparence
-        (ex. white@0.8).
+        Empty = size automatically scaled to the video's height. Color: a name
+        (white, yellow...) or hex code, optionally with transparency
+        (e.g. white@0.8).
       </p>
       <div class="champCadenceDouble">
-        <label for="fontSize" data-i18n="reglages.fontSize">Taille de police</label>
+        <label for="fontSize" data-i18n="reglages.fontSize">Font size</label>
         <input type="number" id="fontSize" min="8" max="500" step="1" placeholder="auto">
-        <label for="boxOpacity" data-i18n="reglages.boxOpacity">Opacité du bandeau</label>
+        <label for="boxOpacity" data-i18n="reglages.boxOpacity">Box opacity</label>
         <input type="number" id="boxOpacity" min="0" max="1" step="0.05">
       </div>
       <div class="champCadence">
-        <label for="fontColor" data-i18n="reglages.fontColor">Couleur</label>
+        <label for="fontColor" data-i18n="reglages.fontColor">Color</label>
         <input type="text" id="fontColor" list="couleursCourantes" placeholder="white">
       </div>
       <datalist id="couleursCourantes">
@@ -4866,8 +4985,8 @@ __CSS__
         <option value="orange">
       </datalist>
       <div class="champCadence">
-        <label for="timezone" data-i18n="reglages.timezone">Fuseau horaire</label>
-        <input type="text" id="timezone" list="fuseauxCourants" placeholder="Europe/Paris">
+        <label for="timezone" data-i18n="reglages.timezone">Time zone</label>
+        <input type="text" id="timezone" list="fuseauxCourants" placeholder="America/New_York">
       </div>
       <datalist id="fuseauxCourants">
         <option value="Europe/Paris">
@@ -4888,186 +5007,173 @@ __CSS__
         <option value="UTC">
       </datalist>
       <div class="champCadence">
-        <label for="liveProtocol" data-i18n="reglages.liveProtocol">Protocole du direct</label>
+        <label for="liveProtocol" data-i18n="reglages.liveProtocol">Live view protocol</label>
         <select id="liveProtocol">
-          <option value="webrtc" data-i18n="reglages.liveProtocol.webrtc">WebRTC (rapide)</option>
+          <option value="webrtc" data-i18n="reglages.liveProtocol.webrtc">WebRTC (fast)</option>
           <option value="mse" data-i18n="reglages.liveProtocol.mse">MSE (compatible)</option>
         </select>
       </div>
       <div class="champCadence" data-i18n-title="reglages.liveAutoStop.hint"
-           title="Arrête le direct tout seul après ce délai, jusqu'à 420 s, même en direct continu. Vide ou 0 : pas d'arrêt automatique ; Blink ferme de lui-même chaque direct au bout d'environ 6 minutes, et la case « Direct continu » d'une caméra le relance.">
-        <label for="liveAutoStopSeconds" data-i18n="reglages.liveAutoStop">Arrêt auto du direct (s)</label>
+           title="Stops the live view on its own after this delay, up to 420 s, even in continuous live. Empty or 0: no auto-stop; Blink closes every live view by itself after about 6 minutes, and a camera's &quot;Continuous live&quot; box starts it again.">
+        <label for="liveAutoStopSeconds" data-i18n="reglages.liveAutoStop">Auto-stop live view (s)</label>
         <input type="number" id="liveAutoStopSeconds" min="0" max="420" placeholder="0">
       </div>
     </fieldset>
     <fieldset>
       <legend data-i18n="reglages.archivage"
               data-i18n-title="reglages.archivage.hint"
-              title="Hebdomadaire et mensuelle sont assemblées à partir de la quotidienne : décocher « Quotidienne » désactive aussi les deux autres.">Création des vidéos temporelles par caméra</legend>
+              title="Weekly and Monthly are assembled from the Daily: unchecking &quot;Daily&quot; also disables the other two.">Per-camera time-based video creation</legend>
       <div class="ligneCoches">
         <label id="mergeJourLabel">
-          <input type="checkbox" id="mergeJour"> <span data-i18n="reglages.mergeJour">Quotidienne</span>
+          <input type="checkbox" id="mergeJour"> <span data-i18n="reglages.mergeJour">Daily</span>
         </label>
         <label id="mergeSemaineLabel">
-          <input type="checkbox" id="mergeSemaine"> <span data-i18n="reglages.mergeSemaine">Hebdomadaire</span>
+          <input type="checkbox" id="mergeSemaine"> <span data-i18n="reglages.mergeSemaine">Weekly</span>
         </label>
         <label id="mergeMoisLabel">
-          <input type="checkbox" id="mergeMois"> <span data-i18n="reglages.mergeMois">Mensuelle</span>
+          <input type="checkbox" id="mergeMois"> <span data-i18n="reglages.mergeMois">Monthly</span>
         </label>
       </div>
     </fieldset>
   </div>
   <div id="panelAcces" class="panelReglages" hidden>
     <fieldset>
+      <legend data-i18n="reglages.sharedAccess">Shared camera access</legend>
+      <p class="sub tiny" data-i18n="reglages.sharedAccess.hint">
+        Friends authenticate with Cloudflare Access (their email). You keep the Blink login.
+        Assign cameras below. Empty Cloudflare fields keep local-only mode (full admin on this machine).
+      </p>
+      <div class="champDossier">
+        <label for="cfAud" data-i18n="reglages.cfAud">Access application AUD</label>
+        <input type="text" id="cfAud" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+      </div>
+      <div class="champDossier">
+        <label for="accessAdmins" data-i18n="reglages.accessAdmins">Admin emails (comma-separated)</label>
+        <input type="text" id="accessAdmins" placeholder="you@example.com">
+      </div>
+      <div id="accessUsersListe" class="accessUsers"></div>
+      <div class="row" style="gap:8px;margin-top:8px">
+        <input type="email" id="accessNewEmail" placeholder="friend@example.com" style="flex:1">
+        <button type="button" id="accessAddUser" data-i18n="reglages.accessAdd">Add friend</button>
+        <button type="button" id="accessSave" class="primary" data-i18n="reglages.accessSave">Save access</button>
+      </div>
+      <p id="accessSaveStatus" class="sub tiny" hidden></p>
+    </fieldset>
+    <fieldset>
       <legend data-i18n="reglages.accesDistant" data-i18n-title="reglages.accesDistant.hint"
-              title="Pour joindre cette instance directement depuis un VPN maillé (Tailscale, WireGuard), sans reverse proxy devant.">Accès distant par VPN maillé</legend>
+              title="To reach this instance directly from a mesh VPN (Tailscale, WireGuard), no reverse proxy in front.">Remote access over a mesh VPN</legend>
       <p class="sub tiny" data-i18n="reglages.accesDistant.hint.text">
-        À utiliser avec la variable d'environnement BLINK_BIND réglée sur
-        l'adresse d'écoute (voir le README, section « Reaching it remotely ») :
-        ce réglage seul, sans elle, ne change rien à qui peut atteindre
-        l'interface. Plusieurs valeurs possibles, séparées par des virgules :
-        noms d'hôte, adresses IP ou sous-réseaux (192.168.1.0/24). Seuls les noms
-        et adresses exacts autorisent aussi l'intégration de la page dans une
+        Use together with the BLINK_BIND environment variable set to
+        the listening address (see the README, "Reaching it remotely" section):
+        this setting alone, without it, changes nothing about who can reach
+        the interface. Several values allowed, comma-separated:
+        hostnames, IP addresses or subnets (192.168.1.0/24). Only exact names
+        and addresses also allow embedding the page in an
         iframe.
       </p>
       <div class="champDossier">
-        <label for="trustedHost" data-i18n="reglages.trustedHost">Hôte de confiance</label>
-        <input type="text" id="trustedHost" placeholder="100.x.y.z, 192.168.1.0/24, mon-pc">
+        <label for="trustedHost" data-i18n="reglages.trustedHost">Trusted host</label>
+        <input type="text" id="trustedHost" placeholder="100.x.y.z, 192.168.1.0/24, my-pc">
       </div>
     </fieldset>
     <fieldset>
       <legend data-i18n="reglages.webhook" data-i18n-title="reglages.webhook.hint"
-              title="Déclenche une photo à distance (domotique, automatisation) sans ouvrir cette page.">Photo par webhook</legend>
+              title="Triggers a picture remotely (home automation) without opening this page.">Webhook picture</legend>
       <p class="sub tiny" data-i18n="reglages.webhook.hint.text">
-        Appelez cette URL en GET, en remplaçant NOM_CAMERA par le nom exact d'une
-        caméra, pour déclencher une photo à distance. Le secret fait partie de
-        l'URL : gardez-la privée.
+        Call this URL with GET, replacing NOM_CAMERA with a camera's exact
+        name, to trigger a picture remotely. The secret is part of
+        the URL: keep it private.
       </p>
       <div class="champDossier">
         <label for="webhookUrl" data-i18n="reglages.webhook.url">URL</label>
         <input type="text" id="webhookUrl" readonly>
       </div>
-      <button type="button" id="webhookRegenerer" data-i18n="reglages.webhook.regenerer">Régénérer le secret</button>
+      <button type="button" id="webhookRegenerer" data-i18n="reglages.webhook.regenerer">Regenerate the secret</button>
     </fieldset>
     <fieldset>
       <legend data-i18n="reglages.webhookNotif" data-i18n-title="reglages.webhookNotif.hint"
-              title="Appelle cette URL en POST à chaque nouveau clip ou photo, une fois le fichier bien écrit sur disque.">Notification par webhook</legend>
+              title="Calls this URL with POST on every new clip or picture, once the file is actually done writing to disk.">Webhook notification</legend>
       <p class="sub tiny" data-i18n="reglages.webhookNotif.hint.text">
-        Envoie un POST JSON (caméra, chemin, type) à l'URL ci-dessous chaque
-        fois qu'un clip ou une photo est prêt. Au mieux, sans nouvelle
-        tentative : une notification manquée n'interrompt jamais le
-        téléchargement.
+        Sends a JSON POST (camera, path, type) to the URL below every
+        time a clip or picture is ready. Best-effort, no retry:
+        a missed notification never holds up
+        downloading.
       </p>
       <div class="champDossier">
-        <label for="webhookNotifUrl" data-i18n="reglages.webhookNotifUrl">URL de notification</label>
+        <label for="webhookNotifUrl" data-i18n="reglages.webhookNotifUrl">Notification URL</label>
         <input type="text" id="webhookNotifUrl" placeholder="https://...">
       </div>
     </fieldset>
   </div>
   <div id="panelAlertes" class="panelReglages" hidden>
     <fieldset>
-      <legend data-i18n="reglages.alertes">Mise en sourdine des alertes</legend>
-      <div id="sourdineListe" class="ligneCoches sub tiny" data-i18n="sourdine.loading">Chargement…</div>
+      <legend data-i18n="reglages.alertes">Mute alerts</legend>
+      <div id="sourdineListe" class="ligneCoches sub tiny" data-i18n="sourdine.loading">Loading…</div>
     </fieldset>
     <fieldset>
       <legend data-i18n="reglages.suppressionAuto" data-i18n-title="suppressionAuto.hint"
-              title="Une fois un clip téléchargé avec succès, il est supprimé de sa source (stockage local USB/microSD ou cloud de l'abonnement selon la caméra).">Suppression automatique après téléchargement</legend>
-      <div id="suppressionAutoListe" class="ligneCoches sub tiny" data-i18n="suppressionAuto.loading">Chargement…</div>
+              title="Once a clip is successfully downloaded, it is deleted from its source (local USB/microSD storage or subscription cloud, depending on the camera).">Automatic deletion after download</legend>
+      <div id="suppressionAutoListe" class="ligneCoches sub tiny" data-i18n="suppressionAuto.loading">Loading…</div>
     </fieldset>
   </div>
   <div class="row row-boutons">
     <button class="primary" id="reglagesApply" data-i18n="reglages.apply"
             data-i18n-title="reglages.hint"
-            title="Les réglages ne prennent effet qu'au redémarrage : « Appliquer » enregistre et redémarre. Changer le port redirige cette page vers la nouvelle adresse.">Appliquer</button>
+            title="Settings only take effect on restart: &quot;Apply&quot; saves and restarts. Changing the port redirects this page to the new address.">Apply</button>
     <button id="verifierMajButton" data-i18n="reglages.checkUpdates"
             data-i18n-title="reglages.checkUpdates.hint"
-            title="Demande tout de suite à GitHub si une version plus récente est publiée. Sans ce bouton, blink2video vérifie de lui-même toutes les heures.">Vérifier les mises à jour</button>
+            title="Asks GitHub right away whether a newer version is out. Without this button, blink2video checks by itself every hour.">Check for updates</button>
     <button id="redemarrerButton" data-i18n="reglages.restart"
             data-i18n-title="reglages.restart.hint"
-            title="Redémarre sans rien changer aux réglages, par exemple pour reprendre une mise à jour déjà en place.">Redémarrer</button>
-    <button id="stopButton" data-i18n="reglages.stop">Arrêter la surveillance des caméras</button>
-    <button id="reglagesClose" data-i18n="reglages.close">Fermer</button>
+            title="Restarts without changing any setting, for example to pick up an update already in place.">Restart</button>
+    <button id="stopButton" data-i18n="reglages.stop">Stop camera monitoring</button>
+    <button id="reglagesClose" data-i18n="reglages.close">Close</button>
   </div>
 </dialog>
 
 <dialog id="filtre">
-  <h3 data-i18n="filtre.title">Filtre</h3>
+  <h3 data-i18n="filtre.title">Filter</h3>
   <div class="champCadence">
-    <label for="camera" data-i18n="filtre.camera">Caméra</label>
+    <label for="camera" data-i18n="filtre.camera">Camera</label>
     <select id="camera"></select>
   </div>
   <div class="champCadence" id="groupBySection" hidden>
-    <label for="groupBy" data-i18n="filtre.groupBy">Grouper par</label>
+    <label for="groupBy" data-i18n="filtre.groupBy">Group by</label>
     <select id="groupBy">
-      <option value="camera" data-i18n="filtre.groupBy.camera">Caméra</option>
-      <option value="day" data-i18n="filtre.groupBy.day">Jour</option>
+      <option value="camera" data-i18n="filtre.groupBy.camera">Camera</option>
+      <option value="day" data-i18n="filtre.groupBy.day">Day</option>
     </select>
   </div>
   <label id="outLabel">
-    <input type="checkbox" id="showOut"> <span data-i18n="reglages.showOut">Voir les clips écartés</span>
+    <input type="checkbox" id="showOut"> <span data-i18n="reglages.showOut">Show discarded clips</span>
   </label>
   <label id="hiddenLabel" hidden>
-    <input type="checkbox" id="showHidden"> <span data-i18n="filtre.showHidden">Afficher les caméras masquées</span>
+    <input type="checkbox" id="showHidden"> <span data-i18n="filtre.showHidden">Show hidden cameras</span>
   </label>
   <div id="periodeSection">
-    <p class="sub tiny" data-i18n="range.title">Période</p>
+    <p class="sub tiny" data-i18n="range.title">Period</p>
     <div class="presets">
-      <button type="button" data-preset="today" data-i18n="range.today">Aujourd'hui (24 h)</button>
-      <button type="button" data-preset="week" data-i18n="range.week">Cette semaine (7 j)</button>
-      <button type="button" data-preset="month" data-i18n="range.month">Ce mois-ci</button>
-      <button type="button" data-preset="2months" data-i18n="range.2months">2 derniers mois</button>
-      <button type="button" data-preset="all" data-i18n="range.all">Tout l'historique</button>
+      <button type="button" data-preset="today" data-i18n="range.today">Today (24h)</button>
+      <button type="button" data-preset="week" data-i18n="range.week">This week (7d)</button>
+      <button type="button" data-preset="month" data-i18n="range.month">This month</button>
+      <button type="button" data-preset="2months" data-i18n="range.2months">Last 2 months</button>
+      <button type="button" data-preset="all" data-i18n="range.all">All history</button>
     </div>
-    <p class="sub tiny" data-i18n="range.custom.hint">Ou une plage précise, à l'heure près :</p>
+    <p class="sub tiny" data-i18n="range.custom.hint">Or a precise range, down to the hour:</p>
     <div class="champCadence">
-      <label for="rangeFrom" data-i18n="range.from">Du</label>
+      <label for="rangeFrom" data-i18n="range.from">From</label>
       <input type="datetime-local" id="rangeFrom">
     </div>
     <div class="champCadence">
-      <label for="rangeTo" data-i18n="range.to">au</label>
+      <label for="rangeTo" data-i18n="range.to">to</label>
       <input type="datetime-local" id="rangeTo">
     </div>
   </div>
   <div class="row row-boutons">
-    <button class="primary" id="filtreApply" data-i18n="range.apply">Filtrer</button>
-    <button id="filtreClose" data-i18n="reglages.close">Fermer</button>
+    <button class="primary" id="filtreApply" data-i18n="range.apply">Filter</button>
+    <button id="filtreClose" data-i18n="reglages.close">Close</button>
   </div>
 </dialog>
-
-<dialog id="rondeReglages">
-  <h3 data-i18n="ronde.titre">Ronde des directs</h3>
-  <p data-i18n="ronde.explication">Plein écran, une caméra après l'autre : chacune reste à l'écran le temps choisi, compté à partir de sa première image.</p>
-  <p class="sub tiny" data-i18n="ronde.cameras">Caméras de la ronde</p>
-  <div id="rondeCameras"></div>
-  <div class="champCadence">
-    <label for="rondeSecondes" data-i18n="ronde.secondes">Secondes par caméra</label>
-    <input type="number" id="rondeSecondes" min="10" max="300" step="5">
-  </div>
-  <div class="champCadenceDouble">
-    <label for="rondeDebut" data-i18n="ronde.plage">Seulement de</label>
-    <input type="time" id="rondeDebut">
-    <label for="rondeFin" data-i18n="ronde.plage.a">à</label>
-    <input type="time" id="rondeFin">
-  </div>
-  <p class="sub tiny" data-i18n="ronde.plage.aide">Laissez les heures vides pour toute la journée.</p>
-  <p class="sub tiny" data-i18n="ronde.batterie">Chaque passage réveille la caméra : sur batterie, la ronde l'use vite. Tant qu'elle tourne, la relève du stockage local (clé USB) attend sa pause ou son arrêt.</p>
-  <div class="row row-boutons">
-    <button class="primary" id="rondeDemarrer" data-i18n="ronde.demarrer">Démarrer</button>
-    <button id="rondeFermer" data-i18n="reglages.close">Fermer</button>
-  </div>
-</dialog>
-
-<!-- Ronde des directs : couvre toute la fenêtre, plein écran quand le
-     navigateur l'accorde ; les cases de direct y passent tour à tour. -->
-<div id="ronde" hidden>
-  <div class="rondeBarre">
-    <span id="rondeTitre"></span>
-    <button id="rondeSuivante" data-i18n="ronde.suivante">Suivante ⏭</button>
-    <button id="rondeArreter" data-i18n="ronde.arreter">■ Arrêter</button>
-  </div>
-  <p id="rondeMessage" hidden></p>
-  <div id="rondeScene"></div>
-</div>
 <script nonce="__SCRIPT_NONCE__">
 __APP_JS__
 </script>
@@ -5076,12 +5182,12 @@ __APP_JS__
 """
 
 # CSS et JS vivent dans leurs propres fichiers (serve_style.css,
-# serve_app.js) : un .py qui les contenait en dur n'avait ni coloration ni
-# lint corrects pour l'un ou l'autre. Splicés ici avant les substitutions
-# suivantes pour que __TOKEN__ (dans serve_app.js) en profite comme le reste
-# du gabarit. runtime.resource_dir() plutôt que Path(__file__).parent : seul
-# le premier reste correct une fois le bundle figé (voir assets/, même
-# convention pour le favicon).
+# serve_app.js): a .py that hardcoded them had neither highlighting nor
+# lint corrects for either. Spliced here before template
+# following so that __TOKEN__ (in serve_app.js) benefits like the rest
+# substitutions. runtime.resource_dir() rather than Path(__file__).parent: only
+# the former stays correct once the bundle is frozen (see assets/, same
+# convention for the favicon).
 PAGE = PAGE.replace(
     "__CSS__",
     (runtime.resource_dir() / "serve_style.css").read_text(encoding="utf-8"),
@@ -5091,21 +5197,21 @@ PAGE = PAGE.replace(
     (runtime.resource_dir() / "serve_app.js").read_text(encoding="utf-8"),
 )
 
-# La page est un gabarit constant, plein d'accolades CSS et JavaScript :
-# impossible d'en faire une f-string. Une substitution unique au chargement
+# The page is a constant template, full of CSS and JavaScript braces:
+# impossible to make it an f-string. A single substitution at load
 # suffit, et laisse le gabarit lisible.
 PAGE = PAGE.replace("__VERSION__", runtime.VERSION)
-# Le PID à côté de la version distingue en un coup d'œil un onglet resté
-# ouvert sur l'ancien processus de celui qui vient de repartir après un
-# redémarrage : les deux affichent la même page tant que l'onglet ne
-# recharge pas, mais pas le même PID (constaté en réel, session du
-# 2026-09-16 : plusieurs redémarrages sans trace nulle part de ce qui avait
-# effectivement tourné).
+# The PID next to the version distinguishes at a glance a tab left
+# open on the old process from one that just restarted after a
+# restart: both show the same page until the tab
+# reloads, but not the same PID (observed in practice, session of
+# 2026-09-16: several restarts with no trace anywhere of what had
+# actually been running).
 PAGE = PAGE.replace("__PID__", str(os.getpid()))
 
-# Un jeton par processus (28.60/28.59), pas par requête : engendré une seule
-# fois ici, au chargement du module, comme VERSION ci-dessus. uuid4 plutôt que
-# secrets pour rester sur la génération de jeton déjà en usage ailleurs
+# One token per process (28.60/28.59), not per request: generated once
+# here at module load, like VERSION above. uuid4 rather than
+# secrets to stay on the token generation already used elsewhere
 # (runtime.py, verrou disque ; blink_auth.py, fichiers temporaires).
 TOKEN = uuid.uuid4().hex
 PAGE = PAGE.replace("__TOKEN__", TOKEN)
@@ -5126,8 +5232,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--excluded-output", type=Path, default=md.DEFAULT_EXCLUDED)
     parser.add_argument("--timezone", default="Europe/Paris")
     parser.add_argument("--hub", help=msg("aide_hub"))
-    # Avec les sorties : les vignettes et les exclusions de directs
-    # (DIRECT_EXCLUSION) décrivent ces vidéos-là, et les suivent.
+    # With the outputs: thumbnails and live-recording exclusions
+    # (DIRECT_EXCLUSION) describe those videos, and follow them.
     parser.add_argument(
         "--thumbs", type=Path, default=runtime.dossier_sorties() / ".blink_thumbs",
         help=msg("aide_thumbs"),
@@ -5137,29 +5243,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--initial-setup", action="store_true",
                         help=argparse.SUPPRESS)
     parser.add_argument(
-        # Un serveur n'ouvre pas de fenêtre de lui-même : c'est l'usage, et
-        # celui-ci passe l'essentiel de sa vie lancé au démarrage de session, où
-        # surgir dans le navigateur serait déplacé. On le demande donc.
+        # A server does not open a window by itself: that is the usage, and
+        # this one spends most of its life launched at session start, where
+        # popping up in the browser would be out of place. So we ask for it.
         "--open-browser", action="store_true", help=msg("aide_open_browser"),
     )
     return parser.parse_args()
 
 
 def veiller_sur_les_versions() -> None:
-    """Tient à jour, en fond, la connaissance de la dernière version publiée.
+    """Keep up to date, in the background, knowledge of the latest published version.
 
-    Un fil séparé plutôt qu'un appel dans la page : GitHub peut mettre dix
-    secondes à répondre, ou ne pas répondre du tout, et rien de tout cela ne
-    doit se voir depuis l'interface. Une visite par heure (maj.FRAICHEUR) :
-    à six heures, une publication pouvait attendre une demi-journée avant
-    d'apparaître (issue #35). La boucle est celle du commun (Verificateur.veiller),
-    la même pour les quatre applications : elle ne redemande pas une réponse
-    encore fraîche, celle du cache disque d'un démarrage récent."""
+    A separate thread rather than a call in the page: GitHub can take ten
+    seconds to answer, or not answer at all, and none of that must show in
+    the UI. One visit per hour (maj.FRAICHEUR): at six hours, a publication
+    could wait half a day before appearing (issue #35). The loop is the
+    shared one (Verificateur.veiller), the same for all four apps: it does
+    not re-request a still-fresh response from a recent startup's disk cache."""
     if runtime.build_windows7():
-        return             # pas de mise à jour automatique pour cette édition
+        return             # no automatic update for this edition
     try:
         maj._verificateur().veiller()
-    except Exception:      # une panne n'arrête pas le serveur
+    except Exception:      # a failure does not stop the server
         pass
 
 
@@ -5187,35 +5292,35 @@ def main() -> int:
         print(msg("erreur_generique", erreur=error))
         return 1
 
-    # 127.0.0.1 et pas 0.0.0.0 par défaut : le tableau de bord n'a aucune
-    # authentification, il n'a rien à faire sur le réseau local sans un
-    # choix explicite. BLINK_BIND permet d'y déroger pour deux usages :
-    # accès direct depuis d'autres machines du LAN (à réserver à un réseau
-    # domestique de confiance, jamais exposé sur internet), ou conteneur
-    # Docker où 127.0.0.1 désignerait la boucle locale du conteneur,
-    # injoignable depuis l'hôte même avec le port publié (le réseau en pont
-    # route vers l'interface du conteneur, pas sa boucle locale) : la
-    # frontière de sécurité reste alors posée par la publication du port
-    # elle-même (voir docker-compose.yml, 127.0.0.1: en dur).
+    # 127.0.0.1 and not 0.0.0.0 by default: the dashboard has no
+    # authentication; it has no business on the local network without an
+    # explicit choice. BLINK_BIND lets that be overridden for two uses:
+    # direct access from other LAN machines (reserve for a trusted
+    # home network, never exposed on the internet), or a Docker
+    # container where 127.0.0.1 would mean the container's loopback,
+    # unreachable from the host even with the published port (bridge network
+    # routes to the container interface, not its loopback): the
+    # security boundary is then set by the port publication
+    # itself (see docker-compose.yml, hardcoded 127.0.0.1:).
     bind = os.environ.get("BLINK_BIND", "127.0.0.1")
 
     class Server(http.server.ThreadingHTTPServer):
-        # http.server active allow_reuse_address, dont la sémantique diffère
-        # sous Windows : plusieurs serveurs peuvent s'y lier au même port sans
-        # la moindre erreur, et lequel reçoit les connexions est indéterminé.
-        # Une instance oubliée continue alors de servir sa page en mémoire, et
-        # l'on croit ses modifications sans effet. On préfère donc un refus
-        # franc ici, en gardant le comportement Unix habituel ailleurs (où
-        # l'option sert à relancer sans attendre la fin du TIME_WAIT).
+        # http.server enables allow_reuse_address, whose semantics differ
+        # under Windows: several servers can bind the same port without
+        # any error, and which receives connections is indeterminate.
+        # A forgotten instance then keeps serving its in-memory page, and
+        # one thinks changes have no effect. So we prefer a clear
+        # refusal here, keeping usual Unix behavior elsewhere (where
+        # the option lets a restart without waiting out TIME_WAIT).
         allow_reuse_address = os.name != "nt"
 
         def handle_error(self, request, client_address):
-            # Comportement par défaut de socketserver : traceback.print_exc()
-            # sur stderr seulement - invisible depuis console=False (revue du
-            # 27/08 : un changement de dossier de stockage ne redémarrait
-            # plus du tout, sans la moindre trace nulle part pour dire
-            # pourquoi). Consigné en plus dans un fichier, jamais à la place :
-            # reste utile aussi quand une vraie console existe.
+            # socketserver default behavior: traceback.print_exc()
+            # on stderr only — invisible with console=False (review of
+            # 27/08: a storage-folder change did not restart
+            # at all, without the slightest trace anywhere to say
+            # why). Also logged to a file, never instead of:
+            # remains useful even when a real console exists.
             import traceback
             try:
                 with (runtime.app_dir() / "serve_erreurs.log").open(
@@ -5237,26 +5342,26 @@ def main() -> int:
     print(msg("interface_disponible", url=url))
     if bind not in ("127.0.0.1", "localhost"):
         # webbrowser.open() ci-dessous garde volontairement 127.0.0.1 (le
-        # navigateur ouvert est celui de cette machine), mais quelqu'un qui a
-        # positionné BLINK_BIND pour l'accès LAN doit voir, sans avoir à
-        # relire la doc, qu'il vient d'ouvrir l'interface sans authentification
-        # au reste du réseau.
+        # open browser is this machine's), but someone who
+        # who set BLINK_BIND for LAN access must see, without having to
+        # reread the docs, that they just opened the UI with no authentication
+        # to the rest of the network.
         print(msg("attention_blink_bind", bind=bind, port=args.port))
     if Handler.trusted_host:
         print(msg("attention_trusted_host", hote=Handler.trusted_host))
-    # Le serveur de configuration initiale ne doit créer aucun travail de
-    # fond avant validation. Même la veille de version, sans rapport avec les
-    # clips, attend donc le vrai démarrage pour garder ce mode strictement
-    # limité au formulaire.
+    # The initial configuration server must create no background
+    # work before validation. Even version watching, unrelated to
+    # clips, therefore waits for the real start to keep this mode strictly
+    # limited to the form.
     if not args.initial_setup:
         veiller_sur_les_versions()
     if args.open_browser:
         threading.Timer(0.5, webbrowser.open, [url]).start()
 
     def surveiller_arret_demande():
-        # Un arrêt externe (tray, stop) pose ce drapeau plutôt que de tuer le
-        # processus directement : shutdown() laisse toute requête déjà en
-        # cours se terminer normalement (revue du 27/08, arrêt coopératif).
+        # An external stop (tray, stop) sets this flag rather than killing the
+        # process directly: shutdown() lets any request already in
+        # progress finish normally (review of 27/08, cooperative stop).
         while not runtime.arret_demande():
             time.sleep(1)
         server.shutdown()
