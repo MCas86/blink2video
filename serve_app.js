@@ -212,6 +212,7 @@ const I18N = {
     "ronde.demarrer": "Démarrer", "ronde.suivante": "Suivante ⏭", "ronde.arreter": "■ Arrêter",
     "ronde.pause": "Ronde en pause jusqu'à {debut}.",
     "ronde.aucune": "Aucune caméra en ligne dans la ronde.",
+    "ronde.waiting": "En attente de connexion",
     "watch.noimage": "Aucune image reçue. La caméra n'a pas répondu.",
     "watch.interrupted": "Le direct s'est interrompu. Vous pouvez le relancer.",
     "watch.refused": "Le flux a été refusé par le serveur.",
@@ -415,6 +416,7 @@ const I18N = {
     "ronde.demarrer": "Start", "ronde.suivante": "Next ⏭", "ronde.arreter": "■ Stop",
     "ronde.pause": "Rotation paused until {debut}.",
     "ronde.aucune": "No online camera in the rotation.",
+    "ronde.waiting": "Waiting for connection",
     "watch.noimage": "No image received. The camera did not respond.",
     "watch.interrupted": "The live view was interrupted. You can restart it.",
     "watch.refused": "The stream was refused by the server.",
@@ -2218,6 +2220,8 @@ const RONDE_REVERIFICATION_MS = 30 * 1000;
 const ronde = {
   active: false, pleinEcran: false, position: -1, tour: 0,
   cle: null, boite: null, ancre: null, image: false, minuterie: null,
+  // Visible dwell countdown (setInterval); cleared on next camera / stop.
+  decompte: null,
 };
 let reglagesRonde = lireReglagesRonde();
 
@@ -2284,6 +2288,55 @@ function afficherMessageRonde(texte) {
   if (texte) $("rondeTitre").textContent = t("ronde.titre");
 }
 
+function arreterDecompteRonde() {
+  if (ronde.decompte) clearInterval(ronde.decompte);
+  ronde.decompte = null;
+}
+
+// Title line: "Name · n/m" plus waiting (red) or "(seconds)" after first frame.
+// Prefer a <strong class="ronde-countdown"> when the DOM supports it; fall
+// back to plain textContent for the headless ronde test harness.
+function peindreTitreRonde(camera, total, attenteOuSecondes) {
+  const base = `${camera.name} · ${ronde.position + 1}/${total}`;
+  const el = $("rondeTitre");
+  if (!el) return;
+  const suffixe = attenteOuSecondes === "waiting"
+    ? t("ronde.waiting")
+    : `(${attenteOuSecondes})`;
+  const classe = attenteOuSecondes === "waiting"
+    ? "ronde-countdown waiting"
+    : "ronde-countdown";
+  if (typeof document !== "undefined" && document.createElement
+      && typeof el.replaceChildren === "function") {
+    const marqueur = document.createElement("strong");
+    marqueur.className = classe;
+    marqueur.textContent = suffixe;
+    el.replaceChildren(document.createTextNode(base + " "), marqueur);
+    return;
+  }
+  el.textContent = `${base} ${suffixe}`;
+}
+
+function demarrerDecompteRonde(secondesTotales) {
+  arreterDecompteRonde();
+  let restant = Math.max(0, Math.ceil(secondesTotales));
+  const camera = camerasRonde(reglagesRonde)[ronde.position];
+  const total = camerasRonde(reglagesRonde).length;
+  const peindre = () => {
+    if (!ronde.active || !camera) return;
+    peindreTitreRonde(camera, total, restant);
+  };
+  peindre();
+  ronde.decompte = setInterval(() => {
+    restant -= 1;
+    if (restant < 0) {
+      arreterDecompteRonde();
+      return;
+    }
+    peindre();
+  }, 1000);
+}
+
 function armerTourRonde(delaiMs) {
   clearTimeout(ronde.minuterie);
   ronde.minuterie = setTimeout(tourDeRonde, delaiMs);
@@ -2299,6 +2352,7 @@ function imageEnCoursRonde() {
 // au repos là où elle se trouve, avant son retour.
 function rendreCaseRonde() {
   const { cle, boite, ancre } = ronde;
+  arreterDecompteRonde();
   Object.assign(ronde, { cle: null, boite: null, ancre: null, image: false });
   if (!boite) return;
   stopWatch(cle);
@@ -2343,7 +2397,7 @@ function tourDeRonde() {
   $("rondeScene").appendChild(boite);
   Object.assign(ronde, { cle: camera.key, boite, ancre, image: false });
   afficherMessageRonde("");
-  $("rondeTitre").textContent = `${camera.name} · ${ronde.position + 1}/${cameras.length}`;
+  peindreTitreRonde(camera, cameras.length, "waiting");
   armerTourRonde(RONDE_ATTENTE_IMAGE_MS);
   watchLive(camera.key).finally(() => {
     // Direct fini sans la moindre image, échec déclaré : inutile d'attendre
@@ -2358,6 +2412,7 @@ function tourDeRonde() {
 function surImageRonde(event) {
   if (!ronde.active || ronde.image || !ronde.boite || !ronde.boite.contains(event.target)) return;
   ronde.image = true;
+  demarrerDecompteRonde(reglagesRonde.secondes);
   armerTourRonde(reglagesRonde.secondes * 1000);
 }
 
@@ -2382,6 +2437,7 @@ function arreterRonde() {
   ronde.active = false;
   ronde.tour++;
   clearTimeout(ronde.minuterie);
+  arreterDecompteRonde();
   rendreCaseRonde();
   $("ronde").hidden = true;
   if ((document.fullscreenElement || document.webkitFullscreenElement) === $("ronde")) {
