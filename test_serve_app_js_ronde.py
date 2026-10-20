@@ -30,6 +30,7 @@ FONCTIONS = [
     "normaliserReglagesRonde", "lireReglagesRonde", "enregistrerReglagesRonde",
     "dansPlageRonde", "camerasGrille", "camerasRonde", "afficherMessageRonde",
     "arreterDecompteRonde", "peindreTitreRonde", "demarrerDecompteRonde",
+    "peindreCompteurRonde",
     "armerTourRonde", "imageEnCoursRonde", "rendreCaseRonde", "tourDeRonde",
     "surImageRonde", "demarrerRonde", "arreterRonde", "surPleinEcranRonde",
 ]
@@ -65,7 +66,9 @@ const racine = new Noeud("document");
 const liste = racine.appendChild(new Noeud("list"));
 const elements = { view: { value: "live" } };
 for (const nom of ["ronde", "rondeTitre", "rondeMessage", "rondeScene"]) elements[nom] = new Noeud(nom);
+elements.count = new Noeud("count");
 racine.appendChild(elements.ronde);
+racine.appendChild(elements.count);
 elements.ronde.hidden = true;
 for (const nom of ["rondeTitre", "rondeMessage", "rondeScene"]) elements.ronde.appendChild(elements[nom]);
 const cartes = {};
@@ -200,7 +203,8 @@ class Enchainement(unittest.TestCase):
 demarrerRonde();
 sortie.plein = document.fullscreenElement === elements.ronde && !elements.ronde.hidden;
 sortie.a = {journal: journal.splice(0), dansLaScene: elements["live-cam-a"].parent === elements.rondeScene,
-            ancre: cartes["cam-a"].enfants[0].nom, attente: echeance(), titre: elements.rondeTitre.textContent};
+            ancre: cartes["cam-a"].enfants[0].nom, attente: echeance(),
+            titre: elements.rondeTitre.textContent, compteur: elements.count.textContent};
 surImageRonde({target: elements["live-cam-a"]});
 sortie.antenne = echeance();
 const minuterie = minuteries[0].id;
@@ -217,7 +221,8 @@ sortie.retour = journal.splice(0);
         self.assertTrue(sortie["plein"])
         self.assertEqual(sortie["a"], {"journal": ["watch:cam-a"], "dansLaScene": True,
                                        "ancre": "ancre", "attente": 60000,
-                                       "titre": "A · 1/2 ronde.waiting"})
+                                       "titre": "A · 1/2 ronde.waiting",
+                                       "compteur": "1/2"})
         self.assertEqual(sortie["antenne"], 30000)
         self.assertTrue(sortie["uneSeuleFois"])
         self.assertEqual(sortie["b"], {"journal": ["stop:cam-a", "watch:cam-b"],

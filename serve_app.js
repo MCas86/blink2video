@@ -2288,6 +2288,13 @@ function afficherMessageRonde(texte) {
   if (texte) $("rondeTitre").textContent = t("ronde.titre");
 }
 
+// Sticky header #count: current camera index / total in the ronde set.
+function peindreCompteurRonde(position, total) {
+  const el = $("count");
+  if (!el) return;
+  el.textContent = total > 0 ? `${position}/${total}` : "";
+}
+
 function arreterDecompteRonde() {
   if (ronde.decompte) clearInterval(ronde.decompte);
   ronde.decompte = null;
@@ -2369,6 +2376,7 @@ function tourDeRonde() {
   const cameras = camerasRonde(reglagesRonde);
   if (!cameras.length || !dansPlageRonde(reglagesRonde, new Date())) {
     rendreCaseRonde();
+    peindreCompteurRonde(0, cameras.length);
     afficherMessageRonde(cameras.length
       ? tf("ronde.pause", { debut: reglagesRonde.debut }) : t("ronde.aucune"));
     armerTourRonde(RONDE_REVERIFICATION_MS);
@@ -2398,6 +2406,7 @@ function tourDeRonde() {
   Object.assign(ronde, { cle: camera.key, boite, ancre, image: false });
   afficherMessageRonde("");
   peindreTitreRonde(camera, cameras.length, "waiting");
+  peindreCompteurRonde(ronde.position + 1, cameras.length);
   armerTourRonde(RONDE_ATTENTE_IMAGE_MS);
   watchLive(camera.key).finally(() => {
     // Direct fini sans la moindre image, échec déclaré : inutile d'attendre
