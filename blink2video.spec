@@ -113,7 +113,8 @@ analysis = Analysis(
     # moment de l'appel, donc invisibles à l'analyse statique. Les énumérer ici
     # à la main créerait une liste parallèle de plus, et c'est exactement ce
     # qui a fait échouer la CI après le renommage de « review » en « serve ».
-    hiddenimports=_modules(RUNTIME),
+    # access_control is imported by serve.py for Cloudflare / camera allowlists.
+    hiddenimports=_modules(RUNTIME) + ["access_control"],
     hookspath=[],
     runtime_hooks=[],
     # imageio_ffmpeg est écarté : son seul intérêt est de fournir un binaire,

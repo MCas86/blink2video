@@ -92,6 +92,11 @@
   #phase { color:var(--dim); font-size:13px; white-space:nowrap; }
   h2 { display:flex; align-items:center; gap:12px; }
   h2 .act { margin-left:auto; font-size:13px; }
+  body.role-guest .admin-only { display:none !important; }
+  .accessUsers { display:flex; flex-direction:column; gap:10px; margin-top:8px; }
+  .accessUser { border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+  .accessUser header { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; }
+  .accessUser .cams { display:flex; flex-wrap:wrap; gap:6px 12px; }
   .live { position:relative; aspect-ratio:16/9; background:#000; display:flex;
           align-items:center; justify-content:center; }
   /* Sans ce couple de règles, .live garde son 16/9 fixe en plein écran et se

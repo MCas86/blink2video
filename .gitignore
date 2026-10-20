@@ -11,6 +11,8 @@ blink_home.txt
 blink_langue.txt
 blink_webhook_token.txt
 blink_suppression_auto.json
+# Cloudflare Access allowlists (emails + camera grants).
+blink_access.json
 .blink_raccourci_cree
 .blink_configuration_initiale_effectuee
 

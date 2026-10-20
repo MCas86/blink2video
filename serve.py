@@ -153,6 +153,7 @@ def msg(cle: str, **valeurs) -> str:
 
 runtime.bootstrap()
 
+import access_control
 import autostart
 import blink_auth
 import blink_engine
@@ -2043,6 +2044,89 @@ class Handler(serveweb.Handler):
         valeurs = parse_qs(urlparse(self.path).query).get("token") or []
         return any(value == TOKEN for value in valeurs)
 
+    def handle_one_request(self) -> None:
+        # HTTP/1.1 keep-alive réutilise ce Handler pour plusieurs requêtes.
+        # Cloudflare Tunnel aussi. Un profil Access laissé sur `self`
+        # sans purge ferait fuiter l'identité d'un utilisateur vers le suivant.
+        self._identite_acces_cache = None
+        self._identite_acces_cle = None
+        super().handle_one_request()
+
+    def identite_acces(self) -> dict:
+        """Profil Cloudflare Access + allowlist pour cette requête seule.
+
+        Mis en cache dans la requête (plusieurs routes l'appellent),
+        clé par JWT Access pour qu'un mélange keep-alive ne renvoie pas
+        le profil de l'appelant précédent.
+        """
+        jeton = access_control.jeton_acces_requete(self.headers)
+        cle = jeton or f"local:{(self.headers.get('Host') or '').strip().lower()}"
+        if (getattr(self, "_identite_acces_cache", None) is not None
+                and getattr(self, "_identite_acces_cle", None) == cle):
+            return self._identite_acces_cache
+        profil = access_control.resoudre_identite(self.headers)
+        self._identite_acces_cache = profil
+        self._identite_acces_cle = cle
+        return profil
+
+    def _refuser_acces(self, code: int = 403, message: str = "Forbidden") -> None:
+        try:
+            self.send_json({"error": message, "role": self.identite_acces().get("role")},
+                           code)
+        except Exception:
+            self.send_error(code)
+
+    def exiger_acces_authentifie(self) -> bool:
+        """False : réponse déjà envoyée. True : identité utilisable.
+
+        Passer une politique Cloudflare Access (JWT valide) suffit pour
+        entrer en invite/admin ; les allowlists caméra sont ensuite
+        appliquées route par route.
+        """
+        profil = self.identite_acces()
+        if profil.get("role") == "unauthenticated":
+            self._refuser_acces(
+                401, profil.get("error") or "Cloudflare Access login required.")
+            return False
+        return True
+
+    def exiger_admin(self) -> bool:
+        if not self.exiger_acces_authentifie():
+            return False
+        if self.identite_acces().get("role") != "admin":
+            self._refuser_acces(403, "Admin only.")
+            return False
+        return True
+
+    def exiger_camera(self, *identifiants: str | None) -> bool:
+        if not self.exiger_acces_authentifie():
+            return False
+        email = self.identite_acces().get("email") or ""
+        if access_control.camera_autorisee(email, *identifiants):
+            return True
+        self._refuser_acces(403, "Camera not allowed for this user.")
+        return False
+
+    def camera_depuis_clip_identity(self, identity: str) -> tuple[str | None, str | None]:
+        """Renvoie (nom, clé) d'une identité de clip, si connue."""
+        entry = read_entries(self.paths).get(identity)
+        if not isinstance(entry, dict):
+            return None, None
+        nom = str(entry.get("camera") or "").strip() or None
+        cle = blink_registre.camera_setting_key_from_entry(entry)
+        return nom, cle
+
+    def media_autorise(self, route: str) -> bool:
+        kind, _, relative = route.partition("/")
+        if not relative:
+            return False
+        email = self.identite_acces().get("email") or ""
+        if kind == "clip":
+            nom, cle = self.camera_depuis_clip_identity(relative)
+            return access_control.camera_autorisee(email, nom, cle)
+        camera = relative.split("/", 1)[0]
+        return access_control.camera_autorisee(email, camera)
+
     def end_headers(self) -> None:
         # 'none' par défaut : même une page de ce site ne doit pas pouvoir
         # s'afficher dans un <iframe>, dernier rempart contre le
@@ -3632,18 +3716,39 @@ class Handler(serveweb.Handler):
             self.wfile.write(corps)
             return
 
+        # Le jeton CSRF ne suffit plus dès que Cloudflare Access est actif :
+        # l'identité (e-mail → allowlist) doit résoudre pour chaque API/média.
+        if not self.exiger_acces_authentifie():
+            return
+
+        if route == "/api/me":
+            self.send_json(self.identite_acces())
+            return
+
+        if route == "/api/access":
+            if not self.exiger_admin():
+                return
+            self.send_json(access_control.lire_acces())
+            return
+
         if route.startswith("/camthumb/"):
             # Pas de contrôle du nom ici : il coûterait un rafraîchissement
             # complet du compte à chaque vignette. C'est find_camera, plus bas,
             # qui refuse un nom inconnu, et safe_file qui assainit le nom de
             # fichier du cache.
+            nom = unquote(route[len("/camthumb/"):])
+            if not self.exiger_camera(nom):
+                return
             refresh = parse_qs(urlparse(self.path).query).get("refresh", [""])[0] == "1"
-            self.send_camera_thumb(unquote(route[len("/camthumb/"):]), refresh=refresh)
+            self.send_camera_thumb(nom, refresh=refresh)
             return
 
         if route.startswith("/live-mse/"):
+            nom = unquote(route[len("/live-mse/"):])
+            if not self.exiger_camera(nom):
+                return
             session_id = parse_qs(urlparse(self.path).query).get("session_id", [""])[0]
-            self.send_live_mse(unquote(route[len("/live-mse/"):]), session_id)
+            self.send_live_mse(nom, session_id)
             return
 
         if route == "/api/live-error":
@@ -3652,7 +3757,9 @@ class Handler(serveweb.Handler):
 
         if route == "/api/system":
             try:
-                self.send_json(self.system_state())
+                etat = self.system_state()
+                self.send_json(access_control.filtrer_system_state(
+                    etat, self.identite_acces().get("email") or ""))
             except RuntimeError as error:
                 self.send_json({"error": str(error)}, 503)
             return
@@ -3662,21 +3769,29 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/videos":
-            self.send_json(collect_videos(self.paths, self.ffmpeg))
+            self.send_json(access_control.filtrer_videos(
+                collect_videos(self.paths, self.ffmpeg),
+                self.identite_acces().get("email") or ""))
             return
 
         if route == "/api/status":
             self.send_json({
                 "authenticated": (runtime.app_dir() / "blink_auth.json").is_file(),
                 "initial_setup": self.initial_setup,
+                "role": self.identite_acces().get("role"),
+                "email": self.identite_acces().get("email"),
             })
             return
 
         if route == "/api/autostart":
+            if not self.exiger_admin():
+                return
             self.send_json({"actif": autostart.est_installe()})
             return
 
         if route == "/api/choisir-dossier":
+            if not self.exiger_admin():
+                return
             # Le navigateur ne peut pas rendre un chemin absolu (File System
             # Access API : juste un handle, par conception, pour la vie
             # privée du web). Serveur et page étant sur la même machine ici
@@ -3704,6 +3819,8 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/reglages":
+            if not self.exiger_admin():
+                return
             self.send_json(
                 {**runtime.lire_reglages(), "storage_dir": runtime.lire_dossier_stockage(),
                  "initial_setup": self.initial_setup,
@@ -3711,6 +3828,8 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/sourdine":
+            if not self.exiger_admin():
+                return
             # Les caméras connues viennent du registre des clips ET du
             # dernier état de watch.py (fichier local, aucun appel réseau à
             # Blink ici) : une caméra durablement hors de portée peut n'avoir
@@ -3729,6 +3848,8 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/suppression-auto":
+            if not self.exiger_admin():
+                return
             # Les caméras proposées sont celles de l'activité en cours
             # (dernier état de watch.py), pas l'historique cumulé du
             # registre de téléchargement : une caméra dont la clé interne a
@@ -3786,14 +3907,18 @@ class Handler(serveweb.Handler):
                 else:
                     depuis = maintenant - dt.timedelta(hours=RANGE_PRESETS_HOURS["month"])
             try:
-                self.send_json(collect(self.paths, self.timezone, self.ffmpeg,
-                                       depuis, jusqua))
+                data = collect(self.paths, self.timezone, self.ffmpeg, depuis, jusqua)
+                self.send_json(access_control.filtrer_clips(
+                    data, self.identite_acces().get("email") or ""))
             except RuntimeError as error:
                 self.send_json({"error": str(error)}, 500)
             return
 
         if route.startswith("/thumb/"):
             target = unquote(route[len("/thumb/"):])
+            if not self.media_autorise(target):
+                self._refuser_acces(403, "Media not allowed for this user.")
+                return
             source = self.resolve_media(target)
             if source is None:
                 self.send_error(404)
@@ -3802,7 +3927,11 @@ class Handler(serveweb.Handler):
             return
 
         if route.startswith("/media/"):
-            path = self.resolve_media(unquote(route[len("/media/"):]))
+            target = unquote(route[len("/media/"):])
+            if not self.media_autorise(target):
+                self._refuser_acces(403, "Media not allowed for this user.")
+                return
+            path = self.resolve_media(target)
             if path is None:
                 self.send_error(404)
                 return
@@ -3810,7 +3939,11 @@ class Handler(serveweb.Handler):
             return
 
         if route.startswith("/snapshot/"):
-            path = self.resolve_snapshot(unquote(route[len("/snapshot/"):]))
+            relatif = unquote(route[len("/snapshot/"):])
+            camera = relatif.split("/", 1)[0] if relatif else ""
+            if not self.exiger_camera(camera):
+                return
+            path = self.resolve_snapshot(relatif)
             if path is None:
                 self.send_error(404)
                 return
@@ -3818,7 +3951,11 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/snapshots":
-            self.send_json({"snapshots": self.lister_snapshots()})
+            self.send_json({
+                "snapshots": access_control.filtrer_snapshots(
+                    self.lister_snapshots(),
+                    self.identite_acces().get("email") or ""),
+            })
             return
 
         if route == "/api/passages":
@@ -3842,6 +3979,8 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/refresh":
+            if not self.exiger_admin():
+                return
             if self.initial_setup:
                 # Défense côté serveur, pas seulement dialogue modal : même
                 # une requête manuelle ne peut rapatrier un clip avant la
@@ -4478,8 +4617,14 @@ class Handler(serveweb.Handler):
             self.send_json({"error": "corps JSON : objet attendu"}, 400)
             return
 
+        if not self.exiger_acces_authentifie():
+            return
+
         if route.startswith("/live-webrtc/"):
-            self.send_offer_webrtc(unquote(route[len("/live-webrtc/"):]), payload)
+            nom = unquote(route[len("/live-webrtc/"):])
+            if not self.exiger_camera(nom):
+                return
+            self.send_offer_webrtc(nom, payload)
             return
 
         if route.startswith("/api/direct-signal/"):
@@ -4493,6 +4638,8 @@ class Handler(serveweb.Handler):
             # signal perdu ne doit jamais faire echouer le direct lui-meme,
             # seul direct.log en patit.
             nom = unquote(route[len("/api/direct-signal/"):])
+            if not self.exiger_camera(nom):
+                return
             evenement = str(payload.get("evenement") or "signal").strip()
             detail = str(payload.get("detail") or "").strip()
             suffixe = f" : {detail}" if detail else ""
@@ -4502,7 +4649,18 @@ class Handler(serveweb.Handler):
             self.send_json({"ok": True})
             return
 
+        if route == "/api/access":
+            if not self.exiger_admin():
+                return
+            try:
+                self.send_json(access_control.ecrire_acces(payload))
+            except ValueError as error:
+                self.send_json({"error": str(error)}, 400)
+            return
+
         if route == "/api/login":
+            if not self.exiger_admin():
+                return
             username = str(payload.get("username", "")).strip()
             password = str(payload.get("password", ""))
             if not username or not password:
@@ -4513,6 +4671,8 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/2fa":
+            if not self.exiger_admin():
+                return
             code = str(payload.get("code", "")).strip()
             if not code:
                 self.send_json({"status": "error", "message": "Code requis."})
@@ -4521,21 +4681,27 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/arm":
+            if not self.exiger_admin():
+                return
             name = str(payload.get("name", "")).strip()
             armed = bool(payload.get("armed"))
             scope = str(payload.get("scope", "camera"))
             try:
                 self.set_armed(scope, name, armed)
-                self.send_json(self.system_state())
+                self.send_json(access_control.filtrer_system_state(
+                    self.system_state(), self.identite_acces().get("email") or ""))
             except RuntimeError as error:
                 self.send_json({"error": str(error)}, 503)
             return
 
         if route == "/api/reveiller":
+            if not self.exiger_admin():
+                return
             name = str(payload.get("name", "")).strip()
             try:
                 self.reveiller_camera(name)
-                self.send_json(self.system_state())
+                self.send_json(access_control.filtrer_system_state(
+                    self.system_state(), self.identite_acces().get("email") or ""))
             except blink_engine.BusyError as error:
                 self.send_json({"error": str(error)}, 409)
             except Exception as error:
@@ -4547,6 +4713,8 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/snapshot":
+            if not self.exiger_admin():
+                return
             name = str(payload.get("name", "")).strip()
             try:
                 chemin = self.declencher_snapshot(name)
@@ -4559,6 +4727,8 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/snapshot-supprimer":
+            if not self.exiger_admin():
+                return
             relatif = str(payload.get("fichier", ""))
             chemin = self.resolve_snapshot(relatif)
             if chemin is None:
@@ -4569,10 +4739,14 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/webhook-regenerer":
+            if not self.exiger_admin():
+                return
             self.send_json({"token": runtime.regenerer_jeton_webhook()})
             return
 
         if route == "/api/direct-enregistrement":
+            if not self.exiger_admin():
+                return
             session_id = str(payload.get("session_id") or "")
             with DIRECT_WEBRTC_SESSION_LOCK:
                 holder = DIRECT_WEBRTC_SESSION.get("session")
@@ -4608,6 +4782,8 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/maj/verifier":
+            if not self.exiger_admin():
+                return
             # Bouton « Vérifier les mises à jour » des réglages : GitHub tout
             # de suite, sans attendre le fil de fond (une heure au plus, voir
             # maj.FRAICHEUR). « ok » faux : GitHub n'a pas répondu, le cache
@@ -4617,6 +4793,8 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/update":
+            if not self.exiger_admin():
+                return
             neuve = maj.disponible(reseau=False)
             if not neuve:
                 self.send_json({"error": "Aucune version plus récente."}, 409)
@@ -4637,9 +4815,13 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/appliquer-selection":
+            if not self.exiger_admin():
+                return
             return self._post_appliquer_selection(payload)
 
         if route == "/api/autostart":
+            if not self.exiger_admin():
+                return
             code = autostart.appliquer("on" if payload.get("actif") else "off")
             if code != 0:
                 self.send_json(
@@ -4652,21 +4834,31 @@ class Handler(serveweb.Handler):
             return
 
         if route == "/api/reglages":
+            if not self.exiger_admin():
+                return
             return self._post_reglages(payload)
 
         if route == "/api/sourdine":
+            if not self.exiger_admin():
+                return
             return self._post_sourdine(payload)
 
         if route == "/api/suppression-auto":
+            if not self.exiger_admin():
+                return
             return self._post_suppression_auto(payload)
 
         if route == "/api/stop":
+            if not self.exiger_admin():
+                return
             # --sans-relance pour que « restart » s'arrête sans revenir,
             # exactement ce qu'un bouton Stop doit faire.
             self.repondre_puis_redemarrer(["restart", "--sans-relance"])
             return
 
         if route == "/api/redemarrer":
+            if not self.exiger_admin():
+                return
             # Même appel que la fin de _post_reglages(), sans passer par la
             # validation ni l'enregistrement : un redémarrage tout court,
             # pour reprendre un code fraîchement modifié ou sortir d'un état
@@ -4918,6 +5110,29 @@ __CSS__
     </fieldset>
   </div>
   <div id="panelAcces" class="panelReglages" hidden>
+    <fieldset>
+      <legend data-i18n="reglages.sharedAccess">Accès partagé aux caméras</legend>
+      <p class="sub tiny" data-i18n="reglages.sharedAccess.hint">
+        Les amis s'authentifient via Cloudflare Access (leur e-mail). Vous gardez
+        la connexion Blink. Assignez les caméras ci-dessous. Laissez les champs
+        Cloudflare vides pour rester en mode admin local uniquement.
+      </p>
+      <div class="champDossier">
+        <label for="cfAud" data-i18n="reglages.cfAud">AUD de l'application Access</label>
+        <input type="text" id="cfAud" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+      </div>
+      <div class="champDossier">
+        <label for="accessAdmins" data-i18n="reglages.accessAdmins">E-mails administrateurs (séparés par des virgules)</label>
+        <input type="text" id="accessAdmins" placeholder="you@example.com">
+      </div>
+      <div id="accessUsersListe" class="accessUsers"></div>
+      <div class="row" style="gap:8px;margin-top:8px">
+        <input type="email" id="accessNewEmail" placeholder="friend@example.com" style="flex:1">
+        <button type="button" id="accessAddUser" data-i18n="reglages.accessAdd">Ajouter un ami</button>
+        <button type="button" id="accessSave" class="primary" data-i18n="reglages.accessSave">Enregistrer l'accès</button>
+      </div>
+      <p id="accessSaveStatus" class="sub tiny" hidden></p>
+    </fieldset>
     <fieldset>
       <legend data-i18n="reglages.accesDistant" data-i18n-title="reglages.accesDistant.hint"
               title="Pour joindre cette instance directement depuis un VPN maillé (Tailscale, WireGuard), sans reverse proxy devant.">Accès distant par VPN maillé</legend>

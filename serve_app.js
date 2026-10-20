@@ -67,6 +67,20 @@ const $ = (id) => document.getElementById(id);
 // ordinaire servie par serve.py, pas de webview packagée à contourner ici).
 const I18N = {
   fr: {
+    "reglages.sharedAccess": "Accès partagé aux caméras",
+    "reglages.sharedAccess.hint": "Les amis s'authentifient via Cloudflare Access (leur e-mail). Vous gardez la connexion Blink. Assignez les caméras ci-dessous. Laissez l'AUD vide pour un mode admin local uniquement.",
+    "reglages.cfAud": "AUD de l'application Access",
+    "reglages.accessAdmins": "E-mails administrateurs (séparés par des virgules)",
+    "reglages.accessAdd": "Ajouter un ami",
+    "reglages.accessSave": "Enregistrer l'accès",
+    "reglages.accessSaved": "Réglages d'accès enregistrés.",
+    "reglages.accessSaveFailed": "Impossible d'enregistrer les réglages d'accès.",
+    "reglages.accessRemove": "Retirer",
+    "reglages.accessNoCams": "Aucune caméra chargée. Ouvrez Directs Vues une fois, puis rouvrez Réglages.",
+    "reglages.accessGuestHint": "Lecture seule : live, clips et photos pour les caméras cochées.",
+    "access.denied": "Connexion Cloudflare Access requise.",
+    "access.pending": "Connecté via Cloudflare Access en tant que {email}. Aucune caméra assignée — demandez à l'admin dans Réglages → Accès partagé.",
+    "access.whoami": "Connecté en tant que {email}",
     "view.live": "Directs Vues", "view.direct": "Directs Enregistrements",
     "view.clips": "Détections Enregistrements", "view.daily": "Détections Journalières",
     "view.weekly": "Détections Hebdomadaires", "view.monthly": "Détections Mensuelles",
@@ -270,6 +284,20 @@ const I18N = {
     "refresh.disconnected": "\\nConnexion interrompue.\\n",
   },
   en: {
+    "reglages.sharedAccess": "Shared camera access",
+    "reglages.sharedAccess.hint": "Friends authenticate with Cloudflare Access (their email). You keep the Blink login. Assign cameras below. Leave AUD empty for local-only admin on this machine.",
+    "reglages.cfAud": "Access application AUD",
+    "reglages.accessAdmins": "Admin emails (comma-separated)",
+    "reglages.accessAdd": "Add a friend",
+    "reglages.accessSave": "Save access",
+    "reglages.accessSaved": "Access settings saved.",
+    "reglages.accessSaveFailed": "Could not save access settings.",
+    "reglages.accessRemove": "Remove",
+    "reglages.accessNoCams": "No cameras loaded. Open Live Views once, then reopen Settings.",
+    "reglages.accessGuestHint": "Read-only: live, clips and pictures for checked cameras.",
+    "access.denied": "Cloudflare Access login required.",
+    "access.pending": "Signed in via Cloudflare Access as {email}. No cameras assigned yet — ask the admin to grant cameras in Settings → Shared camera access.",
+    "access.whoami": "Connected as {email}",
     "view.live": "Live Views", "view.direct": "Live Recordings",
     "view.clips": "Detection Recordings", "view.daily": "Detection Daily",
     "view.weekly": "Detection Weekly", "view.monthly": "Detection Monthly",
@@ -534,6 +562,7 @@ function setLang(code, persist) {
   if (typeof chargerSourdine === "function" && $("reglages")?.open) chargerSourdine();
   if (typeof chargerCamerasMasquees === "function" && $("reglages")?.open) chargerCamerasMasquees();
   if (typeof chargerSuppressionAuto === "function" && $("reglages")?.open) chargerSuppressionAuto();
+  if (typeof appliquerRoleAcces === "function") appliquerRoleAcces();
   if (persist) localStorage.setItem("lang", _lang);
   // Envoyé à chaque appel, pas seulement un choix explicite (persist) :
   // le menu du systray (tray.py) lit cette valeur pour s'afficher dans la
@@ -543,6 +572,71 @@ function setLang(code, persist) {
   // échouer l'affichage.
   fetch("/api/lang", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ lang: _lang }) }).catch(() => {});
+}
+
+
+// Accès par utilisateur (/api/me). Mode local sans Cloudflare → admin.
+let ACCES = { email: "", role: "admin", cameras: null, permissions: ["*"] };
+function estAdmin() { return ACCES.role === "admin"; }
+function estConnecteAcces() {
+  return ACCES.role === "admin" || ACCES.role === "guest";
+}
+
+async function chargerAcces() {
+  try {
+    ACCES = await lireJSON(await fetch("/api/me"));
+  } catch (erreur) {
+    ACCES = { email: "", role: "admin", cameras: null, permissions: ["*"] };
+  }
+  appliquerRoleAcces();
+}
+
+function appliquerRoleAcces() {
+  document.body.classList.toggle("role-guest", !estAdmin());
+  const reglages = $("reglagesButton");
+  // Les invités ne voient jamais Réglages — allowlists réservées à l'admin.
+  if (reglages) reglages.hidden = !estAdmin();
+  const refresh = $("refresh");
+  if (refresh) refresh.hidden = !estAdmin();
+  const apply = $("applyButton");
+  if (apply && !estAdmin()) apply.hidden = true;
+  let who = $("accessWhoami");
+  if (!who) {
+    who = document.createElement("span");
+    who.id = "accessWhoami";
+    who.className = "sub tiny";
+    const header = document.querySelector("header");
+    if (header) header.append(who);
+  }
+  if (ACCES.email) {
+    who.textContent = tf("access.whoami", {
+      email: ACCES.email + (estAdmin() ? "" : ` (${ACCES.role || "guest"})`),
+    });
+    who.hidden = false;
+  } else {
+    who.hidden = true;
+  }
+  if (ACCES.role === "unauthenticated") {
+    $("list").innerHTML = `<p class="empty">${h(ACCES.error || t("access.denied"))}</p>`;
+    $("count").textContent = "";
+    return;
+  }
+  if (ACCES.role === "guest" && ACCES.pending_allowlist) {
+    if (!$("accessPendingHint")) {
+      const hint = document.createElement("p");
+      hint.id = "accessPendingHint";
+      hint.className = "empty";
+      hint.textContent = tf("access.pending", { email: ACCES.email || "" });
+      const list = $("list");
+      if (list && list.parentNode) list.parentNode.insertBefore(hint, list);
+    } else {
+      $("accessPendingHint").textContent = tf("access.pending", { email: ACCES.email || "" });
+      $("accessPendingHint").hidden = false;
+    }
+  } else {
+    const hint = $("accessPendingHint");
+    if (hint) hint.hidden = true;
+  }
 }
 
 // ── Préférences d'affichage propres à ce navigateur (issue #40) ───────────
@@ -1101,11 +1195,11 @@ function renderLive() {
       <span class="sub tiny">${h([s.module,
         s.module_firmware ? tf("camera.firmware", { v: s.module_firmware }) : null,
         s.module_serial].filter(Boolean).join(" · "))}</span>
-      <button class="act ${s.armed ? "in" : "out"}"
+      ${estAdmin() ? `<button class="act admin-only ${s.armed ? "in" : "out"}"
               data-action="arm" data-scope="system" data-name="${h(s.key)}"
               data-armed="${!s.armed}">
         ${h(s.armed ? t("system.armed") : t("system.disarmed"))}
-      </button>
+      </button>` : ""}
     </h2>
     ${camerasVisibles(s).length
       ? `<div class="grid wide">${camerasVisibles(s).map((c) => cameraCard(c, s.armed)).join("")}</div>`
@@ -1177,20 +1271,20 @@ function cameraCard(c, systemArmed) {
           c.clips_source ? tf("camera.clipssource", { v: c.clips_source }) : t("camera.noclips"),
         ].filter(Boolean).join(" · "))}</div>
       </div>
-      <button class="act ${c.armed ? "in" : "out"}"
+      ${estAdmin() ? `<button class="act admin-only ${c.armed ? "in" : "out"}"
               data-action="arm" data-scope="camera" data-name="${h(c.key)}"
               data-armed="${!c.armed}">
         ${h(c.armed ? t("camera.detection.on") : t("camera.detection.off"))}
       </button>
-      <button class="act grouped" title="${h(t("camera.wake.title"))}"
+      <button class="act grouped admin-only" title="${h(t("camera.wake.title"))}"
               data-action="wake" data-name="${h(c.key)}">${h(t("camera.wake"))}</button>
-      <button class="act grouped" title="${h(t("camera.snapshot.title"))}"
+      <button class="act grouped admin-only" title="${h(t("camera.snapshot.title"))}"
               data-action="snapshot" data-name="${h(c.key)}">${h(t("camera.snapshot"))}</button>
-      <label class="act grouped continu"
+      <label class="act grouped continu admin-only"
              title="${h(t(c.battery ? "camera.continuous.title.battery" : "camera.continuous.title"))}">
         <input type="checkbox" data-action="continu" data-name="${h(c.key)}"${directContinu(c.key) ? " checked" : ""}>
         ${h(t("camera.continuous"))}
-      </label>
+      </label>` : ""}
     </div>
   </div>`;
 }
@@ -2466,7 +2560,8 @@ document.addEventListener("keydown", (event) => {
 // ENREGISTREMENT_DIRECT_ACTIF au début de chaque nouveau direct (serve.py),
 // un bouton neuf ne peut donc jamais démarrer déjà actif.
 function recordBtn(name) {
-  return `<button class="watch record" data-action="toggle-record" data-name="${h(name)}"
+  if (!estAdmin()) return "";
+  return `<button class="watch record admin-only" data-action="toggle-record" data-name="${h(name)}"
                    title="${h(t("live.record.title"))}">${h(t("live.record.start"))}</button>`;
 }
 
@@ -2806,8 +2901,8 @@ function pictureCard(s) {
     <div class="meta">
       <div class="time">${h(dateSnapshot(s.horodatage))}</div>
       <a class="act" href="${h(media)}" download>${h(t("videos.download"))}</a>
-      <button class="act grouped" title="${h(t("pictures.delete.title"))}"
-              data-action="delete-snapshot" data-fichier="${h(s.fichier)}">${h(t("pictures.delete"))}</button>
+      ${estAdmin() ? `<button class="act grouped admin-only" title="${h(t("pictures.delete.title"))}"
+              data-action="delete-snapshot" data-fichier="${h(s.fichier)}">${h(t("pictures.delete"))}</button>` : ""}
     </div>
   </div>`;
 }
@@ -2931,15 +3026,15 @@ function card(c) {
          data-src="${h(avecJeton(`/media/${c.kind}/${encodeURI(c.identity)}`))}"></div>
     <div class="meta">
       <div class="time line">${h(ligne)}</div>
-      <label class="act" title="${h(t("clip.discard.title"))}">
+      ${estAdmin() ? `<label class="act admin-only" title="${h(t("clip.discard.title"))}">
         <input type="checkbox" ${c.excludedStaged ? "checked" : ""}
                data-action="stage-exclusion" data-identity="${h(c.identity)}">
         ${h(t("clip.discard"))}
-      </label>
-      ${c.sourceDeleted
+      </label>` : ""}
+      ${!estAdmin() || c.sourceDeleted
         || (c.kind === "clip" && (data.suppressionAuto || []).includes(c.cameraKey))
         ? "" : `
-      <label class="act" title="${h(t("clip.deleteSource.title"))}">
+      <label class="act admin-only" title="${h(t("clip.deleteSource.title"))}">
         <input type="checkbox" ${c.supprimerStaged ? "checked" : ""}
                data-action="stage-suppression" data-identity="${h(c.identity)}">
         ${h(t("clip.deleteSource"))}
@@ -3533,6 +3628,7 @@ function configurerDialogueReglages(configurationInitiale) {
 }
 
 async function ouvrirReglages(configurationInitiale = false) {
+  if (!estAdmin()) return;
   try {
     const reglages = await lireJSON(await fetch("/api/reglages"));
     configurationInitiale = configurationInitiale || !!reglages.initial_setup;
@@ -3544,10 +3640,171 @@ async function ouvrirReglages(configurationInitiale = false) {
   $("barrePagination").checked = barrePaginationHaute;
   chargerSourdine();
   chargerSuppressionAuto();
+  await chargerFormulaireAcces();
   $("reglages").showModal();
+}
+
+let _accesEdition = null;
+
+function camerasConnuesPourAcces() {
+  const noms = new Map();
+  if (system && system.systems) {
+    for (const s of system.systems) {
+      for (const c of s.cameras || []) {
+        const label = c.name || c.key;
+        const cle = c.key || c.name;
+        if (cle) noms.set(cle, label);
+      }
+    }
+  }
+  return [...noms.entries()].sort((a, b) => comparerNoms(a[1], b[1]));
+}
+
+async function chargerFormulaireAcces() {
+  const liste = $("accessUsersListe");
+  if (!liste) return;
+  try {
+    const reponse = await fetch("/api/access");
+    _accesEdition = await lireJSON(reponse);
+    if (_accesEdition.error || reponse.status >= 400) {
+      throw new Error(_accesEdition.error || "forbidden");
+    }
+  } catch (erreur) {
+    liste.textContent = estAdmin()
+      ? t("reglages.accessSaveFailed")
+      : tf("access.pending", { email: ACCES.email || "" });
+    return;
+  }
+  // Domaine d'équipe conservé dans blink_access.json (pas édité dans l'UI).
+  if ($("cfAud")) $("cfAud").value = (_accesEdition.cloudflare || {}).aud || "";
+  $("accessAdmins").value = (_accesEdition.admin_emails || []).join(", ");
+  peindreListeAccesUsers();
+}
+
+function peindreListeAccesUsers() {
+  const liste = $("accessUsersListe");
+  if (!liste || !_accesEdition) return;
+  const cameras = camerasConnuesPourAcces();
+  liste.replaceChildren();
+  if (!(_accesEdition.users || []).length) {
+    const p = document.createElement("p");
+    p.className = "sub tiny";
+    p.textContent = t("reglages.accessGuestHint");
+    liste.append(p);
+  }
+  for (const user of _accesEdition.users || []) {
+    const bloc = document.createElement("div");
+    bloc.className = "accessUser";
+    const head = document.createElement("header");
+    const titre = document.createElement("strong");
+    titre.textContent = user.email;
+    const retirer = document.createElement("button");
+    retirer.type = "button";
+    retirer.textContent = t("reglages.accessRemove");
+    retirer.onclick = () => {
+      _accesEdition.users = _accesEdition.users.filter((u) => u.email !== user.email);
+      peindreListeAccesUsers();
+    };
+    head.append(titre, retirer);
+    const cams = document.createElement("div");
+    cams.className = "cams";
+    if (!cameras.length) {
+      cams.textContent = t("reglages.accessNoCams");
+    } else {
+      for (const [cle, label] of cameras) {
+        const lab = document.createElement("label");
+        const case_ = document.createElement("input");
+        case_.type = "checkbox";
+        const allowed = new Set(user.cameras || []);
+        const labelLc = String(label).toLowerCase();
+        case_.checked = allowed.has(cle) || allowed.has(label)
+          || [...allowed].some((v) => String(v).toLowerCase() === labelLc
+            || String(v) === cle);
+        case_.onchange = () => {
+          const set = new Set(user.cameras || []);
+          if (case_.checked) {
+            set.add(cle);
+            set.add(label);
+          } else {
+            set.delete(cle);
+            set.delete(label);
+          }
+          user.cameras = [...set];
+        };
+        lab.append(case_, document.createTextNode(" " + label));
+        cams.append(lab);
+      }
+    }
+    bloc.append(head, cams);
+    liste.append(bloc);
+  }
+}
+
+async function sauverFormulaireAcces() {
+  if (!_accesEdition) return;
+  const status = $("accessSaveStatus");
+  const admins = ($("accessAdmins").value || "").split(",")
+    .map((e) => e.trim()).filter(Boolean);
+  const payload = {
+    admin_emails: admins.length ? admins : [],
+    cloudflare: {
+      team_domain: (_accesEdition.cloudflare || {}).team_domain || "",
+      aud: ($("cfAud") && $("cfAud").value || "").trim()
+        || (_accesEdition.cloudflare || {}).aud || "",
+    },
+    users: (_accesEdition.users || []).map((u) => ({
+      email: u.email,
+      cameras: u.cameras || [],
+      permissions: u.permissions || ["view_live", "view_clips", "view_pictures"],
+    })),
+  };
+  try {
+    _accesEdition = await lireJSON(await fetch("/api/access", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }));
+    if (_accesEdition.error) throw new Error(_accesEdition.error);
+    peindreListeAccesUsers();
+    if ($("cfAud")) $("cfAud").value = (_accesEdition.cloudflare || {}).aud || "";
+    $("accessAdmins").value = (_accesEdition.admin_emails || []).join(", ");
+    if (status) {
+      status.hidden = false;
+      status.textContent = t("reglages.accessSaved");
+    }
+  } catch (erreur) {
+    if (status) {
+      status.hidden = false;
+      status.textContent = t("reglages.accessSaveFailed");
+    }
+  }
 }
 $("reglagesButton").onclick = () => ouvrirReglages(false);
 $("reglagesClose").onclick = () => $("reglages").close();
+if ($("accessAddUser")) {
+  $("accessAddUser").onclick = () => {
+    if (!_accesEdition) return;
+    const email = ($("accessNewEmail").value || "").trim().toLowerCase();
+    if (!email) return;
+    if ((_accesEdition.users || []).some((u) => u.email === email)) {
+      $("accessNewEmail").value = "";
+      return;
+    }
+    if ((_accesEdition.admin_emails || []).map((e) => e.toLowerCase()).includes(email)) {
+      $("accessNewEmail").value = "";
+      return;
+    }
+    _accesEdition.users = _accesEdition.users || [];
+    _accesEdition.users.push({
+      email,
+      cameras: [],
+      permissions: ["view_live", "view_clips", "view_pictures"],
+    });
+    $("accessNewEmail").value = "";
+    peindreListeAccesUsers();
+  };
+}
+if ($("accessSave")) $("accessSave").onclick = () => sauverFormulaireAcces();
 $("reglages").addEventListener("cancel", (evenement) => {
   // Échap ne doit pas transformer une installation neuve en page vide : le
   // parent attend la validation et aucun téléchargement ne démarrera. Le
@@ -4007,17 +4264,24 @@ $("view").value = "clips";
 // (MSE_ABORT, actualisationLocale...) — appelé trop tôt, avant l'exécution de
 // ces déclarations, ça lève ReferenceError (zone morte temporelle), comme vu
 // en testant réellement au navigateur.
-setLang(localStorage.getItem("lang") || detectLang(), false);
-
-load();
-// E-01 : connexion puis réglages s'enchaînent dans le même onglet. Le second
-// dialogue n'est ouvert qu'après une authentification réussie ; l'annulation
-// laisse le parent en attente et garantit qu'aucun worker ne démarre.
 (async function lancerParcoursInitial() {
+  await chargerAcces();
+  if (ACCES.role === "unauthenticated") {
+    setLang(localStorage.getItem("lang") || detectLang(), false);
+    appliquerRoleAcces();
+    return;
+  }
+  setLang(localStorage.getItem("lang") || detectLang(), false);
+  load();
+  // E-01 : connexion puis réglages s'enchaînent dans le même onglet. Le second
+  // dialogue n'est ouvert qu'après une authentification réussie ; l'annulation
+  // laisse le parent en attente et garantit qu'aucun worker ne démarre.
   const parametres = new URLSearchParams(location.search);
   let continuer = true;
-  if (parametres.get("login") === "1") continuer = await authenticate();
-  if (continuer && parametres.get("setup") === "1") {
+  if (estAdmin() && parametres.get("login") === "1") {
+    continuer = await authenticate();
+  }
+  if (estAdmin() && continuer && parametres.get("setup") === "1") {
     // Une page rechargée avec ?setup=1 après la validation (jeton périmé au
     // remplacement du serveur, voir lireJSON()) ne rouvre le dialogue
     // obligatoire, sans Fermer ni Échap, que si le serveur l'exige encore
